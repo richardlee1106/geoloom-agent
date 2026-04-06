@@ -1,0 +1,233 @@
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* Prevent dragging the whol page on mobile */
+  -webkit-overflow-scrolling: touch;
+}
+
+body {
+  min-width: 320px;
+  display: block;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+/* Element Plus 下拉框全局配置 */
+.el-select-dropdown {
+  max-height: 400px !important;
+  z-index: 3000 !important;
+}
+
+.el-select-dropdown__list {
+  max-height: 380px !important;
+}
+
+/* ============================================
+   全局级联选择器样式覆盖（Element Plus）
+   ============================================ */
+
+/* 彻底隐藏单选圆圈 - 使用最强选择器 */
+.el-cascader-panel .el-cascader-node .el-radio,
+.el-cascader-panel .el-cascader-node .el-radio__input,
+.el-cascader-panel .el-cascader-node .el-radio__inner,
+.el-cascader-panel .el-radio,
+.el-cascader-menu .el-radio,
+.el-popper .el-cascader-node .el-radio {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  position: absolute !important;
+  left: -9999px !important;
+}
+
+/* 节点左侧间距（补偿圆圈消失的空间） */
+.el-cascader-node__content {
+  padding-left: 12px !important;
+}
+
+/* 选中项高亮样式 */
+.el-cascader-node.is-active > .el-cascader-node__content > .el-cascader-node__label {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+/* 增加下拉面板高度 - 直接设置滚动区域 */
+.el-cascader-menu {
+  min-height: 280px !important;
+  max-height: 400px !important;
+}
+
+.el-cascader-menu .el-cascader-menu__wrap,
+.el-cascader-menu .el-scrollbar__wrap {
+  max-height: 380px !important;
+}
+
+.el-cascader-menu .el-scrollbar__view {
+  min-height: 260px;
+}
+
+/* 桌面端级联选择器 */
+@media (min-width: 769px) {
+  .el-cascader__dropdown,
+  .el-popper.is-light.el-cascader__dropdown {
+    min-width: 450px !important;
+  }
+  
+  .el-cascader-panel {
+    min-width: 450px;
+  }
+  
+  .el-cascader-menu {
+    min-width: 200px;
+  }
+}
+
+/* 移动端级联选择器适配 */
+@media (max-width: 768px) {
+  .el-cascader__dropdown,
+  .el-popper.is-light.el-cascader__dropdown {
+    /* 使用 Fixed 定位脱离文档流，避免受父容器 Padding/Margin 影响导致溢出 */
+    position: fixed !important;
+    top: 70px !important; /* 适配顶部悬浮栏高度 (12px top + 50px height + margin) */
+    left: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    margin: 0 !important;
+    transform: none !important;
+    border-radius: 0 0 12px 12px !important; /* 下方圆角 */
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+    border: none !important;
+    background: rgba(30, 41, 59, 0.95) !important;
+    backdrop-filter: blur(20px) !important;
+  }
+  
+  .el-cascader-panel {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+    /* 隐藏滚动条但保留功能 */
+    scrollbar-width: none; 
+    -ms-overflow-style: none;
+  }
+  .el-cascader-panel::-webkit-scrollbar { 
+    display: none; 
+  }
+  
+  .el-cascader-menu {
+    /* 按比例分配宽度:
+       1列时占满 (100%)
+       2列时平分 (50%)
+       3列时平分 (33%) 
+       更多列时滚动 
+    */
+    min-width: 33.33vw !important;
+    max-width: none !important;
+    width: auto !important;
+    flex: 1 0 auto; /* allow grow, do not shrink below min-width */
+    border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+    background: transparent !important;
+  }
+
+  /* 最后一列去掉边框 */
+  .el-cascader-menu:last-child {
+    border-right: none !important;
+  }
+
+  /* 菜单项文字超长省略 */
+  .el-cascader-node {
+    padding: 0 10px !important;
+    padding-left: 10px !important; /* 覆盖全局 padding-left 12px */
+  }
+
+  .el-cascader-node__label {
+    padding: 0 !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px !important; /* 稍微调小字体适配 */
+  }
+  
+  /* 箭头微调 */
+  .el-cascader-node__postfix {
+    right: 2px !important;
+  }
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  position: absolute; /* Lock to viewport */
+  top: 0;
+  left: 0;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}

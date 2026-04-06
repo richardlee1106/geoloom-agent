@@ -1,0 +1,29 @@
+[
+  {
+    "value": "餐饮服务",
+    "label": "餐饮服务",
+    "children": [
+      {
+        "value": "中餐厅",
+        "label": "中餐厅",
+        "children": [
+          { "value": "火锅店", "label": "火锅店" },
+          { "value": "川菜馆", "label": "川菜馆" }
+        ]
+      }
+    ]
+  },
+  {
+    "value": "交通设施服务",
+    "label": "交通设施服务",
+    "children": [
+      {
+        "value": "地铁站",
+        "label": "地铁站",
+        "children": [
+          { "value": "地铁站", "label": "地铁站" }
+        ]
+      }
+    ]
+  }
+]
