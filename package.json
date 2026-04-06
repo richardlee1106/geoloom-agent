@@ -12,7 +12,7 @@
     "dev:frontend:v4": "vite --mode v4 --host 127.0.0.1",
     "dev:backend": "node scripts/run-backend-v4.mjs dev",
     "dev:deps": "npm --prefix backend run dev:dependency-service",
-    "dev:encoder-service": "python ../vector-encode/python/services/geoloom_encoder_service.py --port 8100",
+    "dev:encoder-service": "python ../vector-encoder/run.py serve --port 8100",
     "build": "npm run build:v4 && npm run build:backend",
     "build:v4": "vite build --mode v4",
     "build:frontend": "npm run build:v4",
@@ -26,7 +26,7 @@
     "start": "concurrently -n preview,deps,encoder,v4 -c cyan,magenta,yellow,green \"npm run preview:v4\" \"npm run start:deps\" \"npm run start:encoder-service\" \"npm run start:backend\"",
     "start:backend": "node scripts/run-backend-v4.mjs start",
     "start:deps": "npm --prefix backend run start:dependency-service",
-    "start:encoder-service": "python ../vector-encode/python/services/geoloom_encoder_service.py --port 8100",
+    "start:encoder-service": "python ../vector-encoder/run.py serve --port 8100",
     "smoke": "node scripts/smoke-stack.mjs",
     "smoke:dev": "node scripts/smoke-stack.mjs --frontend-url http://127.0.0.1:3000"
   },

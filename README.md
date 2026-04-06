@@ -65,6 +65,12 @@ npm run dev:v4
 npm run dev:stack
 ```
 
+从使用体验上说，你现在仍然可以把它当成“原来那个一键起整栈”的命令：
+
+- 不需要先单独进入 `vector-encoder`
+- 不需要再额外起一次编码器服务
+- 只跑 `npm run dev:v4` 就会把编码器一起拉起来
+
 ## 安装与准备
 
 先安装 Node 依赖：
@@ -74,25 +80,33 @@ npm install
 npm --prefix backend install
 ```
 
-前端环境文件：
+当前这台机器上的独立仓库已经帮你准备好了：
+
+- `D:\AAA_Edu\geoloom-agent\.env.v4`
+- `D:\AAA_Edu\geoloom-agent\backend\.env`
+
+也就是说，你现在在本机直接执行：
+
+```bash
+npm run dev:v4
+```
+
+就可以一键同时拉起前端、依赖服务、编码器和 V4 后端，不需要再手动复制环境文件。
+
+如果以后你把这个仓库重新 clone 到别的机器，再按下面这两条从示例文件生成环境文件即可：
 
 ```bash
 copy .env.v4.example .env.v4
-```
-
-后端环境文件：
-
-```bash
 copy backend\.env.example backend\.env
 ```
 
-如果你希望新仓库尽量复现原仓库当前 V4 的本地效果，最直接的做法是把原 `V4-GeoLoom-beta/.env` 中有效的数据库和 LLM 配置同步到 `backend/.env`。这个文件不会被提交。
+当前本地 `backend/.env` 已经是从原 V4 有效配置复制过来的真实配置，不是空模板。
 
 ## 真实空间依赖怎么接
 
 这次不是只把前后端迁出来，而是把真实链路也补齐了：
 
-- `vector-encode` 提供真实空间编码器服务
+- `vector-encoder` 提供真实空间编码器服务
 - `geoloom-agent/backend/src/dev/realDependencyService.ts` 提供真实向量检索和真实路由服务适配层
 - `scripts/run-backend-v4.mjs` 会给 V4 后端注入默认远端地址
 
@@ -105,6 +119,8 @@ copy backend\.env.example backend\.env
 - `ROUTING_HEALTH_PATH=/health/routing`
 
 也就是说，`dev:v4` 起来后，后端看到的不是本地 mock，而是真实 remote 依赖模式。
+
+对你来说，主入口仍然只是一条命令，不需要先单独进编码器仓库再手动起一次服务。
 
 ## 怎么检查是不是“真的接上了”
 
@@ -210,4 +226,4 @@ npm run smoke:dev
 ## 配套说明
 
 - 详细迁移清单、排除项、命令结果和对照结论见 `MIGRATION_REPORT.md`
-- 真实空间编码器仓库见 `D:\AAA_Edu\vector-encode`
+- 真实空间编码器仓库见 `D:\AAA_Edu\vector-encoder`

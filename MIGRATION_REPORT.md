@@ -49,6 +49,13 @@
 - `.gitignore`
 - `README.md`
 
+另外，当前本地仓库已经直接放好了可运行环境文件：
+
+- `.env.v4`
+- `backend/.env`
+
+这两份文件来自原仓库的有效配置拷贝，目的是让当前机器可以直接一键启动，而不是还要再手动复制一次模板。
+
 ### 为真实远端依赖补齐的新模块
 
 - `backend/src/dev/realDependencyService.ts`
@@ -80,6 +87,18 @@
   - 结果：成功
 - `npm --prefix backend install`
   - 结果：成功
+
+### 环境文件
+
+- `D:\AAA_Edu\geoloom-agent\.env.v4`
+  - 结果：已存在
+- `D:\AAA_Edu\geoloom-agent\backend\.env`
+  - 结果：已存在
+
+说明：
+
+- 当前机器上的独立仓库不是“只给模板”，而是已经准备成可直接运行状态
+- 如果换到别的机器重新 clone，再用 `.env.v4.example` 和 `backend/.env.example` 生成本地环境文件即可
 
 ### 测试
 
@@ -161,7 +180,7 @@
 
 ### 真实空间编码器
 
-- 通过 `vector-encode/python/services/geoloom_encoder_service.py` 启动
+- 通过 `vector-encoder/run.py serve --port 8100` 启动
 - `/health` 返回 `encoder_loaded = true`
 - 后端健康检查里显示 `spatial_encoder.mode = remote`
 
@@ -269,7 +288,7 @@
 - PostgreSQL / PostGIS
 - LLM Provider
 - 可访问的 OSRM 路由服务
-- `vector-encode` 本地运行时检查点
+- `vector-encoder` 本地运行时检查点
 
 ### 还需要继续消除吗
 
