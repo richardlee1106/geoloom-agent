@@ -76,16 +76,17 @@
 
     <!-- 移动端顶部栏 -->
     <div class="mobile-top-bar mobile-only">
-      <el-cascader
-        v-model="selectedCategoryPath"
-        :options="categoryOptions"
-        :props="{ multiple: true, checkStrictly: true }"
-        placeholder="地名大类"
-        @change="handleCascaderChange"
-        class="group-select mobile-select glass-cascader"
-        :teleported="false"
-        :show-all-levels="false"
-        collapse-tags
+        <el-cascader
+          v-model="selectedCategoryPath"
+          :options="categoryOptions"
+          :props="{ multiple: true, checkStrictly: true }"
+          placeholder="地名大类"
+          @visible-change="handleMobileCategoryVisibleChange"
+          @change="handleCascaderChange"
+          class="group-select mobile-select glass-cascader"
+          :teleported="false"
+          :show-all-levels="false"
+          collapse-tags
       />
       <div class="mobile-btn-group">
         <!-- AI 搜索按钮 (新位置: Selector [Search] [Save] [...]) -->
@@ -374,7 +375,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { ElNotification } from 'element-plus';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 import { SPATIAL_API_BASE_URL } from '../config';
@@ -431,28 +432,49 @@ const categoryOptions = ref([]);
 // 全量分类数据（包含3级）
 const fullCategoryOptions = ref([]);
 
-// 加载分类目录：以数据库 public.pois 为唯一事实来源。
-onMounted(async () => {
+function mapCategoryOptions(fullData = []) {
+  return fullData.map(l1 => ({
+    ...l1,
+    children: l1.children?.map(l2 => ({
+      ...l2,
+      children: null,
+      leaf: true
+    }))
+  }));
+}
+
+const ensureCategoryCatalogLoaded = async () => {
+  if (groupLoading.value || categoryOptions.value.length > 0) {
+    return;
+  }
+
+  groupLoading.value = true;
   try {
     const fullData = await fetchCategoryCatalogTree(fetch, SPATIAL_API_BASE_URL);
 
     if (Array.isArray(fullData)) {
       fullCategoryOptions.value = fullData;
-      // 仅供 UI 显示的选项
-      categoryOptions.value = fullData.map(l1 => ({
-        ...l1,
-        children: l1.children?.map(l2 => ({
-          ...l2,
-          children: null,
-          leaf: true
-        }))
-      }));
+      categoryOptions.value = mapCategoryOptions(fullData);
     }
   } catch (error) {
     console.error('Error loading catalog:', error);
     ElNotification.error({ title: '错误', message: '无法加载分类数据', offset: 80 });
+  } finally {
+    groupLoading.value = false;
+  }
+};
+
+watch(categoryDrawerVisible, (visible) => {
+  if (visible) {
+    void ensureCategoryCatalogLoaded();
   }
 });
+
+const handleMobileCategoryVisibleChange = (visible) => {
+  if (visible) {
+    void ensureCategoryCatalogLoaded();
+  }
+};
 
 // 默认使用动态重心引力算法
 const localAlgorithm = ref('basic');

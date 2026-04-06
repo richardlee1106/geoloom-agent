@@ -21,6 +21,7 @@ import { createPostgisSkill } from './skills/postgis/PostGISSkill.js'
 import { createSpatialEncoderSkill } from './skills/spatial_encoder/SpatialEncoderSkill.js'
 import { createSpatialVectorSkill } from './skills/spatial_vector/SpatialVectorSkill.js'
 import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceSkill.js'
+import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
 
 const port = Number(process.env.PORT || '3210')
 const host = process.env.HOST || '127.0.0.1'
@@ -142,6 +143,7 @@ const app = createApp({
   registry,
   version,
   checkDatabaseHealth: async () => pool.healthcheck(),
+  getCategoryTree: async () => loadCategoryTreeFromDatabase((sql, params, timeoutMs) => pool.query(sql, params, timeoutMs)),
   chat,
 })
 

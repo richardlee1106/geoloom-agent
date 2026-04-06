@@ -313,8 +313,8 @@
         >
           <header class="analysis-board-header">
             <div>
-              <p class="analysis-kicker">最新回复分析看板</p>
-              <h3 class="analysis-title">模板化信息聚合</h3>
+              <p class="analysis-kicker">{{ analysisBoardKicker }}</p>
+              <h3 class="analysis-title">{{ analysisBoardTitle }}</h3>
             </div>
             <span class="analysis-meta">
               {{ latestAssistantMessage?.timestamp ? formatTime(latestAssistantMessage.timestamp) : '--:--' }}
@@ -340,7 +340,7 @@
             />
             <div v-else class="analysis-empty-state">
               <span class="analysis-empty-title">等待空间证据</span>
-              <p>当前最新回复尚未返回可聚合的空间结构化结果，继续提问后将自动生成 1-3 个意图模板。</p>
+              <p>{{ analysisEmptyDescription }}</p>
             </div>
           </div>
         </section>
@@ -476,6 +476,23 @@ const forceRecomputeNext = ref(false);
 
 // V3 模式检测
 const isV3Mode = import.meta.env.VITE_BACKEND_VERSION === 'v3';
+const isV4Mode = import.meta.env.VITE_BACKEND_VERSION === 'v4';
+
+const reasoningRouteLabel = computed(() => {
+  if (isV3Mode) return 'V3 流式';
+  if (isV4Mode) return 'V4 Agent';
+  return 'V1 模板';
+});
+
+const reasoningRouteTone = computed(() => (isV3Mode || isV4Mode ? 'active' : 'neutral'));
+
+const analysisBoardKicker = computed(() => (isV4Mode ? '最新回复 Agent 看板' : '最新回复分析看板'));
+const analysisBoardTitle = computed(() => (isV4Mode ? 'Agent 空间推理聚合' : '模板化信息聚合'));
+const analysisEmptyDescription = computed(() => (
+  isV4Mode
+    ? '当前最新回复尚未返回可聚合的空间结构化结果，继续提问后将自动补齐空间证据与推理结果。'
+    : '当前最新回复尚未返回可聚合的空间结构化结果，继续提问后将自动生成 1-3 个意图模板。'
+));
 
 // V1 阶段顺序：planner → spatial → visual → fusion → writer
 const v1StageSteps = [
@@ -697,8 +714,8 @@ const welcomeContextStats = computed(() => [
   },
   {
     label: '推理链路',
-    value: isV3Mode ? 'V3 流式' : 'V1 模板',
-    tone: isV3Mode ? 'active' : 'neutral'
+    value: reasoningRouteLabel.value,
+    tone: reasoningRouteTone.value
   },
   {
     label: '类别过滤',

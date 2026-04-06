@@ -7,6 +7,8 @@ import { registerChatRoutes } from './routes/chat.js'
 import type { SkillRegistry } from './skills/SkillRegistry.js'
 import { registerGeoRoutes } from './routes/geo.js'
 import { registerSkillRoutes } from './routes/skills.js'
+import { registerCategoryRoutes } from './routes/category.js'
+import type { CategoryTreeNode } from './catalog/categoryCatalog.js'
 
 export interface ChatRuntime {
   createWriter(stream: NodeJS.WritableStream, traceId?: string): SSEWriter
@@ -18,6 +20,7 @@ export interface CreateAppOptions {
   registry: SkillRegistry
   version: string
   checkDatabaseHealth: () => Promise<boolean>
+  getCategoryTree?: () => Promise<CategoryTreeNode[]>
   chat?: ChatRuntime
 }
 
@@ -30,6 +33,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     origin: true,
     methods: ['GET', 'POST', 'OPTIONS'],
   })
+
+  app.register(async (scope) => {
+    await registerCategoryRoutes(scope, {
+      getCategoryTree: options.getCategoryTree || (async () => []),
+    })
+  }, { prefix: '/api/category' })
 
   app.register(async (scope) => {
     await registerGeoRoutes(scope, options)

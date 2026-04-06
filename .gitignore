@@ -22,5 +22,7 @@ backend/data/memory/*
 *.pid
 *.sse
 .tmp-*
+.playwright-cli/
+output/playwright/
 .DS_Store
 Thumbs.db

@@ -35,7 +35,7 @@
             <span class="logo-text">GeoLoom<span class="logo-accent">-RAG</span></span>
             <span class="logo-subtitle">地理认知探索</span>
           </div>
-          <div class="version-badge">v1.0 <span class="beta-tag">(beta)</span></div>
+          <div class="version-badge">{{ runtimeVersionLabel }} <span class="beta-tag">({{ runtimeVersionTag }})</span></div>
         </div>
       </div>
 
@@ -230,20 +230,30 @@
 </template>
 
 <script setup>
-import { ref, shallowRef, onMounted, nextTick, computed, watch, defineAsyncComponent } from 'vue';
+import { ref, shallowRef, onMounted, nextTick, computed, watch, defineAsyncComponent, h } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElNotification } from 'element-plus';
 import ControlPanel from './components/ControlPanel.vue';
-import TagCloud from './components/TagCloud.vue';
+function createLoadingPlaceholder(label) {
+  return {
+    render() {
+      return h('div', { class: 'map-loading-placeholder' }, [
+        h('div', { class: 'loading-spinner' }),
+        h('span', label)
+      ]);
+    }
+  };
+}
+
 // MapContainer 使用异步组件延迟加载 OpenLayers（318KB）
 const MapContainer = defineAsyncComponent({
   loader: () => import('./components/MapContainer.vue'),
-  loadingComponent: {
-    template: `<div class="map-loading-placeholder">
-      <div class="loading-spinner"></div>
-      <span>地图加载中...</span>
-    </div>`
-  },
+  loadingComponent: createLoadingPlaceholder('地图加载中...'),
+  delay: 0
+});
+const TagCloud = defineAsyncComponent({
+  loader: () => import('./components/TagCloud.vue'),
+  loadingComponent: createLoadingPlaceholder('标签云加载中...'),
   delay: 0
 });
 const AiChat = defineAsyncComponent(() => import('./components/AiChat.vue'));
@@ -253,6 +263,9 @@ import { SPATIAL_API_BASE_URL } from './config';
 import { useRegions } from './composables/useRegions';
 
 const router = useRouter();
+const runtimeMode = String(import.meta.env.VITE_BACKEND_VERSION || import.meta.env.MODE || '').toLowerCase();
+const runtimeVersionLabel = computed(() => runtimeMode === 'v4' ? 'v4' : 'v1.0');
+const runtimeVersionTag = computed(() => runtimeMode === 'v4' ? 'agent' : 'beta');
 
 // 多选区管理
 const { regions, getRegionsContext } = useRegions();
