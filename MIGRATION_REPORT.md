@@ -276,3 +276,12 @@
 就“脱离原仓库即可独立交付”这个标准来说，不需要继续消除原仓库隐式依赖。
 
 剩下的是外部运行条件，不是旧仓库路径依赖。
+
+## 7. GitHub 远端状态
+
+- 远端仓库：`https://github.com/richardlee1106/geoloom-agent`
+- 本地分支：`main`
+- 已执行：
+  - `git remote add origin https://github.com/richardlee1106/geoloom-agent.git`
+  - `git commit -m "init geoloom-agent"`
+  - `git push -u origin main`

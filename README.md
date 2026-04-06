@@ -6,6 +6,10 @@
 
 - `D:\AAA_Edu\geoloom-agent`
 
+GitHub：
+
+- `https://github.com/richardlee1106/geoloom-agent`
+
 ## 这次到底保留了什么
 
 前端不是轻量化面板，而是保留了完整 UI 框架壳：
