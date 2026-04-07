@@ -274,7 +274,7 @@ const AiChat = defineAsyncComponent({
   delay: 0
 });
 import { normalizeAiEvidencePayload } from './utils/aiEvidencePayload';
-import { normalizeAiMapRenderPayload } from './utils/aiMapRenderPayload.js';
+import { normalizeAiMapRenderPayload } from './utils/aiMapRenderPayload';
 import {
   assessBrowserUserLocation,
   createBrowserUserLocation,

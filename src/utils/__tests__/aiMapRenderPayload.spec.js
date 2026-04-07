@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   normalizeAiMapRenderPayload,
   normalizeRenderFeature
-} from '../aiMapRenderPayload.js'
+} from '../aiMapRenderPayload'
 
 describe('aiMapRenderPayload', () => {
   it('normalizes mixed poi payloads and removes duplicate points', () => {
@@ -70,6 +70,35 @@ describe('aiMapRenderPayload', () => {
       properties: {
         名称: '湖北大学',
         _coordSys: 'wgs84',
+        _isAnchor: true,
+        _source: 'ai_anchor'
+      }
+    })
+  })
+
+  it('supports snake_case anchor_feature payloads', () => {
+    const payload = {
+      pois: [],
+      anchor_feature: {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [114.301, 30.611]
+        },
+        properties: {
+          名称: '沙湖公园'
+        }
+      }
+    }
+
+    const result = normalizeAiMapRenderPayload(payload, { fallbackCoordSys: 'gcj02' })
+
+    expect(result.anchorFeature).toMatchObject({
+      geometry: {
+        coordinates: [114.301, 30.611]
+      },
+      properties: {
+        名称: '沙湖公园',
         _isAnchor: true,
         _source: 'ai_anchor'
       }

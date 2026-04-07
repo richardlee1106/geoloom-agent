@@ -1,33 +1,65 @@
-function percent(value) {
+import type {
+  IntentType,
+  TemplateContext
+} from '../../utils/aiTemplateMetrics'
+
+export interface TemplateAction {
+  type: 'locate' | 'followup'
+  label: string
+  payload: unknown
+}
+
+export interface TemplateBuildResult {
+  lines?: unknown
+  actions?: unknown
+}
+
+export interface TemplateDefinition {
+  id: string
+  title: string
+  subtitle: string
+  isAvailable?: (context: TemplateContext) => boolean
+  score?: (context: TemplateContext) => number
+  build?: (context: TemplateContext) => TemplateBuildResult
+}
+
+function percent(value: unknown): string {
   const num = Number(value)
   if (!Number.isFinite(num)) return '--'
   return `${Math.round(Math.max(0, Math.min(1, num)) * 100)}%`
 }
 
-function regionName(region) {
+function regionName(region: TemplateContext['regions'][number] | null | undefined): string {
   if (!region) return '片区'
   const raw = String(region.name || '')
   return raw.endsWith('片区') ? raw : `${raw}片区`
 }
 
-function hotspotName(hotspot) {
+function hotspotName(hotspot: TemplateContext['hotspots'][number] | null | undefined): string {
   if (!hotspot) return '热点区域'
-  return String(hotspot.name || hotspot.dominantCategories?.[0]?.category || '热点区域')
+  const firstCategory = hotspot.dominantCategories[0]
+  const categoryLabel = firstCategory && typeof firstCategory === 'object' && !Array.isArray(firstCategory)
+    ? String((firstCategory as Record<string, unknown>).category || '')
+    : ''
+  return String(hotspot.name || categoryLabel || '热点区域')
 }
 
-function locateAction(label, payload) {
+function locateAction(label: string, payload: unknown): TemplateAction[] {
   return payload ? [{ type: 'locate', label, payload }] : []
 }
 
-function followupAction(label, payload) {
+function followupAction(label: string, payload: unknown): TemplateAction[] {
   return payload ? [{ type: 'followup', label, payload }] : []
 }
 
-function scoreByIntent(context, map) {
-  return Number(map?.[context.intentType] || map?.macro || 0)
+function scoreByIntent(
+  context: TemplateContext,
+  map: Partial<Record<IntentType, number>>
+): number {
+  return Number(map[context.intentType] ?? map.macro ?? 0)
 }
 
-export function createTemplateRegistry() {
+export function createTemplateRegistry(): TemplateDefinition[] {
   return [
     {
       id: 'hotspot_overview',
@@ -127,7 +159,7 @@ export function createTemplateRegistry() {
           ],
           actions: followupAction(
             '输出机会清单',
-            `请基于当前热点与主导业态，输出3个可执行机会点并说明适配业态。`
+            '请基于当前热点与主导业态，输出3个可执行机会点并说明适配业态。'
           )
         }
       }
@@ -181,7 +213,7 @@ export function createTemplateRegistry() {
       build: (context) => {
         const [firstRegion, secondRegion] = context.regions
         const [firstHotspot, secondHotspot] = context.hotspots
-        const lines = []
+        const lines: string[] = []
         if (firstRegion && secondRegion) {
           lines.push(`业态对比：${regionName(firstRegion)} vs ${regionName(secondRegion)}`)
           lines.push(`隶属度：${percent(firstRegion.membershipScore)} vs ${percent(secondRegion.membershipScore)}`)

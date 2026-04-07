@@ -39,6 +39,16 @@
       </article>
     </div>
 
+    <section v-if="encoderSummary" class="encoder-summary">
+      <div class="encoder-summary-head">编码器参与</div>
+      <div class="encoder-summary-grid">
+        <span class="encoder-pill">预测 {{ encoderSummary.predictedCount }}</span>
+        <span class="encoder-pill">高置信 {{ encoderSummary.highConfidenceCount }}</span>
+        <span class="encoder-pill">纯度 {{ encoderSummary.purityText }}</span>
+        <span class="encoder-pill">约束源 {{ encoderSummary.constraintSource }}</span>
+      </div>
+    </section>
+
     <details v-if="detailRows.length" class="detail-panel">
       <summary>查看候选片区明细</summary>
       <div class="detail-list">
@@ -60,8 +70,8 @@
 
 <script setup>
 import { computed, watch } from 'vue'
-import { useIntentTemplateSelector } from '../composables/ai/useIntentTemplateSelector.js'
-import { deriveTemplateContext } from '../utils/aiTemplateMetrics.js'
+import { useIntentTemplateSelector } from '../composables/ai/useIntentTemplateSelector'
+import { deriveTemplateContext } from '../utils/aiTemplateMetrics'
 import {
   trackTemplateImpression,
   trackTemplateClick,
@@ -111,6 +121,32 @@ const intentLabel = computed(() => {
   if (templateContext.value.intentType === 'comparison') return '对比意图'
   if (templateContext.value.intentType === 'micro') return '微观意图'
   return '宏观意图'
+})
+
+const encoderSummary = computed(() => {
+  const stats = props.analysisStats
+  if (!stats || typeof stats !== 'object') return null
+
+  const predictedCount = Number(stats.encoder_region_predicted_count)
+  const highConfidenceCount = Number(stats.encoder_region_high_confidence_count)
+  const purity = Number(stats.encoder_region_purity)
+  const constraintSource = String(stats.vector_constraint_source || '').trim()
+  const signalModel = String(stats.boundary_signal_model || '').trim().toLowerCase()
+
+  const hasEncoderSignal = signalModel.includes('encoder')
+    || Number.isFinite(predictedCount)
+    || Number.isFinite(highConfidenceCount)
+    || Number.isFinite(purity)
+    || Boolean(constraintSource)
+
+  if (!hasEncoderSignal) return null
+
+  return {
+    predictedCount: Number.isFinite(predictedCount) ? predictedCount : '--',
+    highConfidenceCount: Number.isFinite(highConfidenceCount) ? highConfidenceCount : '--',
+    purityText: Number.isFinite(purity) ? toPercent(purity) : '--',
+    constraintSource: constraintSource || 'unknown'
+  }
 })
 
 const detailRows = computed(() => {
@@ -339,6 +375,37 @@ watch(
 .detail-panel {
   border-top: 1px solid rgba(148, 163, 184, 0.15);
   padding: 10px 12px 12px;
+}
+
+.encoder-summary {
+  margin: 0 12px 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(110, 160, 205, 0.22);
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.78), rgba(15, 30, 56, 0.54));
+}
+
+.encoder-summary-head {
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+
+.encoder-summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.encoder-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  background: rgba(14, 165, 233, 0.12);
+  color: rgba(226, 232, 240, 0.95);
+  padding: 5px 10px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .detail-panel > summary {
