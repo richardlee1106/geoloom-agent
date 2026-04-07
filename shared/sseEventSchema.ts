@@ -1,4 +1,24 @@
-const SSE_EVENT_META_PROPERTIES = Object.freeze({
+type SchemaTypeName = 'array' | 'object' | 'null' | 'number' | 'string' | 'boolean'
+
+export interface JsonSchema {
+  type?: SchemaTypeName | readonly SchemaTypeName[]
+  anyOf?: readonly JsonSchema[]
+  properties?: Readonly<Record<string, JsonSchema>>
+  required?: readonly string[]
+  items?: JsonSchema
+  enum?: readonly unknown[]
+  additionalProperties?: boolean
+  minItems?: number
+}
+
+export interface SSEValidationResult {
+  ok: boolean
+  event: string
+  errors: string[]
+  skipped?: boolean
+}
+
+const SSE_EVENT_META_PROPERTIES: Readonly<Record<string, JsonSchema>> = Object.freeze({
   trace_id: { type: 'string' },
   schema_version: { type: 'string' },
   capabilities: {
@@ -7,7 +27,7 @@ const SSE_EVENT_META_PROPERTIES = Object.freeze({
   }
 })
 
-function withEventMeta(schema) {
+function withEventMeta(schema: JsonSchema): JsonSchema {
   if (!schema || typeof schema !== 'object') return schema
 
   if (schema.type === 'object') {
@@ -158,13 +178,13 @@ export const SSE_EVENT_SCHEMAS = Object.freeze({
     },
     additionalProperties: true
   })
-})
+} satisfies Record<string, JsonSchema>)
 
-function isObjectLike(value) {
+function isObjectLike(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function matchesType(value, typeName) {
+function matchesType(value: unknown, typeName: SchemaTypeName): boolean {
   switch (typeName) {
     case 'array':
       return Array.isArray(value)
@@ -183,13 +203,13 @@ function matchesType(value, typeName) {
   }
 }
 
-function validateSchema(value, schema, path, errors) {
+function validateSchema(value: unknown, schema: JsonSchema, path: string, errors: string[]): void {
   if (!schema || typeof schema !== 'object') return
 
   if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
-    const anyOfErrors = []
+    const anyOfErrors: string[] = []
     const matched = schema.anyOf.some((child) => {
-      const childErrors = []
+      const childErrors: string[] = []
       validateSchema(value, child, path, childErrors)
       if (childErrors.length === 0) return true
       anyOfErrors.push(...childErrors)
@@ -203,7 +223,7 @@ function validateSchema(value, schema, path, errors) {
   }
 
   if (schema.type) {
-    const expectedTypes = Array.isArray(schema.type) ? schema.type : [schema.type]
+    const expectedTypes = Array.isArray(schema.type) ? [...schema.type] : [schema.type]
     const typeMatched = expectedTypes.some((typeName) => matchesType(value, typeName))
     if (!typeMatched) {
       errors.push(`${path}: expected type ${expectedTypes.join('|')}`)
@@ -217,32 +237,33 @@ function validateSchema(value, schema, path, errors) {
   }
 
   if (schema.type === 'array' || (Array.isArray(schema.type) && schema.type.includes('array'))) {
-    if (schema.minItems && value.length < schema.minItems) {
+    const arrayValue = Array.isArray(value) ? value : []
+    if (schema.minItems && arrayValue.length < schema.minItems) {
       errors.push(`${path}: expected at least ${schema.minItems} items`)
     }
     if (schema.items) {
-      value.forEach((item, index) => {
-        validateSchema(item, schema.items, `${path}[${index}]`, errors)
+      arrayValue.forEach((item, index) => {
+        validateSchema(item, schema.items as JsonSchema, `${path}[${index}]`, errors)
       })
     }
   }
 
   if (schema.type === 'object' || (Array.isArray(schema.type) && schema.type.includes('object'))) {
-    const obj = value
+    const objectValue = isObjectLike(value) ? value : {}
     const properties = schema.properties || {}
     const required = Array.isArray(schema.required) ? schema.required : []
     required.forEach((key) => {
-      if (!(key in obj)) {
+      if (!(key in objectValue)) {
         errors.push(`${path}.${key}: required`)
       }
     })
     Object.keys(properties).forEach((key) => {
-      if (key in obj) {
-        validateSchema(obj[key], properties[key], `${path}.${key}`, errors)
+      if (key in objectValue) {
+        validateSchema(objectValue[key], properties[key] as JsonSchema, `${path}.${key}`, errors)
       }
     })
     if (schema.additionalProperties === false) {
-      Object.keys(obj).forEach((key) => {
+      Object.keys(objectValue).forEach((key) => {
         if (!(key in properties)) {
           errors.push(`${path}.${key}: additional property not allowed`)
         }
@@ -251,13 +272,13 @@ function validateSchema(value, schema, path, errors) {
   }
 }
 
-export function normalizeSSEEventName(eventName) {
+export function normalizeSSEEventName(eventName: unknown): string {
   return String(eventName || '').trim()
 }
 
-export function validateSSEEventPayload(eventName, payload) {
+export function validateSSEEventPayload(eventName: unknown, payload: unknown): SSEValidationResult {
   const normalizedEventName = normalizeSSEEventName(eventName)
-  const schema = SSE_EVENT_SCHEMAS[normalizedEventName]
+  const schema = SSE_EVENT_SCHEMAS[normalizedEventName as keyof typeof SSE_EVENT_SCHEMAS]
   if (!schema) {
     return {
       ok: true,
@@ -267,7 +288,7 @@ export function validateSSEEventPayload(eventName, payload) {
     }
   }
 
-  const errors = []
+  const errors: string[] = []
   validateSchema(payload, schema, '$', errors)
 
   return {

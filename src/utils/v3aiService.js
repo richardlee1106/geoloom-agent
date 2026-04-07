@@ -9,7 +9,7 @@
  */
 
 import { AI_API_BASE_URL } from '../config';
-import { validateSSEEventPayload } from '../../shared/sseEventSchema.js';
+import { validateSSEEventPayload } from '../../shared/sseEventSchema';
 
 // V3 后端 API 基础路径
 const V3_API_BASE = `${AI_API_BASE_URL}/api`;

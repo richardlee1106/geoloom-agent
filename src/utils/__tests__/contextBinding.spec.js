@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildViewportHash,
   createContextBindingManager
-} from '../contextBinding.js'
+} from '../contextBinding'
 
 describe('contextBinding utils', () => {
   it('buildViewportHash is stable for semantically equivalent map state', () => {

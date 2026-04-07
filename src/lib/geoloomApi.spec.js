@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseSseEventBlock } from './geoloomApi.js'
+import { parseSseEventBlock } from './geoloomApi'
 
 describe('geoloomApi', () => {
   it('parses and validates a refined_result SSE block', () => {

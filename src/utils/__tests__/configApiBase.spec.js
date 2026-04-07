@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveApiBaseUrls } from '../../config.js'
+import { resolveApiBaseUrls } from '../../config'
 
 describe('resolveApiBaseUrls', () => {
   it('prefers same-origin dev proxy when local ai/spatial backends share one localhost target', () => {

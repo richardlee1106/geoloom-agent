@@ -1,4 +1,4 @@
-import { createContextBindingManager } from '../../utils/contextBinding.js'
+import { createContextBindingManager } from '../../utils/contextBinding'
 
 const DEEP_SPATIAL_KEYWORDS = [
   '模糊',
