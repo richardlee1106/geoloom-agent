@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { useSpatialRequestBuilder } from '../useSpatialRequestBuilder.js'
+import { useSpatialRequestBuilder } from '../useSpatialRequestBuilder'
 
 describe('useSpatialRequestBuilder', () => {
   it('always injects context_binding even when DSL gray is disabled', () => {
@@ -113,6 +113,34 @@ describe('useSpatialRequestBuilder', () => {
       source: 'browser_geolocation',
       capturedAt: '2026-04-07T01:02:03.000Z',
       coordSys: 'wgs84'
+    })
+  })
+
+  it('skips nullish regions when normalizing backend region payloads', () => {
+    const builder = useSpatialRequestBuilder({ poiCoordSys: 'gcj02' })
+    const normalizedRegions = builder.normalizeRegionsForBackend([
+      null,
+      {
+        id: 7,
+        name: '测试选区',
+        type: 'Polygon',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[114.3, 30.5], [114.4, 30.5], [114.4, 30.6], [114.3, 30.5]]]
+        },
+        boundaryWKT: 'POLYGON((114.3 30.5, 114.4 30.5, 114.4 30.6, 114.3 30.5))',
+        center: [114.35, 30.55],
+        pois: [{ id: 'poi-1' }],
+        stats: { poiCount: 1 }
+      },
+      undefined
+    ])
+
+    expect(normalizedRegions).toHaveLength(1)
+    expect(normalizedRegions[0]).toMatchObject({
+      id: 7,
+      name: '测试选区',
+      poiCount: 1
     })
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-import { useAiStreamDispatcher } from '../useAiStreamDispatcher.js'
+import { useAiStreamDispatcher } from '../useAiStreamDispatcher'
 import { normalizeRefinedResultEvidence } from '../../../utils/refinedResultEvidence.js'
 
 function setupDispatcher() {
@@ -25,6 +25,25 @@ function setupDispatcher() {
 }
 
 describe('useAiStreamDispatcher prefetch debug fields', () => {
+  it('hydrates schema metadata from trace events', () => {
+    const { dispatcher, messagesRef } = setupDispatcher()
+
+    dispatcher.dispatchMetaEvent({
+      type: 'trace',
+      data: {
+        request_id: 'req-42',
+        schema_version: 'v4.1',
+        capabilities: ['intent_meta', 'prefetch_debug']
+      },
+      aiMessageIndex: 0,
+      fallbackIntentMode: 'macro'
+    })
+
+    expect(messagesRef.value[0].traceId).toBe('req-42')
+    expect(messagesRef.value[0].schemaVersion).toBe('v4.1')
+    expect(messagesRef.value[0].capabilities).toEqual(['intent_meta', 'prefetch_debug'])
+  })
+
   it('stores prefetch debug info from stats event', () => {
     const { dispatcher, messagesRef } = setupDispatcher()
 

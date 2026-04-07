@@ -393,8 +393,8 @@ import {
   getCurrentProviderInfo
 } from '../utils/aiService.js';
 import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence.js';
-import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher.js';
-import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder.js';
+import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher';
+import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder';
 import {
   getAgentStageSteps,
   getRunStatusCopy as buildRunStatusCopy,
