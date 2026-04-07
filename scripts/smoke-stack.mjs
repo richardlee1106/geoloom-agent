@@ -21,7 +21,7 @@ const dependencyBase = String(
   readCliArg('--dependency-base')
     || process.env.GEOLOOM_DEPENDENCY_BASE
     || process.env.SPATIAL_VECTOR_BASE_URL
-    || 'http://127.0.0.1:3410',
+    || 'http://127.0.0.1:3411',
 ).replace(/\/$/, '')
 
 const encoderBase = String(

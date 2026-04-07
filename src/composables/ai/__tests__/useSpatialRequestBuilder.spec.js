@@ -47,4 +47,72 @@ describe('useSpatialRequestBuilder', () => {
       prefetch_on_fields: []
     })
   })
+
+  it('keeps userLocation in the display coord space when POI data already uses gcj02', () => {
+    const builder = useSpatialRequestBuilder({ poiCoordSys: 'gcj02' })
+    const spatialContext = builder.buildSpatialContext({
+      boundaryPolygon: null,
+      drawMode: 'Viewport',
+      circleCenter: null,
+      circleRadius: null,
+      mapBounds: [114.30, 30.54, 114.38, 30.59],
+      mapZoom: 15,
+      regions: [],
+      poiFeatures: [],
+      userLocation: {
+        lon: 114.3655,
+        lat: 30.5431,
+        rawLon: 114.3605,
+        rawLat: 30.5401,
+        coordSys: 'gcj02',
+        rawCoordSys: 'wgs84',
+        accuracyM: 18,
+        source: 'browser_geolocation',
+        capturedAt: '2026-04-07T01:02:03.000Z'
+      }
+    })
+
+    expect(spatialContext.userLocation).toEqual({
+      lon: 114.3655,
+      lat: 30.5431,
+      accuracyM: 18,
+      source: 'browser_geolocation',
+      capturedAt: '2026-04-07T01:02:03.000Z',
+      coordSys: 'gcj02'
+    })
+  })
+
+  it('still projects browser userLocation back to raw wgs84 when backend poi coord sys is wgs84', () => {
+    const builder = useSpatialRequestBuilder({ poiCoordSys: 'wgs84' })
+    const spatialContext = builder.buildSpatialContext({
+      boundaryPolygon: null,
+      drawMode: 'Viewport',
+      circleCenter: null,
+      circleRadius: null,
+      mapBounds: [114.30, 30.54, 114.38, 30.59],
+      mapZoom: 15,
+      regions: [],
+      poiFeatures: [],
+      userLocation: {
+        lon: 114.3655,
+        lat: 30.5431,
+        rawLon: 114.3605,
+        rawLat: 30.5401,
+        coordSys: 'gcj02',
+        rawCoordSys: 'wgs84',
+        accuracyM: 18,
+        source: 'browser_geolocation',
+        capturedAt: '2026-04-07T01:02:03.000Z'
+      }
+    })
+
+    expect(spatialContext.userLocation).toEqual({
+      lon: 114.3605,
+      lat: 30.5401,
+      accuracyM: 18,
+      source: 'browser_geolocation',
+      capturedAt: '2026-04-07T01:02:03.000Z',
+      coordSys: 'wgs84'
+    })
+  })
 })

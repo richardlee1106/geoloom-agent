@@ -22,6 +22,7 @@ import { createSpatialEncoderSkill } from './skills/spatial_encoder/SpatialEncod
 import { createSpatialVectorSkill } from './skills/spatial_vector/SpatialVectorSkill.js'
 import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceSkill.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
+import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
 
 const port = Number(process.env.PORT || '3210')
 const host = process.env.HOST || '127.0.0.1'
@@ -51,10 +52,10 @@ const shortTerm = new ShortTermMemory({
 const memory = new MemoryManager({
   shortTerm,
   longTerm: new LongTermMemory({
-    dataDir: new URL('../data/memory/', import.meta.url),
+    dataDir: resolveResourceUrl(import.meta.url, ['../data/memory/', '../../data/memory/']),
   }),
   profiles: new ProfileManager({
-    profileDir: new URL('../profiles/', import.meta.url),
+    profileDir: resolveResourceUrl(import.meta.url, ['../profiles/', '../../profiles/']),
   }),
 })
 const sessionManager = new SessionManager({

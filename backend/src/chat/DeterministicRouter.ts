@@ -30,6 +30,8 @@ const CATEGORY_HINTS: CategoryHint[] = [
 ]
 
 const AMBIGUOUS_ANCHORS = new Set(['这里', '这里附近', '这附近', '这片区', '当前区域', '当前片区', '此处'])
+const CURRENT_AREA_RE = /(这里|这里附近|这附近|这片区|当前区域|当前片区|此处)/u
+const AREA_OVERVIEW_RE = /(配套|业态|缺口|机会|主导业态|活力热点|热点|异常点|读懂当前区域|读懂这个区域|总结当前区域|看看.*配套|看看.*业态)/u
 
 function normalizeSelectedCategories(selectedCategories: unknown[] = []) {
   return selectedCategories
@@ -123,6 +125,10 @@ function buildClarificationHint(queryType: DeterministicIntent['queryType']) {
     return '请告诉我一个明确地点，例如“武汉大学最近的地铁站是什么”。'
   }
 
+  if (queryType === 'area_overview') {
+    return '请告诉我一个明确地点，或者把地图移动到你想分析的区域后再问我。'
+  }
+
   if (queryType === 'similar_regions') {
     return '请告诉我一个明确参考地点，例如“和武汉大学周边气质相似的片区有哪些”。'
   }
@@ -139,6 +145,10 @@ function buildUserLocationClarificationHint(queryType: DeterministicIntent['quer
     return '如果你想问离你最近的地铁站，请先授权当前位置，或者告诉我一个明确地点。'
   }
 
+  if (queryType === 'area_overview') {
+    return '如果你想分析我附近的业态和配套，请先授权当前位置，或者把地图移动到目标区域。'
+  }
+
   return '如果你想问我附近有什么，请先授权当前位置，或者直接告诉我一个明确地点。'
 }
 
@@ -150,8 +160,39 @@ function hasUserLocation(request: ChatRequestV4) {
   return Number.isFinite(lon) && Number.isFinite(lat)
 }
 
+function hasSpatialViewContext(request: ChatRequestV4) {
+  const candidate = request.options?.spatialContext as Record<string, unknown> | undefined
+  const viewport = Array.isArray(candidate?.viewport) ? candidate.viewport : []
+  const boundary = Array.isArray(candidate?.boundary) ? candidate.boundary : []
+  const center = candidate?.center
+
+  if (viewport.length >= 4 || boundary.length >= 3) {
+    return true
+  }
+
+  if (Array.isArray(center) && center.length >= 2) {
+    return true
+  }
+
+  if (center && typeof center === 'object') {
+    const lon = Number((center as Record<string, unknown>).lon ?? (center as Record<string, unknown>).lng ?? (center as Record<string, unknown>).longitude)
+    const lat = Number((center as Record<string, unknown>).lat ?? (center as Record<string, unknown>).latitude)
+    return Number.isFinite(lon) && Number.isFinite(lat)
+  }
+
+  return false
+}
+
 function isUserRelativeAnchor(text: string) {
   return /(我附近|我周边|离我最近|从我这里|从当前位置|我这里|当前位置|我周围)/u.test(text)
+}
+
+function hasCurrentAreaReference(text: string) {
+  return CURRENT_AREA_RE.test(text)
+}
+
+function isAreaOverviewQuery(text: string) {
+  return AREA_OVERVIEW_RE.test(text)
 }
 
 export class DeterministicRouter {
@@ -161,6 +202,7 @@ export class DeterministicRouter {
     const normalizedText = stripDecorators(text)
     const { categoryKey, targetCategory } = inferCategoryFromText(normalizedText, selectedCategories)
     const requestHasUserLocation = hasUserLocation(request)
+    const requestHasSpatialView = hasSpatialViewContext(request)
 
     if (/(比较|对比)/u.test(normalizedText) && /和/u.test(normalizedText)) {
       const anchors = extractCompareAnchors(normalizedText)
@@ -178,6 +220,41 @@ export class DeterministicRouter {
         radiusM: 800,
         needsClarification,
         clarificationHint: needsClarification ? buildClarificationHint('compare_places') : null,
+      }
+    }
+
+    if (isAreaOverviewQuery(normalizedText)) {
+      const useUserLocationAnchor = isUserRelativeAnchor(normalizedText)
+      if (useUserLocationAnchor) {
+        return {
+          queryType: 'area_overview',
+          intentMode: 'agent_full_loop',
+          rawQuery: normalizedText,
+          placeName: null,
+          anchorSource: 'user_location',
+          targetCategory: '区域洞察',
+          categoryKey: null,
+          radiusM: 1200,
+          needsClarification: !requestHasUserLocation,
+          clarificationHint: requestHasUserLocation ? null : buildUserLocationClarificationHint('area_overview'),
+        }
+      }
+
+      const placeName = extractNearbyAnchor(normalizedText)
+      const useMapViewAnchor = !placeName && (hasCurrentAreaReference(normalizedText) || requestHasSpatialView)
+      const needsClarification = useMapViewAnchor ? !requestHasSpatialView : !placeName
+
+      return {
+        queryType: 'area_overview',
+        intentMode: 'agent_full_loop',
+        rawQuery: normalizedText,
+        placeName: useMapViewAnchor ? '当前区域' : placeName,
+        anchorSource: useMapViewAnchor ? 'map_view' : 'place',
+        targetCategory: '区域洞察',
+        categoryKey: null,
+        radiusM: 1200,
+        needsClarification,
+        clarificationHint: needsClarification ? buildClarificationHint('area_overview') : null,
       }
     }
 
@@ -271,7 +348,7 @@ export class DeterministicRouter {
       categoryKey,
       radiusM: 800,
       needsClarification: true,
-      clarificationHint: '当前 V4 只支持“某地附近有什么”“某地最近的地铁站”“相似片区”和“双地点比较”这几类问题。',
+      clarificationHint: '当前 V4 已支持“某地附近有什么”“某地最近的地铁站”“当前区域洞察 / 业态配套分析”“相似片区”和“双地点比较”这几类问题。',
     }
   }
 

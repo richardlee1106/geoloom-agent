@@ -108,4 +108,33 @@ describe('DeterministicRouter', () => {
     expect(intent.placeName).toBeNull()
     expect(intent.needsClarification).toBe(false)
   })
+
+  it('routes current-area insight prompts to area_overview when viewport context is available', () => {
+    const intent = router.route({
+      messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+      options: {
+        spatialContext: {
+          viewport: [114.30, 30.54, 114.38, 30.60],
+          mapZoom: 15,
+        },
+      },
+    })
+
+    expect(intent.queryType).toBe('area_overview')
+    expect(intent.anchorSource).toBe('map_view')
+    expect(intent.placeName).toBe('当前区域')
+    expect(intent.needsClarification).toBe(false)
+  })
+
+  it('routes place-based business-mix insight prompts to area_overview instead of nearby poi', () => {
+    const intent = router.route({
+      messages: [{ role: 'user', content: '湖北大学附近有什么值得关注的配套、热门业态和明显缺口？' }],
+      options: {},
+    })
+
+    expect(intent.queryType).toBe('area_overview')
+    expect(intent.anchorSource).toBe('place')
+    expect(intent.placeName).toBe('湖北大学')
+    expect(intent.needsClarification).toBe(false)
+  })
 })

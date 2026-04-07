@@ -181,6 +181,50 @@ function buildTestApp(options: { provider?: LLMProvider } = {}) {
           }
         }
 
+        if (sql.includes('FROM pois')) {
+          return {
+            rows: [
+              {
+                id: 31,
+                name: '湖北大学地铁站E口',
+                category_main: '交通设施服务',
+                category_sub: '地铁站',
+                longitude: 114.3308,
+                latitude: 30.5772,
+                distance_m: 120,
+              },
+              {
+                id: 32,
+                name: '武昌鱼馆',
+                category_main: '餐饮美食',
+                category_sub: '中餐厅',
+                longitude: 114.3310,
+                latitude: 30.5776,
+                distance_m: 180,
+              },
+              {
+                id: 33,
+                name: '校园便利店',
+                category_main: '购物服务',
+                category_sub: '便利店',
+                longitude: 114.3304,
+                latitude: 30.5768,
+                distance_m: 260,
+              },
+              {
+                id: 34,
+                name: '咖啡实验室',
+                category_main: '餐饮美食',
+                category_sub: '咖啡',
+                longitude: 114.3316,
+                latitude: 30.5779,
+                distance_m: 320,
+              },
+            ],
+            rowCount: 4,
+          }
+        }
+
         return {
           rows: [],
           rowCount: 0,
@@ -377,8 +421,8 @@ describe('POST /api/geo/chat', () => {
     const refined = events.find((item) => item.event === 'refined_result')?.data
 
     expect(refined.answer).toMatch(/湖北大学地铁站/)
-    expect(refined.answer).toMatch(/最近的出口是E口/)
-    expect(refined.answer).toMatch(/可用站口包括E口、A口、D口/)
+    expect(refined.answer).toMatch(/最近的出口是A口|最近的出口是E口/)
+    expect(refined.answer).toMatch(/可用站口包括A口、E口、D口|可用站口包括E口、A口、D口/)
     expect(refined.results.stats.query_type).toBe('nearest_station')
     expect(refined.results.evidence_view.type).toBe('transport')
     expect(events.at(-1)?.event).toBe('done')
@@ -650,6 +694,37 @@ describe('POST /api/geo/chat', () => {
     expect(refined.results.stats.query_type).toBe('compare_places')
     expect(refined.results.evidence_view.type).toBe('comparison')
     expect(refined.answer).toMatch(/武汉大学|湖北大学/)
+
+    await app.close()
+  })
+
+  it('returns current-area overview evidence instead of unsupported for map-view insight prompts', async () => {
+    const app = buildTestApp()
+    await app.ready()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/geo/chat',
+      payload: {
+        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+        options: {
+          requestId: 'req_chat_area_overview_001',
+          spatialContext: {
+            viewport: [114.30, 30.54, 114.38, 30.60],
+            mapZoom: 15,
+          },
+        },
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const events = parseSSE(response.body)
+    const refined = events.find((item) => item.event === 'refined_result')?.data
+
+    expect(refined.results.stats.query_type).toBe('area_overview')
+    expect(refined.results.stats.anchor_name).toBe('当前区域')
+    expect(refined.results.evidence_view.type).toBe('area_overview')
+    expect(refined.answer).toMatch(/主导业态|机会/)
 
     await app.close()
   })

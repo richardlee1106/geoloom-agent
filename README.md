@@ -55,7 +55,7 @@ npm run dev:v4
 这条命令会先清理旧进程，再同时启动 4 个服务：
 
 - 前端：`http://127.0.0.1:3000`
-- 真实依赖适配服务：`http://127.0.0.1:3410`
+- 真实依赖适配服务：`http://127.0.0.1:3411`
 - 空间编码器服务：`http://127.0.0.1:8100`
 - V4 后端：`http://127.0.0.1:3210`
 
@@ -113,9 +113,9 @@ copy backend\.env.example backend\.env
 默认连接关系如下：
 
 - `SPATIAL_ENCODER_BASE_URL=http://127.0.0.1:8100`
-- `SPATIAL_VECTOR_BASE_URL=http://127.0.0.1:3410`
+- `SPATIAL_VECTOR_BASE_URL=http://127.0.0.1:3411`
 - `SPATIAL_VECTOR_HEALTH_PATH=/health/vector`
-- `ROUTING_BASE_URL=http://127.0.0.1:3410`
+- `ROUTING_BASE_URL=http://127.0.0.1:3411`
 - `ROUTING_HEALTH_PATH=/health/routing`
 
 也就是说，`dev:v4` 起来后，后端看到的不是本地 mock，而是真实 remote 依赖模式。
@@ -143,8 +143,8 @@ curl http://127.0.0.1:3210/api/geo/health
 
 ```bash
 curl http://127.0.0.1:8100/health
-curl http://127.0.0.1:3410/health/vector
-curl http://127.0.0.1:3410/health/routing
+curl http://127.0.0.1:3411/health/vector
+curl http://127.0.0.1:3411/health/routing
 ```
 
 ## 我这次实际验证了什么

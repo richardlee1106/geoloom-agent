@@ -1,9 +1,8 @@
 import { validateSSEEventPayload } from './sseEventSchema.js'
-
-const DEFAULT_API_BASE = 'http://127.0.0.1:3210'
+import { AI_API_BASE_URL } from '../config.js'
 
 export function resolveApiBase() {
-  return String(import.meta.env.VITE_GEOLOOM_API_BASE || DEFAULT_API_BASE).replace(/\/$/, '')
+  return String(import.meta.env.VITE_GEOLOOM_API_BASE || AI_API_BASE_URL || '').replace(/\/$/, '')
 }
 
 export async function fetchHealth() {

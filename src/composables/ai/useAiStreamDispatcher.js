@@ -153,7 +153,9 @@ export function useAiStreamDispatcher({
           currentMsg.isThinking = true
           currentMsg.thinkingMessage = data.message || '正在思考...'
         } else if (data?.status === 'end') {
-          currentMsg.isThinking = false
+          // 保持运行态直到外层流式请求真正结束，否则前端会过早停止转圈，
+          // 造成“分析已结束但回答还在输出”的错位体验。
+          currentMsg.isThinking = currentMsg.isStreaming !== false
           if (data.message) {
             currentMsg.thinkingMessage = data.message
           }

@@ -12,9 +12,15 @@
           </div>
           <div class="header-info">
             <span class="ai-name">GeoAI 助手</span>
-            <span class="ai-status" :class="{ online: isOnline === true, offline: isOnline === false, probing: isOnline === null }">
-              {{ statusText }}
-            </span>
+            <div class="header-status-row">
+              <span class="ai-status" :class="{ online: isOnline === true, offline: isOnline === false, probing: isOnline === null }">
+                {{ statusText }}
+              </span>
+              <div class="location-meta-pill compact" :class="`is-${userLocationSummary.tone}`">
+                <span class="location-meta-label">{{ userLocationSummary.label }}</span>
+                <small class="location-meta-detail">{{ compactLocationDetail }}</small>
+              </div>
+            </div>
           </div>
         </div>
         
@@ -25,7 +31,23 @@
              <span class="poi-icon">📍</span>
              <span>{{ poiCount }}</span>
            </div>
-           
+
+           <button
+             class="action-btn location-btn"
+             :class="`is-${userLocationSummary.tone}`"
+             :disabled="userLocationStatus === 'locating'"
+             @click="emit('request-current-location')"
+             :title="userLocationSummary.detail"
+            >
+             <span class="location-btn-icon">
+               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                 <path d="M12 21s-6-4.35-6-10a6 6 0 1112 0c0 5.65-6 10-6 10z" />
+                 <circle cx="12" cy="11" r="2.5" />
+               </svg>
+             </span>
+             <span class="location-btn-label">{{ userLocationStatus === 'locating' ? '定位中' : locationActionLabel }}</span>
+           </button>
+
            <button class="action-btn clear-btn" @click="clearChat" title="清空">
              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -52,9 +74,10 @@
                <path d="M18 6L6 18M6 6l12 12" />
              </svg>
            </button>
-        </div>
-      </div>
-    </div>
+         </div>
+       </div>
+
+     </div>
 
     <div class="chat-body">
       <div class="chat-messages" ref="messagesContainer">
@@ -62,13 +85,23 @@
         <div v-if="messages.length === 0" class="welcome-message">
           <section class="welcome-shell">
             <div class="welcome-hero">
-              <div class="welcome-kicker">
-                <span class="kicker-dot"></span>
-                <span>GeoAI 助手</span>
+              <div class="welcome-heading-row">
+                <div class="welcome-kicker">
+                  <span class="kicker-dot"></span>
+                  <span>GeoAI 助手</span>
+                </div>
+                <span class="welcome-route-pill" :class="`is-${reasoningRouteTone}`">
+                  {{ reasoningRouteLabel }}
+                </span>
               </div>
-              <h3>直接问地点、周边和选址问题</h3>
+              <div class="welcome-title-row">
+                <h3>问地点、周边和选址</h3>
+                <span class="welcome-location-note" :class="`is-${userLocationSummary.tone}`">
+                  {{ userLocationSummary.label }}
+                </span>
+              </div>
               <p>
-                我会先识别地点和需求，再结合当前地图状态给出空间检索或空间推理结果。
+                默认按问题里的地点和当前地图范围来推理；如果要按你的位置来问，点头部“{{ locationActionLabel }}”。
               </p>
               <div class="welcome-meta-strip">
                 <div
@@ -82,55 +115,55 @@
                 </div>
               </div>
               <div class="welcome-formula">
-                <span class="formula-label">推荐问法</span>
-                <p class="formula-text">地点 + 空间关系 + 需求，例如“武汉大学附近有哪些咖啡店？”</p>
+                <span class="formula-label">输入公式</span>
+                <p class="formula-text">地点 + 空间关系 + 需求，例如“湖北大学附近有哪些地铁站？”。</p>
               </div>
             </div>
 
-            <div class="welcome-section">
-              <div class="welcome-section-head">
-                <div>
-                  <span class="welcome-section-kicker">常用入口</span>
-                  <h4>先从这三类问题开始</h4>
+            <div class="welcome-command-grid">
+              <div class="welcome-section welcome-section-compact">
+                <div class="welcome-section-head compact">
+                  <div>
+                    <span class="welcome-section-kicker">常用入口</span>
+                    <h4>一键起手</h4>
+                  </div>
+                  <p>点一下就直接发送。</p>
                 </div>
-                <p>保留最常用的三种入口，先快速起手，再逐步细化。</p>
-              </div>
 
-              <div class="scenario-list">
-                <button
-                  v-for="action in welcomePrimaryScenarios"
-                  :key="action.title"
-                  type="button"
-                  class="scenario-card"
-                  :class="`accent-${action.accent}`"
-                  @click="sendQuickAction(action.prompt)"
-                >
-                  <div class="scenario-main">
+                <div class="scenario-list compact">
+                  <button
+                    v-for="action in welcomePrimaryScenarios"
+                    :key="action.title"
+                    type="button"
+                    class="scenario-card compact"
+                    :class="`accent-${action.accent}`"
+                    @click="sendQuickAction(action.prompt)"
+                  >
                     <span class="scenario-badge">{{ action.badge }}</span>
                     <strong class="scenario-title">{{ action.title }}</strong>
-                  </div>
-                  <span class="scenario-desc">{{ action.desc }}</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="welcome-section welcome-examples">
-              <div class="welcome-section-head compact">
-                <div>
-                  <span class="welcome-section-kicker">示例问法</span>
-                  <h4>也可以直接这样问</h4>
+                  </button>
                 </div>
               </div>
-              <div class="example-list">
-                <button
-                  v-for="example in welcomeExamples"
-                  :key="example.label"
-                  type="button"
-                  class="example-chip"
-                  @click="sendQuickAction(example.prompt)"
-                >
-                  {{ example.label }}
-                </button>
+
+              <div class="welcome-section welcome-examples welcome-section-compact">
+                <div class="welcome-section-head compact">
+                  <div>
+                    <span class="welcome-section-kicker">示例问法</span>
+                    <h4>直接开问</h4>
+                  </div>
+                  <p>也可以改几个词继续追问。</p>
+                </div>
+                <div class="example-list compact">
+                  <button
+                    v-for="example in welcomeExamples"
+                    :key="example.label"
+                    type="button"
+                    class="example-chip"
+                    @click="sendQuickAction(example.prompt)"
+                  >
+                    {{ example.label }}
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -173,11 +206,10 @@
                       </svg>
                       <span v-else class="step-number">{{ idx + 1 }}</span>
                     </div>
-                    <span class="step-label-inline">{{ step.label }}</span>
-                  </div>
-                </template>
-              </div>
-              <div v-if="!msg.pipelineCompleted && getPipelineHintForMessage(msg, index)" class="pipeline-hint-inline">{{ getPipelineHintForMessage(msg, index) }}</div>
+                  <span class="step-label-inline">{{ step.label }}</span>
+                </div>
+              </template>
+            </div>
               <div
                 v-if="msg.intentPreview && (msg.intentPreview.displayAnchor || msg.intentPreview.targetCategory)"
                 class="pipeline-recognized-inline"
@@ -229,22 +261,33 @@
 
             <!-- 思考过程展示组件 (V3 推理模型) -->
             <div
-              v-if="msg.role === 'assistant' && (msg.isThinking || msg.reasoningContent)"
-              class="thinking-process-container"
+              v-if="msg.role === 'assistant' && shouldShowRunStatus(msg, index)"
+              class="run-status-inline"
+              :class="`tone-${getRunStatusForMessage(msg, index).tone}`"
             >
-              <div class="thinking-header" @click="msg.isReasoningExpanded = !msg.isReasoningExpanded">
-                <div class="thinking-status">
-                  <svg v-if="msg.isThinking" class="thinking-spinner" viewBox="0 0 24 24" width="16" height="16">
+              <div
+                class="run-status-header"
+                :class="{ clickable: Boolean(msg.reasoningContent) }"
+                @click="msg.reasoningContent ? msg.isReasoningExpanded = !msg.isReasoningExpanded : null"
+              >
+                <div class="run-status-main">
+                  <svg v-if="msg.isThinking && !msg.pipelineCompleted" class="thinking-spinner" viewBox="0 0 24 24" width="16" height="16">
                     <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="32" stroke-linecap="round"/>
                   </svg>
                   <svg v-else class="thinking-check" viewBox="0 0 16 16" width="14" height="14">
                     <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" fill="currentColor"/>
                   </svg>
-                  <span class="thinking-label">
-                    {{ msg.thinkingMessage || (msg.isThinking ? '正在整理思路...' : '已整理思路') }}
-                  </span>
+                  <div class="run-status-copy">
+                    <span class="run-status-label">
+                      {{ getRunStatusForMessage(msg, index).label }}
+                    </span>
+                    <small class="run-status-detail">
+                      {{ getRunStatusForMessage(msg, index).detail }}
+                    </small>
+                  </div>
                 </div>
                 <svg
+                  v-if="msg.reasoningContent"
                   class="thinking-expand-icon"
                   :class="{ expanded: msg.isReasoningExpanded }"
                   viewBox="0 0 24 24"
@@ -305,45 +348,6 @@
             <div v-if="msg.content && msg.content.trim()" class="message-time">{{ formatTime(msg.timestamp) }}</div>
           </div>
         </div>
-
-        <section
-          v-if="latestAssistantMessage && shouldShowAnalysisBoard(latestAssistantMessage, { isV3Mode })"
-          class="analysis-board analysis-board-inline"
-          aria-label="空间分析看板"
-        >
-          <header class="analysis-board-header">
-            <div>
-              <p class="analysis-kicker">{{ analysisBoardKicker }}</p>
-              <h3 class="analysis-title">{{ analysisBoardTitle }}</h3>
-            </div>
-            <span class="analysis-meta">
-              {{ latestAssistantMessage?.timestamp ? formatTime(latestAssistantMessage.timestamp) : '--:--' }}
-            </span>
-          </header>
-
-          <div class="analysis-board-content">
-            <div v-if="analysisNarrativeText" class="analysis-narrative">
-              {{ analysisNarrativeText }}
-            </div>
-
-            <SpatialEvidenceCard
-              v-if="latestAssistantMessage && hasSpatialEvidence(latestAssistantMessage)"
-              :clusters="latestAssistantMessage.spatialClusters"
-              :vernacular-regions="latestAssistantMessage.vernacularRegions"
-              :fuzzy-regions="latestAssistantMessage.fuzzyRegions"
-              :analysis-stats="latestAssistantMessage.analysisStats || null"
-              :intent-mode="latestAssistantMessage.intentMode || 'macro_overview'"
-              :query-type="latestAssistantMessage.queryType || latestAssistantMessage.intentMeta?.queryType || 'area_analysis'"
-              :intent-meta="latestAssistantMessage.intentMeta ? { ...latestAssistantMessage.intentMeta, traceId: latestAssistantMessage.traceId } : (latestAssistantMessage.traceId ? { traceId: latestAssistantMessage.traceId } : null)"
-              @locate="handleEvidenceLocate"
-              @ask-followup="handleEvidenceFollowup"
-            />
-            <div v-else class="analysis-empty-state">
-              <span class="analysis-empty-title">等待空间证据</span>
-              <p>{{ analysisEmptyDescription }}</p>
-            </div>
-          </div>
-        </section>
       </div>
     </div>
 
@@ -383,7 +387,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
-import { 
+import {
   sendChatMessageStream, 
   checkAIService, 
   getCurrentProviderInfo
@@ -392,17 +396,28 @@ import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence.j
 import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher.js';
 import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder.js';
 import {
+  getAgentStageSteps,
+  getRunStatusCopy as buildRunStatusCopy,
+  normalizeAgentStage
+} from '../utils/agentStageConfig.js';
+import {
   refreshTemplateWeights,
   trackSessionOutcome
 } from '../services/aiTelemetry.js';
 import { filterV3ChatOptions } from '../utils/v3RequestOptions.js';
 import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
-import SpatialEvidenceCard from './SpatialEvidenceCard.vue';
 import { marked } from 'marked';
-import { normalizeMarkdownForRender } from '../utils/markdownContract.js';
 import { resolveAnalysisSignals } from '../utils/analysisSignals.js';
-import { isGeneralQaMessage, shouldShowAnalysisBoard } from '../utils/analysisBoardVisibility.js';
+import { normalizeMarkdownForRender } from '../utils/markdownContract.js';
+import { isGeneralQaMessage } from '../utils/analysisBoardVisibility.js';
 import { buildChatHistoryExportContent } from '../utils/chatHistoryExport.js';
+import {
+  buildAiAnchorFeatureFromMessage
+} from '../utils/aiAnchorFeature.js';
+import {
+  getLocationActionLabel,
+  getUserLocationSummary
+} from '../utils/userLocationContext.js';
 
 const props = defineProps({
   // 当前选中的 POI 数据
@@ -441,6 +456,14 @@ const props = defineProps({
     type: Number,
     default: null
   },
+  userLocation: {
+    type: Object,
+    default: null
+  },
+  userLocationStatus: {
+    type: String,
+    default: 'idle'
+  },
   selectedCategories: {
     type: Array,
     default: () => []
@@ -455,6 +478,7 @@ const props = defineProps({
 // 定义事件
 const emit = defineEmits([
   'close',
+  'request-current-location',
   'render-to-tagcloud',
   'render-pois-to-map',
   'ai-boundary',
@@ -486,71 +510,12 @@ const reasoningRouteLabel = computed(() => {
 
 const reasoningRouteTone = computed(() => (isV3Mode || isV4Mode ? 'active' : 'neutral'));
 
-const analysisBoardKicker = computed(() => (isV4Mode ? '最新回复 Agent 看板' : '最新回复分析看板'));
-const analysisBoardTitle = computed(() => (isV4Mode ? 'Agent 空间推理聚合' : '模板化信息聚合'));
-const analysisEmptyDescription = computed(() => (
-  isV4Mode
-    ? '当前最新回复尚未返回可聚合的空间结构化结果，继续提问后将自动补齐空间证据与推理结果。'
-    : '当前最新回复尚未返回可聚合的空间结构化结果，继续提问后将自动生成 1-3 个意图模板。'
-));
-
-// V1 阶段顺序：planner → spatial → visual → fusion → writer
-const v1StageSteps = [
-  { key: 'planner', label: '意图处理', hint: '正在理解问题意图与约束...' },
-  { key: 'spatial', label: '空间分析', hint: '正在执行空间检索、聚类与边界建模...' },
-  { key: 'visual', label: '视觉感知', hint: '正在提取视口锚点与视觉形态特征...' },
-  { key: 'fusion', label: '空间推理', hint: '正在进行自校验、知识图谱与置信度融合...' },
-  { key: 'writer', label: '组织回答', hint: '正在整理答案并生成可读输出...' }
-];
-
-// V3 简化阶段：意图理解 → 空间检索 → 空间推理 → 答案生成
-const v3StageSteps = [
-  { key: 'intent', label: '意图理解', hint: '正在理解您的问题...' },
-  { key: 'spatial', label: '空间检索', hint: '正在搜索相关地点...' },
-  { key: 'reasoning', label: '空间推理', hint: '正在分析检索结果...' },
-  { key: 'answer', label: '答案生成', hint: '正在生成回答...' }
-];
-
-// V3 思考过程状态
-const isThinking = ref(false);
-const thinkingMessage = ref('');
-const reasoningContent = ref('');
-const isReasoningExpanded = ref(false);
-
-// 根据模式选择阶段配置
-const stageSteps = isV3Mode ? v3StageSteps : v1StageSteps;
+const stageSteps = getAgentStageSteps({
+  backendVersion: isV4Mode ? 'v4' : (isV3Mode ? 'v3' : 'v1')
+});
 
 function normalizeStageName(stageName) {
-  const raw = String(stageName || '').toLowerCase();
-  if (!raw) return '';
-
-  // V3 简化阶段映射
-  if (isV3Mode) {
-    if (raw.includes('intent')) return 'intent';
-    if (raw.includes('spatial')) return 'spatial';
-    if (raw.includes('reasoning')) return 'reasoning';
-    if (raw.includes('answer') || raw.includes('writer')) return 'answer';
-    return raw; // 直接返回原始名称
-  }
-
-  // V1 复杂阶段映射
-  // 意图处理阶段
-  if (raw.includes('planner') || raw.includes('intent') || raw.includes('irrelevant') || raw.includes('smalltalk') || raw.includes('general_qa')) return 'planner';
-  // 空间分析阶段（先于视觉感知执行）
-  if (raw.includes('fetch_candidates') || raw.includes('cluster') || raw.includes('region_modeling')) return 'spatial';
-  if (raw.includes('executor') || raw.includes('compute') || raw.includes('python') || raw.includes('region_comparison')) return 'spatial';
-  // 视觉感知阶段（含 model_parallel 并行推理）
-  if (raw.includes('visual') || raw.includes('vlm') || raw.includes('ocr') || raw.includes('snapshot')) return 'visual';
-  if (raw.includes('model_parallel')) return 'visual';
-  // 空间推理/融合阶段
-  if (raw.includes('fusion') || raw.includes('self_validation') || raw.includes('skg') || raw.includes('validate') || raw.includes('name_audit')) return 'fusion';
-  // 回答生成阶段
-  if (raw.includes('writer') || raw.includes('answer') || raw.includes('compose')) return 'writer';
-
-  // 含 'spatial' 关键词的归到 spatial（放在最后避免误匹配 self_validation 等）
-  if (raw.includes('spatial')) return 'spatial';
-
-  return '';
+  return normalizeAgentStage(stageName);
 }
 
 const normalizedStageKey = computed(() => normalizeStageName(currentStage.value));
@@ -633,6 +598,33 @@ function getPipelineHintForMessage(message, index) {
   return stageSteps[idx]?.hint || '';
 }
 
+function shouldShowRunStatus(message, index) {
+  if (!message || message.role !== 'assistant') return false;
+  if (isGeneralQaMessage(message)) return false;
+  return Boolean(
+    message.pipelineCompleted
+    || message.isThinking
+    || message.reasoningContent
+    || isStreamingMessage(message, index)
+  );
+}
+
+function getRunStatusForMessage(message, index) {
+  const activeStageKey = normalizeStageName(
+    message?.pipelineStage
+    || message?.currentStage
+    || (isStreamingMessage(message, index) ? normalizedStageKey.value : '')
+    || 'intent'
+  );
+
+  return buildRunStatusCopy({
+    pipelineCompleted: Boolean(message?.pipelineCompleted),
+    isThinking: Boolean(message?.isThinking && !message?.pipelineCompleted),
+    activeStageKey,
+    stageSteps
+  });
+}
+
 function toEmbeddedIntentMode(intentMode, queryType = '') {
   const rawMode = String(intentMode || '').trim().toLowerCase();
   const rawType = String(queryType || '').trim().toLowerCase();
@@ -700,6 +692,28 @@ const SNAPSHOT_CACHE_TTL_MS = 25000;
 
 // 计算 POI 数量
 const poiCount = computed(() => props.poiFeatures?.length || 0);
+const defaultPoiCoordSys = (import.meta.env.VITE_POI_COORD_SYS || 'gcj02').toLowerCase();
+const userLocationSummary = computed(() => getUserLocationSummary({
+  userLocation: props.userLocation,
+  userLocationStatus: props.userLocationStatus
+}));
+const locationActionLabel = computed(() => getLocationActionLabel(props.userLocationStatus));
+const compactLocationDetail = computed(() => {
+  switch (String(props.userLocationStatus || 'idle')) {
+    case 'ready':
+      return userLocationSummary.value.detail;
+    case 'locating':
+      return '正在等待浏览器返回位置';
+    case 'denied':
+      return '授权后才能回答“我附近”';
+    case 'error':
+      return '重试定位，或改用文本地点';
+    case 'unsupported':
+      return '当前环境只能按文本地点检索';
+    default:
+      return '未启用定位时，附近按问题里的地点检索';
+  }
+});
 
 const welcomeContextStats = computed(() => [
   {
@@ -1076,27 +1090,12 @@ function getMessageRiskWarnings(message) {
   return resolveMessageSignals(message).riskWarnings;
 }
 
-async function sendMessage() {
-  const text = inputText.value.trim();
+async function sendMessage(directText = '') {
+  const candidateText = typeof directText === 'string'
+    ? directText
+    : inputText.value;
+  const text = String(candidateText || '').trim();
   if (!text || isTyping.value) return;
-
-  const online = await checkOnlineStatus();
-  if (!online) {
-    const lastMessage = messages.value[messages.value.length - 1];
-    const offlineTip = 'AI 服务未连接，请先启动后端服务后重试。';
-    if (!(lastMessage?.role === 'assistant' && lastMessage?.content === offlineTip)) {
-      messages.value.push({
-        role: 'assistant',
-        content: offlineTip,
-        timestamp: Date.now()
-      });
-      await nextTick();
-      scrollToBottom(true, 'auto');
-    }
-    return;
-  }
-
-
 
   // 先入列用户消息
   messages.value.push({
@@ -1108,6 +1107,7 @@ async function sendMessage() {
 
   await nextTick();
   scrollToBottom(true, 'auto');
+  const onlinePromise = checkOnlineStatus();
 
   // 进入 AI 回复状态
   isTyping.value = true;
@@ -1118,37 +1118,65 @@ async function sendMessage() {
   let requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   let requestSucceeded = false;
   let forceRecomputeRequest = false;
+  let skipFinalize = false;
+
+  const apiMessages = messages.value.map(m => ({
+    role: m.role,
+    content: m.content
+  }));
+
+  const initialRunStatus = buildRunStatusCopy({
+    pipelineCompleted: false,
+    isThinking: true,
+    activeStageKey: 'intent',
+    stageSteps
+  });
+
+  aiMessageIndex = messages.value.length;
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    isThinking: true,
+    thinkingMessage: initialRunStatus.label,
+    isReasoningExpanded: false,
+    intentPreview: null,
+    isStreaming: true,
+    pipelineCompleted: false,
+    pipelineStage: 'intent',
+    pipelineHighWaterStageIndex: 0
+  });
+
+  await nextTick();
+  scrollToBottom(true, 'auto');
+  await waitForNextPaint();
 
   try {
+    const online = await onlinePromise;
+    if (!online) {
+      const offlineTip = 'AI 服务未连接，请先启动后端服务后重试。';
+      skipFinalize = true;
+      if (aiMessageIndex >= 0) {
+        messages.value.splice(aiMessageIndex, 1);
+        aiMessageIndex = -1;
+      }
+      const lastMessage = messages.value[messages.value.length - 1];
+      if (!(lastMessage?.role === 'assistant' && lastMessage?.content === offlineTip)) {
+        messages.value.push({
+          role: 'assistant',
+          content: offlineTip,
+          timestamp: Date.now()
+        });
+        await nextTick();
+        scrollToBottom(true, 'auto');
+      }
+      return;
+    }
+
     // 仅开发环境打印关键信息
     if (import.meta.env.DEV) {
       console.log('[AiChat] 发送消息, POI:', props.poiFeatures?.length || 0);
     }
-
-    const apiMessages = messages.value.map(m => ({
-      role: m.role,
-      content: m.content
-    }));
-
-    // 预插入 AI 回复占位消息
-    aiMessageIndex = messages.value.length;
-    messages.value.push({
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      isThinking: true,
-      thinkingMessage: '正在理解你的问题...',
-      isReasoningExpanded: false,
-      intentPreview: null,
-      isStreaming: true,
-      pipelineCompleted: false,
-      pipelineStage: 'intent',
-      pipelineHighWaterStageIndex: 0
-    });
-
-    await nextTick();
-    scrollToBottom(true, 'auto');
-    await waitForNextPaint();
 
     const spatialContext = buildSpatialContext({
       boundaryPolygon: props.boundaryPolygon,
@@ -1158,7 +1186,8 @@ async function sendMessage() {
       mapBounds: props.mapBounds,
       mapZoom: props.mapZoom,
       regions: props.regions,
-      poiFeatures: props.poiFeatures
+      poiFeatures: props.poiFeatures,
+      userLocation: props.userLocation
     });
 
     const normalizedRegions = normalizeRegionsForBackend(props.regions);
@@ -1290,8 +1319,10 @@ async function sendMessage() {
       await flushStreamQueue();
     }
     resetStreamState();
-    if (messages.value[aiMessageIndex]) {
+    if (!skipFinalize && aiMessageIndex >= 0 && messages.value[aiMessageIndex]) {
       messages.value[aiMessageIndex].isStreaming = false;
+      messages.value[aiMessageIndex].isThinking = false;
+      messages.value[aiMessageIndex].thinkingMessage = '分析已经完成';
       messages.value[aiMessageIndex].pipelineStage = 'answer';
       updateMessagePipelineHighWater(messages.value[aiMessageIndex], 'answer');
       messages.value[aiMessageIndex].pipelineCompleted = true;
@@ -1316,50 +1347,15 @@ async function sendMessage() {
 }
 
 function sendQuickAction(prompt) {
-  inputText.value = prompt;
-  sendMessage();
+  inputText.value = '';
+  void sendMessage(prompt);
 }
 
 // 标签云：渲染到地图
 function buildAnchorFeatureFromMessage(message, pois = []) {
-  const stats = message?.analysisStats && typeof message.analysisStats === 'object'
-    ? message.analysisStats
-    : null;
-
-  const lon = Number(stats?.anchor_lon);
-  const lat = Number(stats?.anchor_lat);
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-
-  const alreadyCovered = Array.isArray(pois) && pois.some((poi) => {
-    const candidateLon = Number(poi?.lon ?? poi?.longitude ?? poi?.geometry?.coordinates?.[0]);
-    const candidateLat = Number(poi?.lat ?? poi?.latitude ?? poi?.geometry?.coordinates?.[1]);
-    if (!Number.isFinite(candidateLon) || !Number.isFinite(candidateLat)) return false;
-    return Math.abs(candidateLon - lon) < 1e-6 && Math.abs(candidateLat - lat) < 1e-6;
+  return buildAiAnchorFeatureFromMessage(message, pois, {
+    fallbackCoordSys: defaultPoiCoordSys
   });
-
-  if (alreadyCovered) return null;
-
-  const anchorName = String(
-    message?.intentPreview?.normalizedAnchor
-    || message?.intentPreview?.displayAnchor
-    || message?.intentMeta?.placeName
-    || '检索锚点'
-  ).trim() || '检索锚点';
-
-  return {
-    type: 'Feature',
-    geometry: {
-      type: 'Point',
-      coordinates: [lon, lat]
-    },
-    properties: {
-      名称: anchorName,
-      type: '检索锚点',
-      category: '检索锚点',
-      _source: 'ai_anchor',
-      _isAnchor: true
-    }
-  };
 }
 
 function handleRenderToMap(message, pois) {
@@ -1395,7 +1391,22 @@ function hasSpatialEvidence(msg) {
 function handleEvidenceLocate(center) {
   if (!center) return;
   const poi = { lon: center.lon || center[0], lat: center.lat || center[1] };
-  emit('render-pois-to-map', [{ type: 'Feature', geometry: { type: 'Point', coordinates: [poi.lon, poi.lat] }, properties: { _source: 'evidence_locate' } }]);
+  const coordSys = String(
+    center?.coordSys
+    || center?.coord_sys
+    || center?.properties?.coordSys
+    || center?.properties?._coordSys
+    || defaultPoiCoordSys
+  ).trim().toLowerCase() || defaultPoiCoordSys;
+  emit('render-pois-to-map', [{
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [poi.lon, poi.lat] },
+    coordSys,
+    properties: {
+      _source: 'evidence_locate',
+      _coordSys: coordSys
+    }
+  }]);
 }
 
 function handleEvidenceFollowup(prompt) {
@@ -1733,6 +1744,7 @@ function renderToTagCloud() {
   if (extractedPOIs.value.length > 0 && extractedPOIs.value[0].lon) {
       const features = extractedPOIs.value.map(p => ({
         type: 'Feature',
+        coordSys: resolveFeatureCoordSysHint(p, defaultPoiCoordSys),
         properties: {
            id: p.id || `temp_${Math.random()}`,
            '名称': p.name,
@@ -1889,15 +1901,8 @@ onMounted(() => {
  */
 async function autoSendMessage(message) {
   if (!message || !message.trim()) return;
-  
-  // 填充输入框
-  inputText.value = message.trim();
-  
-  // 等待 DOM 更新
-  await nextTick();
-  
-  // 自动发送
-  await sendMessage();
+
+  await sendMessage(message.trim());
 }
 
 // 暴露方法给父组件
@@ -1937,7 +1942,7 @@ defineExpose({
 }
 
 .chat-header {
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--line-soft);
   background: linear-gradient(180deg, rgba(8, 18, 33, 0.9), rgba(8, 18, 33, 0.62));
   backdrop-filter: blur(10px);
@@ -1953,7 +1958,7 @@ defineExpose({
 
 .header-left {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-width: 0;
 }
@@ -1961,8 +1966,69 @@ defineExpose({
 .header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.header-meta-row {
+  display: flex;
+  margin-top: 10px;
+}
+
+.location-meta-pill {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 154, 189, 0.2);
+  background: rgba(8, 19, 34, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.location-meta-pill.compact {
+  padding: 4px 8px;
+  gap: 6px;
+  background: rgba(8, 19, 34, 0.42);
+}
+
+.location-meta-pill.is-active {
+  border-color: rgba(67, 189, 148, 0.32);
+  background: rgba(11, 60, 58, 0.28);
+}
+
+.location-meta-pill.is-accent {
+  border-color: rgba(86, 175, 255, 0.34);
+  background: rgba(18, 55, 92, 0.34);
+}
+
+.location-meta-pill.is-warning {
+  border-color: rgba(250, 181, 92, 0.3);
+  background: rgba(88, 55, 23, 0.28);
+}
+
+.location-meta-pill.is-neutral {
+  border-color: rgba(122, 146, 179, 0.22);
+}
+
+.location-meta-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #e8f0fa;
+  white-space: nowrap;
+}
+
+.location-meta-detail {
+  min-width: 0;
+  color: rgba(196, 212, 230, 0.78);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ai-avatar {
@@ -1978,7 +2044,16 @@ defineExpose({
 
 .header-info {
   display: grid;
-  gap: 2px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.header-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .ai-name {
@@ -2057,6 +2132,59 @@ defineExpose({
   color: #d8e7f7;
 }
 
+.location-btn {
+  width: auto;
+  min-width: 118px;
+  height: 32px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(28, 72, 116, 0.82), rgba(20, 44, 74, 0.78));
+  border-color: rgba(112, 184, 255, 0.4);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.location-btn-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.location-btn-label {
+  white-space: nowrap;
+}
+
+.location-btn.is-active {
+  background: linear-gradient(135deg, rgba(20, 109, 86, 0.86), rgba(11, 70, 58, 0.82));
+  border-color: rgba(102, 222, 182, 0.42);
+  color: #dbfff3;
+}
+
+.location-btn.is-warning {
+  background: linear-gradient(135deg, rgba(118, 74, 23, 0.82), rgba(79, 49, 16, 0.8));
+  border-color: rgba(245, 184, 92, 0.4);
+  color: #ffedc9;
+}
+
+.location-btn.is-neutral {
+  background: linear-gradient(135deg, rgba(24, 55, 88, 0.78), rgba(17, 37, 64, 0.76));
+}
+
+.location-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
 .clear-btn {
   background: rgba(183, 45, 63, 0.25);
   border-color: rgba(240, 101, 123, 0.3);
@@ -2120,24 +2248,40 @@ defineExpose({
 }
 
 .welcome-message {
-  min-height: 340px;
-  padding: 8px 2px 16px;
+  min-height: auto;
+  padding: 4px 2px 14px;
   display: grid;
-  align-content: center;
-  gap: 14px;
+  align-content: start;
+  gap: 12px;
 }
 
 .welcome-shell {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
+}
+
+.welcome-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.welcome-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .welcome-hero {
   display: grid;
-  gap: 12px;
-  padding: 18px;
-  border-radius: 18px;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
   border: 1px solid rgba(114, 169, 223, 0.18);
   background: linear-gradient(180deg, rgba(8, 21, 37, 0.96), rgba(9, 24, 42, 0.9));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -2158,6 +2302,56 @@ defineExpose({
   text-transform: uppercase;
 }
 
+.welcome-route-pill,
+.welcome-location-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(112, 158, 205, 0.24);
+  background: rgba(8, 26, 45, 0.64);
+  color: #dff2ff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.welcome-route-pill.is-active,
+.welcome-location-note.is-active {
+  border-color: rgba(74, 222, 128, 0.34);
+  background: rgba(14, 78, 55, 0.34);
+  color: #dcfff0;
+}
+
+.welcome-route-pill.is-accent,
+.welcome-location-note.is-accent {
+  border-color: rgba(125, 211, 252, 0.34);
+  background: rgba(8, 59, 89, 0.34);
+  color: #dff4ff;
+}
+
+.welcome-route-pill.is-warning,
+.welcome-location-note.is-warning {
+  border-color: rgba(245, 184, 92, 0.34);
+  background: rgba(94, 57, 19, 0.34);
+  color: #ffebc7;
+}
+
+.welcome-command-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+}
+
+.welcome-section-compact {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(115, 170, 214, 0.16);
+  background: rgba(8, 19, 34, 0.72);
+}
+
 .kicker-dot {
   width: 6px;
   height: 6px;
@@ -2167,16 +2361,16 @@ defineExpose({
 
 .welcome-hero h3 {
   margin: 0;
-  font-size: clamp(22px, 3vw, 28px);
-  line-height: 1.25;
+  font-size: clamp(18px, 2.2vw, 22px);
+  line-height: 1.2;
   color: #f7fbff;
   letter-spacing: -0.015em;
 }
 
 .welcome-hero p {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: 12px;
+  line-height: 1.55;
   color: rgba(214, 230, 247, 0.78);
 }
 
@@ -2191,8 +2385,8 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
-  border-radius: 14px;
+  padding: 8px 10px;
+  border-radius: 12px;
   border: 1px solid rgba(118, 160, 201, 0.16);
   background: rgba(8, 18, 31, 0.58);
 }
@@ -2224,7 +2418,7 @@ defineExpose({
 
 .meta-chip-value {
   color: #f4f9ff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -2232,8 +2426,8 @@ defineExpose({
 }
 
 .welcome-formula {
-  padding: 10px 12px;
-  border-radius: 14px;
+  padding: 8px 10px;
+  border-radius: 12px;
   border: 1px solid rgba(119, 182, 235, 0.16);
   background: rgba(9, 24, 43, 0.58);
 }
@@ -2248,14 +2442,14 @@ defineExpose({
 
 .formula-text {
   margin: 5px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
   color: rgba(220, 234, 248, 0.8);
 }
 
 .welcome-section {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .welcome-section-head {
@@ -2271,15 +2465,15 @@ defineExpose({
 
 .welcome-section-head h4 {
   margin: 3px 0 0;
-  font-size: 16px;
+  font-size: 14px;
   color: #f4f9ff;
 }
 
 .welcome-section-head p {
   margin: 0;
   max-width: 320px;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.45;
   color: rgba(168, 192, 215, 0.68);
 }
 
@@ -2292,15 +2486,19 @@ defineExpose({
 
 .scenario-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.scenario-list.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .scenario-card {
   --accent: 123, 170, 226;
   display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-  border-radius: 16px;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
   border: 1px solid rgba(var(--accent), 0.18);
   background: rgba(8, 18, 31, 0.72);
   color: inherit;
@@ -2311,6 +2509,12 @@ defineExpose({
     transform 180ms ease,
     border-color 220ms ease,
     background 220ms ease;
+}
+
+.scenario-card.compact {
+  gap: 8px;
+  align-content: start;
+  min-height: 88px;
 }
 
 .scenario-main {
@@ -2362,14 +2566,14 @@ defineExpose({
 }
 
 .scenario-title {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.35;
   color: #f8fbff;
 }
 
 .scenario-desc {
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.45;
   color: rgba(214, 230, 247, 0.74);
 }
 
@@ -2381,6 +2585,10 @@ defineExpose({
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.example-list.compact {
+  gap: 6px;
 }
 
 .example-chip {
@@ -3081,6 +3289,23 @@ defineExpose({
     padding: 10px 12px;
   }
 
+  .header-main-row {
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
+  .location-btn {
+    min-width: 88px;
+    padding: 0 10px;
+  }
+
+  .location-meta-pill {
+    width: 100%;
+  }
+
   .chat-body {
     padding: 8px 8px 0;
   }
@@ -3117,6 +3342,14 @@ defineExpose({
     align-items: flex-start;
   }
 
+  .welcome-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-list.compact {
+    grid-template-columns: 1fr;
+  }
+
   .welcome-meta-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3125,6 +3358,18 @@ defineExpose({
 @media (max-width: 560px) {
   .welcome-hero h3 {
     font-size: 22px;
+  }
+
+  .header-main-row {
+    flex-wrap: wrap;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .location-btn {
+    order: -1;
   }
 
   .welcome-meta-strip {

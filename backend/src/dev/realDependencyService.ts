@@ -8,7 +8,7 @@ import cors from '@fastify/cors'
 import { PostgisPool } from '../integration/postgisPool.js'
 
 const host = process.env.DEPENDENCY_SERVICE_HOST || '127.0.0.1'
-const port = Number(process.env.DEPENDENCY_SERVICE_PORT || '3410')
+const port = Number(process.env.DEPENDENCY_SERVICE_PORT || '3411')
 const encoderBaseUrl = String(
   process.env.GEOLOOM_ENCODER_BASE_URL
   || process.env.SPATIAL_ENCODER_BASE_URL

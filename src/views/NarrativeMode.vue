@@ -157,6 +157,8 @@
 <script setup>
 import { ref, computed, onBeforeUnmount, shallowRef, watch, nextTick, defineAsyncComponent } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElButton } from 'element-plus/es/components/button/index';
+import { ElIcon } from 'element-plus/es/components/icon/index';
 import { marked } from 'marked';
 import { ArrowLeft, Close, Hide, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
 import { fromLonLat, toLonLat } from 'ol/proj';

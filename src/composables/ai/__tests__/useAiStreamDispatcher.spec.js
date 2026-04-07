@@ -72,4 +72,27 @@ describe('useAiStreamDispatcher prefetch debug fields', () => {
       status: 'wasted'
     })
   })
+
+  it('keeps assistant message in thinking state until the outer stream finalizer completes', () => {
+    const { dispatcher, messagesRef } = setupDispatcher()
+    messagesRef.value[0] = {
+      role: 'assistant',
+      content: '',
+      isThinking: true,
+      isStreaming: true
+    }
+
+    dispatcher.dispatchMetaEvent({
+      type: 'thinking',
+      data: {
+        status: 'end',
+        message: '证据整理完成，正在生成结果...'
+      },
+      aiMessageIndex: 0,
+      fallbackIntentMode: 'macro'
+    })
+
+    expect(messagesRef.value[0].isThinking).toBe(true)
+    expect(messagesRef.value[0].thinkingMessage).toBe('证据整理完成，正在生成结果...')
+  })
 })

@@ -1,4 +1,5 @@
 import type { ComparisonPair, DeterministicIntent, EvidenceItem, EvidenceView, ResolvedAnchor } from '../chat/types.js'
+import { buildAreaOverviewView } from './views/AreaOverviewView.js'
 import { buildBucketView } from './views/BucketView.js'
 import { buildComparisonView } from './views/ComparisonView.js'
 import { buildPOIListView } from './views/POIListView.js'
@@ -33,6 +34,14 @@ export class EvidenceViewFactory {
 
     if (input.intent.queryType === 'nearest_station') {
       return buildTransportView({
+        anchor: input.anchor,
+        rows: input.rows || [],
+        intent: input.intent,
+      })
+    }
+
+    if (input.intent.queryType === 'area_overview') {
+      return buildAreaOverviewView({
         anchor: input.anchor,
         rows: input.rows || [],
         intent: input.intent,

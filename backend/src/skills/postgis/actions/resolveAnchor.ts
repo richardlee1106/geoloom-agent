@@ -202,6 +202,7 @@ function buildAnchor(candidate: AnchorCandidate | null, placeName: string, role 
     poi_id: candidate.id ?? null,
     lon: candidate.lon,
     lat: candidate.lat,
+    coord_sys: 'gcj02',
   }
 }
 

@@ -420,6 +420,15 @@ function handleCanvasClick(event) {
 }
 
 function renderToMap() {
+  const sourcePois = Array.isArray(props.pois)
+    ? props.pois.filter(Boolean)
+    : []
+
+  if (sourcePois.length > 0) {
+    emit('render-to-map', sourcePois)
+    return
+  }
+
   const poisToRender = placedTags.value
     .filter((tag) => tag?.placed && tag?.originalPoi)
     .map((tag) => tag.originalPoi)

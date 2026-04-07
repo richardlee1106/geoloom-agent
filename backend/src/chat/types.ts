@@ -24,6 +24,7 @@ export interface ChatRequestV4 {
 export type QueryType =
   | 'nearby_poi'
   | 'nearest_station'
+  | 'area_overview'
   | 'similar_regions'
   | 'compare_places'
   | 'unsupported'
@@ -34,6 +35,7 @@ export type IntentMode =
 
 export type AnchorSource =
   | 'place'
+  | 'map_view'
   | 'user_location'
 
 export interface DeterministicIntent {
@@ -69,6 +71,7 @@ export interface ResolvedAnchor {
   poi_id: string | number | null
   lon?: number
   lat?: number
+  coord_sys?: string | null
 }
 
 export interface EvidenceAnchor {
@@ -78,6 +81,7 @@ export interface EvidenceAnchor {
   lon?: number
   lat?: number
   source?: string
+  coordSys?: string | null
 }
 
 export interface EvidenceItem {
@@ -88,6 +92,7 @@ export interface EvidenceItem {
   categorySub?: string | null
   longitude?: number
   latitude?: number
+  coordSys?: string | null
   distance_m?: number | null
   score?: number | null
   rank?: number | null
@@ -105,6 +110,7 @@ export interface ComparisonPair {
 export type EvidenceViewType =
   | 'poi_list'
   | 'transport'
+  | 'area_overview'
   | 'bucket'
   | 'comparison'
   | 'semantic_candidate'

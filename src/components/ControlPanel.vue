@@ -376,7 +376,16 @@
 
 <script setup>
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
-import { ElNotification } from 'element-plus';
+import { ElButton } from 'element-plus/es/components/button/index';
+import { ElCascader } from 'element-plus/es/components/cascader/index';
+import { ElDialog } from 'element-plus/es/components/dialog/index';
+import { ElDrawer } from 'element-plus/es/components/drawer/index';
+import { ElInput } from 'element-plus/es/components/input/index';
+import { ElMessage } from 'element-plus/es/components/message/index';
+import { ElNotification } from 'element-plus/es/components/notification/index';
+import { ElOption, ElSelect } from 'element-plus/es/components/select/index';
+import { ElSwitch } from 'element-plus/es/components/switch/index';
+import { ElTooltip } from 'element-plus/es/components/tooltip/index';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 import { SPATIAL_API_BASE_URL } from '../config';
 import { fetchCategoryCatalogTree } from '../utils/categoryCatalogClient.js';

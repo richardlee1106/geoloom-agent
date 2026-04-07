@@ -5,7 +5,7 @@
  */
 
 import { ref, computed } from 'vue'
-import { ElNotification } from 'element-plus'
+import { ElNotification } from 'element-plus/es/components/notification/index'
 
 // 最大选区数量
 export const MAX_REGIONS = 6

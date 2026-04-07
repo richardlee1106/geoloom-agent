@@ -37,8 +37,10 @@ import { ProfileManager } from '../memory/ProfileManager.js'
 import { RuntimeMetrics } from '../metrics/RuntimeMetrics.js'
 import type { SkillRegistry } from '../skills/SkillRegistry.js'
 import type { DependencyStatus } from '../integration/dependencyStatus.js'
+import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
 
 const SCHEMA_VERSION = 'v4.agent.v1'
+const DEFAULT_POI_COORD_SYS = 'gcj02'
 
 function formatNumericLiteral(value: unknown, fallback = 0) {
   const numeric = Number(value)
@@ -49,8 +51,38 @@ function hasCoordinates(anchor: ResolvedAnchor | null | undefined): anchor is Re
   return Boolean(anchor && Number.isFinite(anchor.lon) && Number.isFinite(anchor.lat))
 }
 
+function normalizeCoordSys(value: unknown, fallback = DEFAULT_POI_COORD_SYS) {
+  return String(value || fallback).trim().toLowerCase() || fallback
+}
+
+function readSpatialContext(request: ChatRequestV4) {
+  return request.options?.spatialContext as Record<string, unknown> | undefined
+}
+
+function readLonLatCandidate(candidate: unknown) {
+  if (Array.isArray(candidate) && candidate.length >= 2) {
+    const lon = Number(candidate[0])
+    const lat = Number(candidate[1])
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      return { lon, lat }
+    }
+    return null
+  }
+
+  if (candidate && typeof candidate === 'object') {
+    const record = candidate as Record<string, unknown>
+    const lon = Number(record.lon ?? record.lng ?? record.longitude)
+    const lat = Number(record.lat ?? record.latitude)
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      return { lon, lat }
+    }
+  }
+
+  return null
+}
+
 function readUserLocation(request: ChatRequestV4) {
-  const spatialContext = request.options?.spatialContext as Record<string, unknown> | undefined
+  const spatialContext = readSpatialContext(request)
   const raw = spatialContext?.userLocation as Record<string, unknown> | undefined
   const lon = Number(raw?.lon ?? raw?.lng ?? raw?.longitude)
   const lat = Number(raw?.lat ?? raw?.latitude)
@@ -65,7 +97,54 @@ function readUserLocation(request: ChatRequestV4) {
     accuracyM: Number.isFinite(accuracyM) ? accuracyM : null,
     source: String(raw?.source || 'browser_geolocation'),
     capturedAt: String(raw?.capturedAt || raw?.captured_at || ''),
+    coordSys: String(raw?.coordSys || raw?.coord_sys || 'wgs84'),
   } satisfies UserLocationContext
+}
+
+function readMapViewAnchor(request: ChatRequestV4, role = 'primary'): ResolvedAnchor | null {
+  const spatialContext = readSpatialContext(request)
+  if (!spatialContext) return null
+
+  const directCenter = readLonLatCandidate(spatialContext.center)
+  const viewport = Array.isArray(spatialContext.viewport) ? spatialContext.viewport : []
+  const boundary = Array.isArray(spatialContext.boundary) ? spatialContext.boundary : []
+
+  const viewportCenter = viewport.length >= 4
+    ? {
+      lon: (Number(viewport[0]) + Number(viewport[2])) / 2,
+      lat: (Number(viewport[1]) + Number(viewport[3])) / 2,
+    }
+    : null
+
+  let boundaryCenter = null as { lon: number, lat: number } | null
+  if (boundary.length >= 3) {
+    const points = boundary
+      .map((point) => readLonLatCandidate(point))
+      .filter((point): point is { lon: number, lat: number } => Boolean(point))
+    if (points.length > 0) {
+      boundaryCenter = {
+        lon: points.reduce((sum, point) => sum + point.lon, 0) / points.length,
+        lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
+      }
+    }
+  }
+
+  const center = directCenter || viewportCenter || boundaryCenter
+  if (!center || !Number.isFinite(center.lon) || !Number.isFinite(center.lat)) {
+    return null
+  }
+
+  return {
+    place_name: '当前区域',
+    display_name: '当前区域',
+    role,
+    source: 'map_view',
+    resolved_place_name: '当前区域',
+    poi_id: null,
+    lon: center.lon,
+    lat: center.lat,
+    coord_sys: normalizeCoordSys(spatialContext.coordSys || spatialContext.coord_sys, DEFAULT_POI_COORD_SYS),
+  }
 }
 
 function buildUserLocationAnchor(userLocation: UserLocationContext, role = 'primary'): ResolvedAnchor {
@@ -78,6 +157,7 @@ function buildUserLocationAnchor(userLocation: UserLocationContext, role = 'prim
     poi_id: null,
     lon: userLocation.lon,
     lat: userLocation.lat,
+    coord_sys: String(userLocation.coordSys || 'wgs84').trim().toLowerCase() || 'wgs84',
   }
 }
 
@@ -90,6 +170,7 @@ function normalizePoiRows(rows: Record<string, unknown>[] = []): EvidenceItem[] 
     categorySub: String(row.category_sub || '').trim() || null,
     longitude: Number.isFinite(Number(row.longitude)) ? Number(row.longitude) : undefined,
     latitude: Number.isFinite(Number(row.latitude)) ? Number(row.latitude) : undefined,
+    coordSys: normalizeCoordSys(row.coord_sys || row.coordSys, DEFAULT_POI_COORD_SYS),
     distance_m: Number.isFinite(Number(row.distance_m)) ? Number(row.distance_m) : null,
     meta: row,
   }))
@@ -136,16 +217,16 @@ export class GeoLoomAgent {
     this.router = options.router || new DeterministicRouter()
     this.provider = options.provider || createDefaultLLMProvider()
     this.manifestLoader = options.manifestLoader || new SkillManifestLoader({
-      rootDir: new URL('../../SKILLS/', import.meta.url),
+      rootDir: resolveResourceUrl(import.meta.url, ['../../SKILLS/', '../../../SKILLS/']),
     })
     const sharedShortTerm = new ShortTermMemory()
     this.memory = options.memory || new MemoryManager({
       shortTerm: sharedShortTerm,
       longTerm: new LongTermMemory({
-        dataDir: new URL('../../data/memory/', import.meta.url),
+        dataDir: resolveResourceUrl(import.meta.url, ['../../data/memory/', '../../../data/memory/']),
       }),
       profiles: new ProfileManager({
-        profileDir: new URL('../../profiles/', import.meta.url),
+        profileDir: resolveResourceUrl(import.meta.url, ['../../profiles/', '../../../profiles/']),
       }),
     })
     this.sessionManager = options.sessionManager || new SessionManager({ memory: sharedShortTerm })
@@ -220,6 +301,7 @@ export class GeoLoomAgent {
     const activeProvider = this.provider.isReady() ? this.provider : new InMemoryLLMProvider()
     const intent = this.router.route(request)
     const requestUserLocation = readUserLocation(request)
+    const requestMapViewAnchor = readMapViewAnchor(request)
     const state: AgentTurnState = {
       requestId,
       traceId,
@@ -231,6 +313,8 @@ export class GeoLoomAgent {
     }
     if (intent.anchorSource === 'user_location' && requestUserLocation) {
       state.anchors.primary = buildUserLocationAnchor(requestUserLocation)
+    } else if (intent.anchorSource === 'map_view' && requestMapViewAnchor) {
+      state.anchors.primary = requestMapViewAnchor
     }
     const previewAnchorLabel = intent.anchorSource === 'user_location' && requestUserLocation
       ? '当前位置'
@@ -557,7 +641,7 @@ export class GeoLoomAgent {
     if (
       call.name === 'postgis'
       && action === 'resolve_anchor'
-      && intent.anchorSource === 'user_location'
+      && (intent.anchorSource === 'user_location' || intent.anchorSource === 'map_view')
       && String(payload.role || 'primary') === 'primary'
       && hasCoordinates(state.anchors.primary)
     ) {
@@ -774,6 +858,9 @@ export class GeoLoomAgent {
     limit: number,
   ) {
     const point = `ST_SetSRID(ST_MakePoint(${formatNumericLiteral(anchor.lon)}, ${formatNumericLiteral(anchor.lat)}), 4326)::geography`
+    const effectiveLimit = categoryKey === 'metro_station' && intent.queryType === 'nearby_poi'
+      ? Math.max(limit, 12)
+      : Math.max(limit, 1)
     const baseSelect = [
       'SELECT id, name, category_main, category_sub, longitude, latitude,',
       `  ST_Distance(geom::geography, ${point}) AS distance_m`,
@@ -789,7 +876,7 @@ export class GeoLoomAgent {
         ...baseSelect,
         ...filters,
         'ORDER BY distance_m ASC',
-        `LIMIT ${Math.max(limit, 1)}`,
+        `LIMIT ${effectiveLimit}`,
       ].join('\n')
     }
 
@@ -804,7 +891,7 @@ export class GeoLoomAgent {
       ...baseSelect,
       ...filters,
       'ORDER BY distance_m ASC',
-      `LIMIT ${Math.max(limit, 1)}`,
+      `LIMIT ${effectiveLimit}`,
     ].join('\n')
   }
 
@@ -854,6 +941,15 @@ export class GeoLoomAgent {
       })
     }
 
+    if (intent.queryType === 'area_overview') {
+      return this.evidenceFactory.create({
+        intent,
+        anchor: fallbackAnchor,
+        rows: latestPostgisRows?.rows || [],
+        items: normalizePoiRows(latestPostgisRows?.rows || []),
+      })
+    }
+
     return this.evidenceFactory.create({
       intent,
       anchor: fallbackAnchor,
@@ -869,7 +965,7 @@ export class GeoLoomAgent {
     context: ReturnType<typeof createSkillExecutionContext>
   }) {
     const { intent, state, writer, context } = input
-    if (!['nearby_poi', 'nearest_station', 'compare_places'].includes(intent.queryType)) {
+    if (!['nearby_poi', 'nearest_station', 'compare_places', 'area_overview'].includes(intent.queryType)) {
       return false
     }
 
@@ -882,6 +978,7 @@ export class GeoLoomAgent {
         intent.queryType === 'nearby_poi'
         || intent.queryType === 'nearest_station'
         || intent.queryType === 'compare_places'
+        || intent.queryType === 'area_overview'
       )
 
     if (!needsPrimaryAnchor && !needsSecondaryAnchor && !needsDeterministicSql) {
@@ -960,9 +1057,17 @@ export class GeoLoomAgent {
       arguments: {
         action: 'execute_spatial_sql',
         payload: {
-          template: intent.queryType === 'nearest_station' ? 'nearest_station' : 'nearby_poi',
+          template: intent.queryType === 'nearest_station'
+            ? 'nearest_station'
+            : intent.queryType === 'area_overview'
+              ? 'area_overview'
+              : 'nearby_poi',
           category_key: intent.categoryKey || '',
-          limit: intent.queryType === 'nearest_station' ? 1 : 5,
+          limit: intent.queryType === 'nearest_station'
+            ? 1
+            : intent.queryType === 'area_overview'
+              ? 80
+              : 5,
         },
       },
     }, intent, state, context)
@@ -1048,6 +1153,7 @@ export class GeoLoomAgent {
     toolCalls: ToolExecutionTrace[]
     decision: string
   }) {
+    const fallbackAnchorCoordSys = input.intent.anchorSource === 'user_location' ? 'wgs84' : DEFAULT_POI_COORD_SYS
     return {
       query_type: input.intent.queryType,
       intent_mode: input.intent.intentMode,
@@ -1055,6 +1161,7 @@ export class GeoLoomAgent {
       anchor_name: input.anchor?.resolved_place_name || input.intent.placeName || null,
       anchor_lon: input.anchor?.lon ?? null,
       anchor_lat: input.anchor?.lat ?? null,
+      anchor_coord_sys: normalizeCoordSys(input.anchor?.coord_sys, fallbackAnchorCoordSys),
       target_category: input.intent.targetCategory || null,
       latency_ms: Date.now() - input.startedAt,
       version: this.options.version,
@@ -1126,6 +1233,6 @@ export class GeoLoomAgent {
   }
 
   private buildUnsupportedAnswer() {
-    return '当前 V4 已支持附近 POI、最近地铁站、相似片区和双地点比较这几类问题。你可以继续给我一个明确地点或比较对象。'
+    return '当前 V4 已支持附近 POI、最近地铁站、当前区域洞察、相似片区和双地点比较这几类问题。你可以继续给我一个明确地点，或者直接让我读懂当前区域。'
   }
 }

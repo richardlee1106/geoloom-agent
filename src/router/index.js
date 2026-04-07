@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-const MainLayout = () => import("../MainLayout.vue");
+import MainLayout from "../MainLayout.vue";
 const NarrativeMode = () => import("../views/NarrativeMode.vue");
 
 const routes = [

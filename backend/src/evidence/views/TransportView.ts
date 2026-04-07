@@ -1,4 +1,5 @@
 import type { DeterministicIntent, EvidenceAnchor, EvidenceItem, EvidenceView, ResolvedAnchor } from '../../chat/types.js'
+import { dedupeTransportItems } from '../transportNormalization.js'
 
 function normalizeTransportItem(row: Record<string, unknown>): EvidenceItem {
   return {
@@ -9,6 +10,7 @@ function normalizeTransportItem(row: Record<string, unknown>): EvidenceItem {
     categorySub: String(row.category_sub || '').trim() || null,
     longitude: Number.isFinite(Number(row.longitude)) ? Number(row.longitude) : undefined,
     latitude: Number.isFinite(Number(row.latitude)) ? Number(row.latitude) : undefined,
+    coordSys: String(row.coord_sys || row.coordSys || 'gcj02').trim().toLowerCase() || 'gcj02',
     distance_m: Number.isFinite(Number(row.distance_m)) ? Number(row.distance_m) : null,
   }
 }
@@ -21,6 +23,7 @@ function normalizeAnchor(anchor: ResolvedAnchor): EvidenceAnchor {
     lon: anchor.lon,
     lat: anchor.lat,
     source: anchor.source,
+    coordSys: String(anchor.coord_sys || 'gcj02').trim().toLowerCase() || 'gcj02',
   }
 }
 
@@ -29,12 +32,14 @@ export function buildTransportView(input: {
   rows: Record<string, unknown>[]
   intent: DeterministicIntent
 }): EvidenceView {
+  const items = dedupeTransportItems(input.rows.map(normalizeTransportItem))
+
   return {
     type: 'transport',
     anchor: normalizeAnchor(input.anchor),
-    items: input.rows.map(normalizeTransportItem),
+    items,
     meta: {
-      resultCount: input.rows.length,
+      resultCount: items.length,
       targetCategory: input.intent.targetCategory || '地铁站',
       queryType: input.intent.queryType,
     },

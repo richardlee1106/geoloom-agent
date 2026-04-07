@@ -1,6 +1,6 @@
 import http from 'node:http'
 
-const dependencyPort = 3410
+const dependencyPort = 3411
 const encoderPort = 8100
 
 function readJsonBody(request) {

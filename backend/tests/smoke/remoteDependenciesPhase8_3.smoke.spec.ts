@@ -39,7 +39,7 @@ const {
   resolveV4RedisUrl,
 } = devV4Module
 
-const DEFAULT_DEPENDENCY_BASE_URL = 'http://127.0.0.1:3410'
+const DEFAULT_DEPENDENCY_BASE_URL = 'http://127.0.0.1:3411'
 const DEFAULT_SPATIAL_ENCODER_BASE_URL = 'http://127.0.0.1:8100'
 
 function normalizeBaseUrl(value: string | undefined, fallback: string) {

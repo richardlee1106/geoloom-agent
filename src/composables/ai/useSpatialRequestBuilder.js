@@ -162,6 +162,50 @@ export function useSpatialRequestBuilder({
     return center
   }
 
+  function normalizeUserLocationForBackend(userLocation) {
+    if (!userLocation || typeof userLocation !== 'object') return null
+
+    const displayLon = Number(userLocation.lon ?? userLocation.lng ?? userLocation.longitude)
+    const displayLat = Number(userLocation.lat ?? userLocation.latitude)
+    const rawLon = Number(userLocation.rawLon ?? userLocation.raw_lng ?? userLocation.rawLongitude)
+    const rawLat = Number(userLocation.rawLat ?? userLocation.raw_lat ?? userLocation.rawLatitude)
+    const accuracyM = Number(userLocation.accuracyM ?? userLocation.accuracy ?? userLocation.accuracy_m)
+
+    if (shouldProjectToBackend && Number.isFinite(rawLon) && Number.isFinite(rawLat)) {
+      return {
+        lon: rawLon,
+        lat: rawLat,
+        accuracyM: Number.isFinite(accuracyM) ? accuracyM : null,
+        source: String(userLocation.source || 'browser_geolocation'),
+        capturedAt: String(userLocation.capturedAt || userLocation.captured_at || ''),
+        coordSys: String(userLocation.rawCoordSys || userLocation.raw_coord_sys || 'wgs84')
+      }
+    }
+
+    if (Number.isFinite(displayLon) && Number.isFinite(displayLat)) {
+      return {
+        lon: displayLon,
+        lat: displayLat,
+        accuracyM: Number.isFinite(accuracyM) ? accuracyM : null,
+        source: String(userLocation.source || 'browser_geolocation'),
+        capturedAt: String(userLocation.capturedAt || userLocation.captured_at || ''),
+        coordSys: String(userLocation.coordSys || userLocation.coord_sys || (shouldProjectToBackend ? 'wgs84' : 'gcj02'))
+      }
+    }
+
+    const normalized = normalizeCenterForBackend(userLocation)
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return null
+
+    return {
+      lon: normalized.lon,
+      lat: normalized.lat,
+      accuracyM: Number.isFinite(accuracyM) ? accuracyM : null,
+      source: String(userLocation.source || 'browser_geolocation'),
+      capturedAt: String(userLocation.capturedAt || userLocation.captured_at || ''),
+      coordSys: String(userLocation.coordSys || userLocation.coord_sys || (shouldProjectToBackend ? 'wgs84' : 'gcj02'))
+    }
+  }
+
   function normalizeViewportForBackend(viewport) {
     if (!Array.isArray(viewport) || viewport.length < 4) return viewport
     const [swLon, swLat] = toBackendLonLat(viewport[0], viewport[1])
@@ -282,8 +326,11 @@ export function useSpatialRequestBuilder({
     mapBounds,
     mapZoom,
     regions = [],
-    poiFeatures = []
+    poiFeatures = [],
+    userLocation = null
   }) {
+    const normalizedUserLocation = normalizeUserLocationForBackend(userLocation)
+
     return {
       boundary: normalizeBoundaryForBackend(boundaryPolygon),
       mode: drawMode,
@@ -291,6 +338,7 @@ export function useSpatialRequestBuilder({
       radius: circleRadius,
       viewport: normalizeViewportForBackend(mapBounds),
       mapZoom,
+      userLocation: normalizedUserLocation,
       analysisScale: inferAnalysisScale(mapZoom),
       interactionHints: {
         hasDrawnRegion: regions.length > 0,

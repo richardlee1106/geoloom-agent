@@ -2,24 +2,6 @@ import { ref, nextTick } from 'vue'
 import { toLonLat } from 'ol/proj'
 import { unByKey } from 'ol/Observable'
 
-function getColorByGroupIndex(groupIndex) {
-  const colors = [
-    [255, 0, 0, 180],
-    [0, 128, 255, 180],
-    [0, 200, 80, 180],
-    [255, 165, 0, 180],
-    [138, 43, 226, 180],
-    [0, 206, 209, 180],
-    [255, 20, 147, 180],
-    [255, 215, 0, 180],
-    [70, 130, 180, 180],
-    [154, 205, 50, 180],
-    [220, 20, 60, 180],
-    [0, 139, 139, 180]
-  ]
-  return colors[groupIndex % colors.length] || colors[0]
-}
-
 function computeHeatmapRadius(zoomValue) {
   const zoom = Number.isFinite(zoomValue) ? zoomValue : 13
   const minZ = 10
@@ -43,7 +25,6 @@ export function useDeckBridge({
   let deckContainer = null
 
   let DeckClass = null
-  let ScatterplotLayerClass = null
   let DeckHeatmapLayerClass = null
   let deckRuntimePromise = null
 
@@ -78,24 +59,21 @@ export function useDeckBridge({
   }
 
   async function loadDeckRuntime() {
-    if (DeckClass && ScatterplotLayerClass && DeckHeatmapLayerClass) {
+    if (DeckClass && DeckHeatmapLayerClass) {
       return true
     }
 
     if (!deckRuntimePromise) {
       deckRuntimePromise = Promise.all([
         import('@deck.gl/core'),
-        import('@deck.gl/layers'),
         import('@deck.gl/aggregation-layers')
-      ]).then(([core, layers, aggregation]) => {
+      ]).then(([core, aggregation]) => {
         DeckClass = core?.Deck || null
-        ScatterplotLayerClass = layers?.ScatterplotLayer || null
         DeckHeatmapLayerClass = aggregation?.HeatmapLayer || null
-        return Boolean(DeckClass && ScatterplotLayerClass && DeckHeatmapLayerClass)
+        return Boolean(DeckClass && DeckHeatmapLayerClass)
       }).catch((error) => {
         console.warn('[MapContainer] deck.gl runtime load failed:', error)
         DeckClass = null
-        ScatterplotLayerClass = null
         DeckHeatmapLayerClass = null
         return false
       }).finally(() => {
@@ -112,42 +90,13 @@ export function useDeckBridge({
 
   function updateDeckLayers() {
     const map = mapRef.value
-    if (!deckInstance || !ScatterplotLayerClass || !DeckHeatmapLayerClass || !map) return
+    if (!deckInstance || !DeckHeatmapLayerClass || !map) return
 
     const zoom = map.getView().getZoom() || 13
     const heatmapRadius = computeHeatmapRadius(zoom)
     lastDeckHeatmapRadius = heatmapRadius
 
-    const currentLocatedPoi = typeof getCurrentLocatedPoi === 'function' ? getCurrentLocatedPoi() : null
     const layers = [
-      new ScatterplotLayerClass({
-        id: 'highlight-layer',
-        data: highlightData.value.filter((d) => {
-          if (!currentLocatedPoi) return true
-          const coords = currentLocatedPoi.geometry?.coordinates
-          if (!coords) return true
-          return Math.abs(d.lon - coords[0]) > 0.000001 || Math.abs(d.lat - coords[1]) > 0.000001
-        }),
-        pickable: true,
-        opacity: 0.8,
-        stroked: true,
-        filled: true,
-        radiusScale: 1,
-        radiusMinPixels: 3,
-        radiusMaxPixels: 7,
-        lineWidthMinPixels: 1,
-        getPosition: (d) => [d.lon, d.lat],
-        getRadius: 4,
-        getFillColor: (d) => getColorByGroupIndex(d.groupIndex || 0),
-        getLineColor: (d) => {
-          const fill = getColorByGroupIndex(d.groupIndex || 0)
-          return [fill[0], fill[1], fill[2]]
-        },
-        updateTriggers: {
-          getFillColor: [highlightData.value, currentLocatedPoi],
-          getPosition: [highlightData.value, currentLocatedPoi]
-        }
-      }),
       new DeckHeatmapLayerClass({
         id: 'heatmap-layer',
         data: heatmapData.value,

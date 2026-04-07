@@ -1,6 +1,13 @@
 ﻿<template>
   <div class="map-wrapper">
     <div ref="mapContainer" class="map-container"></div>
+    <div v-if="!isBaseLayerReady" class="map-loading-shell">
+      <div class="map-loading-card">
+        <span class="map-loading-kicker">GeoLoom Map</span>
+        <strong>地图和空间图层加载中</strong>
+        <small>先把底图骨架顶上来，避免首屏白屏发呆。</small>
+      </div>
+    </div>
 
     <!-- POI 名称气泡 -->
     <div
@@ -161,7 +168,11 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { ElNotification } from 'element-plus';
+import { ElButton } from 'element-plus/es/components/button/index';
+import { ElDialog } from 'element-plus/es/components/dialog/index';
+import { ElNotification } from 'element-plus/es/components/notification/index';
+import { ElOption, ElSelect } from 'element-plus/es/components/select/index';
+import { ElSwitch } from 'element-plus/es/components/switch/index';
 import OlMap from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -171,11 +182,12 @@ import { Vector as VectorLayer } from 'ol/layer';
 import { Draw } from 'ol/interaction';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
+import CircleGeometry from 'ol/geom/Circle';
 import Polygon from 'ol/geom/Polygon';
 import Overlay from 'ol/Overlay';
 import { fromLonLat, toLonLat } from 'ol/proj';
+import { unByKey } from 'ol/Observable';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text as TextStyle } from 'ol/style';
-
 
 import { useRegions, REGION_COLORS, MAX_REGIONS } from '../composables/useRegions';
 import { nicheLabel } from '../utils/aiBoundaryMeta';
@@ -183,6 +195,8 @@ import { useProjection } from '../composables/map/useProjection';
 import { usePopupAnchor } from '../composables/map/usePopupAnchor';
 import { useDeckBridge } from '../composables/map/useDeckBridge';
 import { useEvidenceLayer } from '../composables/map/useEvidenceLayer';
+import { isPoiInteractionLayer } from '../utils/mapLayerIdentity';
+import { resolvePopupAnchorCoordinate } from '../utils/popupFeatureAnchor';
 
 /**
  *
@@ -212,6 +226,7 @@ const emit = defineEmits([
 const props = defineProps({
   poiFeatures: { type: Array, default: () => [] },
   hoveredFeatureId: { type: Object, default: null }, // 注释说明
+  userLocation: { type: Object, default: null },
 
   filterEnabled: { type: Boolean, default: false },
   heatmapEnabled: { type: Boolean, default: false },
@@ -226,6 +241,9 @@ const props = defineProps({
 const mapContainer = ref(null);
 // OpenLayers 相关说明
 const map = ref(null);
+const isBaseLayerReady = ref(false);
+let baseLayerStatusKeys = [];
+let baseLayerReadyTimeoutId = null;
 
 let drawInteraction = null;
 // 注释说明
@@ -403,6 +421,32 @@ const hoverLayer = new VectorLayer({
   }),
   zIndex: 200
 });
+hoverLayer.set('__poiInteraction', true);
+
+const highlightPreviewPointStyle = new Style({
+  image: new CircleStyle({
+    radius: 6,
+    fill: new Fill({ color: 'rgba(255, 76, 76, 0.92)' }),
+    stroke: new Stroke({ color: '#ffffff', width: 1.5 })
+  })
+});
+
+const highlightPreviewAnchorStyle = new Style({
+  image: new CircleStyle({
+    radius: 8.5,
+    fill: new Fill({ color: 'rgba(225, 59, 59, 0.96)' }),
+    stroke: new Stroke({ color: '#ffffff', width: 2.5 })
+  })
+});
+
+const highlightPreviewSource = new VectorSource();
+const highlightPreviewLayer = new VectorLayer({
+  ...VECTOR_LAYER_RUNTIME_OPTIONS,
+  source: highlightPreviewSource,
+  style: (feature) => feature.get('__isAnchor') ? highlightPreviewAnchorStyle : highlightPreviewPointStyle,
+  zIndex: 290
+});
+highlightPreviewLayer.set('__poiInteraction', true);
 
 // 4.
 const locateLayerSource = new VectorSource();
@@ -421,8 +465,86 @@ const locateLayer = new VectorLayer({
   zIndex: 300
 });
 
+const userLocationAccuracySource = new VectorSource();
+const userLocationAccuracyLayer = new VectorLayer({
+  ...VECTOR_LAYER_RUNTIME_OPTIONS,
+  source: userLocationAccuracySource,
+  style: new Style({
+    stroke: new Stroke({ color: 'rgba(56, 189, 248, 0.58)', width: 2 }),
+    fill: new Fill({ color: 'rgba(56, 189, 248, 0.12)' })
+  }),
+  zIndex: 250
+});
+
+const userLocationSource = new VectorSource();
+const userLocationLayer = new VectorLayer({
+  ...VECTOR_LAYER_RUNTIME_OPTIONS,
+  source: userLocationSource,
+  style: new Style({
+    image: new CircleStyle({
+      radius: 7,
+      fill: new Fill({ color: '#38bdf8' }),
+      stroke: new Stroke({ color: '#ffffff', width: 2.5 })
+    })
+  }),
+  zIndex: 320
+});
+
 const poiCoordSys = import.meta.env.VITE_POI_COORD_SYS || 'gcj02';
-const toMapLonLat = (lon, lat) => toGcj02IfNeeded(lon, lat, poiCoordSys);
+
+function normalizeCoordSys(coordSys, fallback = poiCoordSys) {
+  return String(coordSys || fallback || 'gcj02').toLowerCase();
+}
+
+function resolveFeatureCoordSys(feature, fallback = poiCoordSys) {
+  return normalizeCoordSys(
+    feature?.coordSys
+    || feature?.coord_sys
+    || feature?.properties?.coordSys
+    || feature?.properties?._coordSys,
+    fallback
+  );
+}
+
+function extractTargetLonLat(target) {
+  if (!target) return null;
+
+  if (Array.isArray(target) && target.length >= 2) {
+    const lon = Number(target[0]);
+    const lat = Number(target[1]);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      return [lon, lat];
+    }
+    return null;
+  }
+
+  if (Array.isArray(target?.geometry?.coordinates)) {
+    const lon = Number(target.geometry.coordinates[0]);
+    const lat = Number(target.geometry.coordinates[1]);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      return [lon, lat];
+    }
+    return null;
+  }
+
+  const lon = Number(target.lon ?? target.lng ?? target.longitude);
+  const lat = Number(target.lat ?? target.latitude);
+  if (Number.isFinite(lon) && Number.isFinite(lat)) {
+    return [lon, lat];
+  }
+
+  return null;
+}
+
+function toMapLonLat(lon, lat, coordSys = poiCoordSys) {
+  return toGcj02IfNeeded(lon, lat, normalizeCoordSys(coordSys));
+}
+
+function resolveDisplayLonLat(target, fallbackCoordSys = poiCoordSys) {
+  const lonLat = extractTargetLonLat(target);
+  if (!lonLat) return null;
+  return toMapLonLat(lonLat[0], lonLat[1], resolveFeatureCoordSys(target, fallbackCoordSys));
+}
 
 const {
   popupVisible,
@@ -480,6 +602,27 @@ function showAiSpatialEvidence(payload = {}, options = {}) {
   }
 }
 
+function syncUserLocationOverlay(location) {
+  userLocationSource.clear();
+  userLocationAccuracySource.clear();
+
+  const displayLonLat = resolveDisplayLonLat(location, 'gcj02');
+  if (!displayLonLat) return;
+
+  const center = fromLonLat(displayLonLat);
+  const accuracyM = Number(location?.accuracyM);
+
+  if (Number.isFinite(accuracyM) && accuracyM > 0) {
+    userLocationAccuracySource.addFeature(new Feature({
+      geometry: new CircleGeometry(center, accuracyM)
+    }));
+  }
+
+  userLocationSource.addFeature(new Feature({
+    geometry: new Point(center)
+  }));
+}
+
 let html2canvasModulePromise = null;
 let currentLocatedPoi = null;
 const {
@@ -504,19 +647,45 @@ let olPoiFeatures = [];
 // OpenLayers 相关说明
 let rawToOlMap = new Map();
 
+function clearBaseLayerStatusWatchers() {
+  if (baseLayerStatusKeys.length > 0) {
+    unByKey(baseLayerStatusKeys);
+    baseLayerStatusKeys = [];
+  }
+
+  if (baseLayerReadyTimeoutId !== null) {
+    window.clearTimeout(baseLayerReadyTimeoutId);
+    baseLayerReadyTimeoutId = null;
+  }
+}
+
+function markBaseLayerReady() {
+  if (isBaseLayerReady.value) return;
+  isBaseLayerReady.value = true;
+  clearBaseLayerStatusWatchers();
+}
+
 onMounted(() => {
   // 注释说明
   const amapKey = import.meta.env.VITE_AMAP_KEY || '2b42a2f72ef6751f2cd7c7bd24139e72';
   const gaodeUrl = `https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}&key=${amapKey}`;
 
+  isBaseLayerReady.value = false;
+  const baseSource = new XYZ({ url: gaodeUrl, crossOrigin: 'anonymous' });
   const baseLayer = new TileLayer({
-    source: new XYZ({ url: gaodeUrl, crossOrigin: 'anonymous' })
+    source: baseSource
   });
+
+  baseLayerStatusKeys = [
+    baseSource.on('tileloadend', markBaseLayerReady),
+    baseSource.on('tileloaderror', markBaseLayerReady)
+  ];
+  baseLayerReadyTimeoutId = window.setTimeout(markBaseLayerReady, 1800);
 
   // OpenLayers 相关说明
   map.value = new OlMap({
     target: mapContainer.value,
-    layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, aiEvidenceLayer, locateLayer],
+    layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, highlightPreviewLayer, aiEvidenceLayer, userLocationAccuracyLayer, locateLayer, userLocationLayer],
     controls: [],
     view: new View({
       center: fromLonLat([114.33, 30.58]),
@@ -535,6 +704,7 @@ onMounted(() => {
 
   // POI 相关说明
   rebuildPoiOlFeatures();
+  syncUserLocationOverlay(props.userLocation);
 
 
   nextTick(() => {
@@ -555,6 +725,10 @@ watch(() => props.hoveredFeatureId, (newVal) => {
     hoverLayerSource.addFeature(clone);
   }
 });
+
+watch(() => props.userLocation, (nextLocation) => {
+  syncUserLocationOverlay(nextLocation);
+}, { deep: false });
 
 /**
  *
@@ -596,6 +770,7 @@ const emitHover = debounce((feature) => {
 function onMapClick(evt) {
   const pixel = map.value.getEventPixel(evt.originalEvent);
   let foundRaw = null;
+  let foundFeature = null;
   let boundaryLabel = '';
   let boundaryMeta = null;
 
@@ -633,13 +808,17 @@ function onMapClick(evt) {
         const raw = feature.get('__raw');
         if (raw) {
           foundRaw = raw;
+          foundFeature = feature;
           return true;
         }
         return false;
       },
       {
-        hitTolerance: 10,
-        layerFilter: (layer) => layer === hoverLayer
+        hitTolerance: 14,
+        layerFilter: (layer) => isPoiInteractionLayer(layer, {
+          hoverLayer,
+          highlightPreviewLayer
+        })
       }
     );
   }
@@ -663,7 +842,14 @@ function onMapClick(evt) {
     emit('click-feature', foundRaw);
 
     // POI 相关说明
-    showPoiPopup(foundRaw, evt.coordinate);
+    const popupAnchorCoordinate = resolvePopupAnchorCoordinate({
+      feature: foundFeature,
+      raw: foundRaw,
+      fallbackCoordinate: evt.coordinate,
+      resolveDisplayLonLat,
+      projectToMapCoordinate: (lonLat) => fromLonLat(lonLat)
+    }) || evt.coordinate;
+    showPoiPopup(foundRaw, popupAnchorCoordinate);
   } else {
 
     hidePoiPopup();
@@ -687,8 +873,11 @@ function onPointerMove(evt) {
       return true;
     }
   }, {
-    hitTolerance: 8,
-    layerFilter: (layer) => layer === hoverLayer
+    hitTolerance: 10,
+    layerFilter: (layer) => isPoiInteractionLayer(layer, {
+      hoverLayer,
+      highlightPreviewLayer
+    })
   });
   
   // deck.gl 相关说明
@@ -712,6 +901,7 @@ onBeforeUnmount(() => {
   cleanupPopupAnchor();
   setBoundaryInteractionMode(false);
   destroyDeckBridge();
+  clearBaseLayerStatusWatchers();
   
   // OpenLayers 相关说明
   if (map.value) map.value.setTarget(null);
@@ -737,11 +927,10 @@ watch(() => props.poiFeatures, () => {
 function rebuildPoiOlFeatures() {
   olPoiFeatures = [];
   rawToOlMap.clear();
-  const poiCoordSys = import.meta.env.VITE_POI_COORD_SYS || 'gcj02';
   for (const f of (props.poiFeatures || [])) {
-    let [lon, lat] = f.geometry.coordinates;
-    // 注释说明
-    [lon, lat] = toGcj02IfNeeded(lon, lat, poiCoordSys);
+    const displayLonLat = resolveDisplayLonLat(f);
+    if (!displayLonLat) continue;
+    const [lon, lat] = displayLonLat;
     const feat = new Feature({
       geometry: new Point(fromLonLat([lon, lat])),
       __raw: f,
@@ -758,33 +947,7 @@ function rebuildPoiOlFeatures() {
 let hasLocatedOnce = false;
 
 function resolveFlyToLonLat(target) {
-  if (!target) return null;
-
-  if (Array.isArray(target) && target.length >= 2) {
-    const lon = Number(target[0]);
-    const lat = Number(target[1]);
-    if (Number.isFinite(lon) && Number.isFinite(lat)) {
-      return [lon, lat];
-    }
-    return null;
-  }
-
-  if (Array.isArray(target?.geometry?.coordinates)) {
-    const lon = Number(target.geometry.coordinates[0]);
-    const lat = Number(target.geometry.coordinates[1]);
-    if (Number.isFinite(lon) && Number.isFinite(lat)) {
-      return [lon, lat];
-    }
-    return null;
-  }
-
-  const lon = Number(target.lon ?? target.lng ?? target.longitude);
-  const lat = Number(target.lat ?? target.latitude);
-  if (Number.isFinite(lon) && Number.isFinite(lat)) {
-    return [lon, lat];
-  }
-
-  return null;
+  return extractTargetLonLat(target);
 }
 
 function flyTo(target, options = {}) {
@@ -797,7 +960,7 @@ function flyTo(target, options = {}) {
   if (!lonLat) return;
 
   let [lon, lat] = lonLat;
-  [lon, lat] = toGcj02IfNeeded(lon, lat, poiCoordSys);
+  [lon, lat] = toMapLonLat(lon, lat, resolveFeatureCoordSys(target));
   const center = fromLonLat([lon, lat]);
 
   const isPoiFeature = Array.isArray(target?.geometry?.coordinates);
@@ -1319,6 +1482,7 @@ function removeRegionFromMap(regionId) {
  *
  */
 function clearHighlights() {
+  highlightPreviewSource.clear();
   clearDeckData();
 }
 
@@ -1328,33 +1492,46 @@ function clearHighlights() {
  * @param {Object} options - 可选参数
  */
 function showHighlights(features, options = {}) {
-  // deck.gl 相关说明
   if (!features || !features.length) {
     clearHighlights();
     return;
   }
 
-  // deck.gl 相关说明
-  const deckData = features.map(raw => {
-    let [lon, lat] = raw.geometry.coordinates;
-    [lon, lat] = toGcj02IfNeeded(lon, lat, poiCoordSys);
-    return {
-      lon,
-      lat,
-      groupIndex: raw.properties._groupIndex || 0,
-      raw,
-    };
-  });
-  
+  highlightPreviewSource.clear();
 
-  highlightData.value = deckData;
-  heatmapData.value = deckData;
-  ensureDeckInitialized().then((instance) => {
-    if (!instance) return;
-    markDeckLayersDirty();
-    scheduleDeckSync({ forceLayerRefresh: true });
-  });
-  
+  const deckData = features
+    .map((raw) => {
+      const displayLonLat = resolveDisplayLonLat(raw);
+      if (!displayLonLat) return null;
+
+      const previewFeature = new Feature({
+        geometry: new Point(fromLonLat(displayLonLat))
+      });
+      previewFeature.set('__raw', raw);
+      previewFeature.set('__isAnchor', Boolean(raw?.properties?._isAnchor));
+      highlightPreviewSource.addFeature(previewFeature);
+
+      return {
+        lon: displayLonLat[0],
+        lat: displayLonLat[1],
+        groupIndex: raw.properties?._groupIndex || 0,
+        raw,
+      };
+    })
+    .filter(Boolean);
+
+  highlightData.value = [];
+  heatmapData.value = deckData.filter((item) => !item.raw?.properties?._isAnchor);
+
+  if (heatmapEnabled.value) {
+    ensureDeckInitialized().then((instance) => {
+      if (!instance) return;
+      markDeckLayersDirty();
+      scheduleDeckSync({ forceLayerRefresh: true });
+    });
+  }
+
+  map.value?.renderSync?.();
 
   if (options.fitView && map.value) {
 
@@ -1374,10 +1551,12 @@ function showHighlights(features, options = {}) {
         ...fromLonLat([maxLon, maxLat])
       ];
       
-      map.value.getView().fit(extent, {
-        padding: [50, 50, 50, 50],
-        duration: 800,
-        maxZoom: 16
+      window.requestAnimationFrame(() => {
+        map.value?.getView()?.fit(extent, {
+          padding: [40, 40, 40, 40],
+          duration: 420,
+          maxZoom: 16
+        });
       });
     }
   }
@@ -1645,7 +1824,71 @@ async function captureMapScreenshot() {
 .map-container {
   width: 100%;
   height: 100%;
-  background-color: #000;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(70, 164, 255, 0.18), transparent 32%),
+    linear-gradient(160deg, #0b1627, #10233b 55%, #123148);
+}
+
+.map-loading-shell {
+  position: absolute;
+  inset: 0;
+  z-index: 160;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(7, 17, 31, 0.14), rgba(7, 17, 31, 0.3)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(140, 177, 216, 0.05) 0,
+      rgba(140, 177, 216, 0.05) 1px,
+      transparent 1px,
+      transparent 34px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(140, 177, 216, 0.05) 0,
+      rgba(140, 177, 216, 0.05) 1px,
+      transparent 1px,
+      transparent 34px
+    );
+  transition: opacity 180ms ease;
+}
+
+.map-loading-card {
+  min-width: min(320px, 88%);
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(124, 173, 226, 0.28);
+  background: rgba(7, 19, 34, 0.72);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 16px 40px rgba(5, 12, 25, 0.24);
+  color: #eef6ff;
+}
+
+.map-loading-kicker {
+  width: fit-content;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(36, 144, 255, 0.16);
+  color: #a9dcff;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.map-loading-card strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.map-loading-card small {
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(221, 235, 249, 0.78);
 }
 
 .map-filter-control {

@@ -128,6 +128,7 @@
             <MapContainer ref="mapComponent" 
                           :poi-features="mapPoiFeatures" 
                           :hovered-feature-id="hoveredFeatureId"
+                          :user-location="userLocation"
                           :filter-enabled="filterEnabled"
                           :heatmap-enabled="heatmapEnabled"
                           :weight-enabled="weightEnabled"
@@ -167,7 +168,8 @@
             <div class="handle-bar"></div>
           </div>
           <div class="panel-content">
-            <TagCloud ref="tagCloudRef"
+            <TagCloud v-if="shouldMountTagCloud"
+                      ref="tagCloudRef"
                       :data="filteredTagData" 
                       :map="map" 
                       :algorithm="selectedAlgorithm" 
@@ -194,7 +196,12 @@
         :style="{ width: aiExpanded ? (100 - splitPercentage1) + '%' : '0px' }"
       >
         <div class="panel-content">
-      <AiChat ref="aiChatRef" 
+      <div v-if="aiExpanded && !shouldMountAiChat" class="map-loading-placeholder ai-panel-placeholder">
+        <div class="loading-spinner"></div>
+        <span>GeoAI 助手准备中...</span>
+      </div>
+      <AiChat v-if="shouldMountAiChat"
+                  ref="aiChatRef" 
                   :poi-features="selectedFeatures" 
                   :boundary-polygon="selectedPolygon"
                   :draw-mode="selectedDrawMode"
@@ -202,10 +209,13 @@
                   :circle-radius="circleRadiusMeters"
                   :map-bounds="mapBounds"
                   :map-zoom="mapZoom"
+                  :user-location="userLocation"
+                  :user-location-status="userLocationStatus"
                   :global-analysis-enabled="globalAnalysisEnabled"
                   :selected-categories="selectedCategoryPath"
                   :regions="regions"
                   @close="toggleAiPanel"
+                  @request-current-location="requestCurrentLocation"
                   @render-to-tagcloud="handleRenderAIResult"
                   @render-pois-to-map="handleRenderPoisToMap"
                   @ai-boundary="handleAiBoundary"
@@ -230,9 +240,11 @@
 </template>
 
 <script setup>
-import { ref, shallowRef, onMounted, nextTick, computed, watch, defineAsyncComponent, h } from 'vue';
+import { ref, shallowRef, onMounted, onUnmounted, nextTick, computed, watch, defineAsyncComponent, h } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElNotification } from 'element-plus';
+import { vLoading } from 'element-plus/es/components/loading/index';
+import { ElNotification } from 'element-plus/es/components/notification/index';
+import { fromLonLat, toLonLat } from 'ol/proj';
 import ControlPanel from './components/ControlPanel.vue';
 function createLoadingPlaceholder(label) {
   return {
@@ -256,9 +268,23 @@ const TagCloud = defineAsyncComponent({
   loadingComponent: createLoadingPlaceholder('标签云加载中...'),
   delay: 0
 });
-const AiChat = defineAsyncComponent(() => import('./components/AiChat.vue'));
-import { semanticSearch } from './utils/aiService';
+const AiChat = defineAsyncComponent({
+  loader: () => import('./components/AiChat.vue'),
+  loadingComponent: createLoadingPlaceholder('助手加载中...'),
+  delay: 0
+});
 import { normalizeAiEvidencePayload } from './utils/aiEvidencePayload';
+import { normalizeAiMapRenderPayload } from './utils/aiMapRenderPayload.js';
+import {
+  assessBrowserUserLocation,
+  createBrowserUserLocation,
+  resolveLocationReferenceCenter,
+  shouldRetryBrowserLocation
+} from './utils/userLocationContext.js';
+import {
+  buildCoarseLocationBrowserHint,
+  detectBrowserBrand
+} from './utils/geolocationDiagnostics.js';
 import { SPATIAL_API_BASE_URL } from './config';
 import { useRegions } from './composables/useRegions';
 
@@ -266,6 +292,16 @@ const router = useRouter();
 const runtimeMode = String(import.meta.env.VITE_BACKEND_VERSION || import.meta.env.MODE || '').toLowerCase();
 const runtimeVersionLabel = computed(() => runtimeMode === 'v4' ? 'v4' : 'v1.0');
 const runtimeVersionTag = computed(() => runtimeMode === 'v4' ? 'agent' : 'beta');
+const DEFAULT_LOCATION_REFERENCE_CENTER = Object.freeze({ lon: 114.33, lat: 30.58 });
+
+let semanticSearchLoader = null;
+
+async function getSemanticSearch() {
+  if (!semanticSearchLoader) {
+    semanticSearchLoader = import('./utils/aiService').then((module) => module.semanticSearch);
+  }
+  return semanticSearchLoader;
+}
 
 // 多选区管理
 const { regions, getRegionsContext } = useRegions();
@@ -305,12 +341,31 @@ const circleCenterGeo = ref(null); // 存储圆心经纬度（用于地理布局
 const circleRadiusMeters = ref(null); // Circle radius in meters for strict spatial clipping
 
 // AI 面板状态
-const aiExpanded = ref(true); // 默认展开：左侧地图 + 右侧 AI 面板
+const aiExpanded = ref(true); // 默认进入地图 + AI 的探索工作台
+const shouldMountAiChat = ref(false);
+const shouldMountTagCloud = ref(false); // 标签云改为按需挂载，避免首屏先把预算吃光
 const aiPanelPercent = ref(33.33); // AI 面板宽度百分比（默认 1/3）
 const splitPercentage1 = ref(65); // 默认展开比例：Map 65% / AI 35%
 const isDragging1 = ref(false);
 const hSplitPercent = ref(50); // 已不再使用但保留以防依赖错误
 const isTagDrawerExpanded = ref(false); // 移动端标签云抽屉展开状态
+let tagDataSyncToken = 0;
+
+// 浏览器当前位置状态
+const userLocation = ref(null);
+const userLocationStatus = ref('idle');
+let geolocationWatchId = null;
+const GEOLOCATION_OPTIONS = {
+  enableHighAccuracy: true,
+  timeout: 10000,
+  maximumAge: 0
+};
+const GEOLOCATION_REFINEMENT_TIMEOUT_MS = 22000;
+const GEOLOCATION_REFINEMENT_WATCH_OPTIONS = {
+  enableHighAccuracy: true,
+  timeout: 12000,
+  maximumAge: 0
+};
 
 // 地图面板样式（AI展开时为三列横向布局的第一列）
 const mapPanelStyle = computed(() => {
@@ -344,17 +399,27 @@ const tagPanelStyle = computed(() => {
 });
 
 // 切换 AI 面板
-function toggleAiPanel() {
-  aiExpanded.value = !aiExpanded.value;
+function toggleAiPanel(forceState = null) {
+  const nextExpanded = typeof forceState === 'boolean'
+    ? forceState
+    : !aiExpanded.value;
+
+  if (nextExpanded) {
+    shouldMountAiChat.value = true;
+  } else {
+    shouldMountTagCloud.value = true;
+  }
+
+  aiExpanded.value = nextExpanded;
   
   // 设置默认比例
-if (aiExpanded.value) {
-  // 展开时：默认 Map 占 65%, AI 占 35% -> 65:35 比例
-  splitPercentage1.value = 65;
-} else {
-  // 收起时：恢复 50/50 分布
-  splitPercentage1.value = 50;
-}
+  if (aiExpanded.value) {
+    // 展开时：默认 Map 占 65%, AI 占 35% -> 65:35 比例
+    splitPercentage1.value = 65;
+  } else {
+    // 收起时：恢复 50/50 分布
+    splitPercentage1.value = 50;
+  }
   
   // 切换后需要多次触发resize 确保布局正确
   nextTick(() => {
@@ -376,9 +441,372 @@ if (aiExpanded.value) {
   });
 }
 
+async function ensureAiChatReady() {
+  if (!shouldMountAiChat.value) {
+    shouldMountAiChat.value = true;
+    await nextTick();
+  }
+
+  const startedAt = Date.now();
+  while (!aiChatRef.value && Date.now() - startedAt < 1200) {
+    await new Promise((resolve) => window.setTimeout(resolve, 16));
+  }
+
+  return aiChatRef.value;
+}
+
+async function ensureTagCloudReady() {
+  if (!shouldMountTagCloud.value) {
+    shouldMountTagCloud.value = true;
+    await nextTick();
+  }
+
+  const startedAt = Date.now();
+  while (!tagCloudRef.value && Date.now() - startedAt < 1600) {
+    await new Promise((resolve) => window.setTimeout(resolve, 16));
+  }
+
+  return tagCloudRef.value;
+}
+
 // 叠加模式状态
 function goToNarrative() {
   router.push('/narrative');
+}
+
+function stopCurrentLocationWatch() {
+  if (geolocationWatchId === null) return;
+  if (typeof navigator !== 'undefined' && navigator.geolocation?.clearWatch) {
+    navigator.geolocation.clearWatch(geolocationWatchId);
+  }
+  geolocationWatchId = null;
+}
+
+function getCurrentMapDisplayCenter() {
+  const center = map.value?.getView?.()?.getCenter?.();
+  if (!center) return null;
+  const [lon, lat] = toLonLat(center);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  return { lon, lat };
+}
+
+function evaluateCurrentLocationCandidate(location) {
+  const referenceCenter = resolveLocationReferenceCenter({
+    mapCenter: getCurrentMapDisplayCenter(),
+    mapBounds: mapBounds.value,
+    fallbackCenter: DEFAULT_LOCATION_REFERENCE_CENTER
+  });
+  return assessBrowserUserLocation(location, {
+    referenceLon: referenceCenter?.lon ?? null,
+    referenceLat: referenceCenter?.lat ?? null
+  });
+}
+
+async function readGeolocationPermissionState() {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.permissions?.query) {
+      return 'unknown';
+    }
+    const result = await navigator.permissions.query({ name: 'geolocation' });
+    return String(result?.state || 'unknown');
+  } catch {
+    return 'unknown';
+  }
+}
+
+function buildCurrentLocationWarningMessage(review, diagnostics = {}) {
+  if (review.reason === 'far_from_reference') {
+    const distanceKm = Number.isFinite(review.distanceKm) ? Math.round(review.distanceKm) : null;
+    const accuracyM = Number.isFinite(review.accuracyM) ? Math.round(review.accuracyM) : null;
+    const distanceText = distanceKm !== null ? `与当前地图焦点相距约 ${distanceKm} 公里` : '与当前地图焦点相距较远';
+    const accuracyText = accuracyM !== null ? `，精度约 ${accuracyM} 米` : '';
+    return `浏览器这次返回的位置${distanceText}${accuracyText}，可信度偏低，暂不启用当前位置。请重试定位，或直接告诉我一个地点。`;
+  }
+
+  if (review.reason === 'accuracy_too_coarse') {
+    const accuracyM = Number.isFinite(review.accuracyM) ? Math.round(review.accuracyM) : null;
+    const accuracyText = accuracyM !== null ? `（当前精度约 ${accuracyM} 米）` : '';
+    const browserHint = buildCoarseLocationBrowserHint({
+      browserBrand: diagnostics.browserBrand,
+      accuracyM,
+      permissionState: diagnostics.permissionState
+    });
+    return `浏览器返回的位置精度过粗${accuracyText}，暂不启用当前位置。${browserHint} 请检查系统定位服务后重试，或直接告诉我一个地点。`;
+  }
+
+  return '浏览器返回的位置不够稳定，暂不启用当前位置。请重试定位，或直接告诉我一个地点。';
+}
+
+function buildCurrentLocationProgressMessage(review) {
+  const accuracyM = Number.isFinite(review?.accuracyM) ? Math.round(review.accuracyM) : null;
+  const accuracyText = accuracyM !== null ? `当前精度约 ${accuracyM} 米` : '浏览器先给了一个粗略网络位置';
+
+  if (review?.reason === 'far_from_reference') {
+    const distanceKm = Number.isFinite(review?.distanceKm) ? Math.round(review.distanceKm) : null;
+    const distanceText = distanceKm !== null ? `，与当前地图焦点相差约 ${distanceKm} 公里` : '';
+    return `${accuracyText}${distanceText}，我先继续等待更精确的设备定位结果。`;
+  }
+
+  return `${accuracyText}，我先继续等待更精确的设备定位结果。`;
+}
+
+function animateToUserLocation(location, options = {}) {
+  if (!map.value || !location) return;
+  const view = map.value.getView?.();
+  if (!view) return;
+
+  const zoomFloor = Number.isFinite(Number(options.zoomFloor))
+    ? Number(options.zoomFloor)
+    : 16;
+  const currentZoom = Number(view.getZoom?.()) || 14;
+
+  view.animate({
+    center: fromLonLat([location.lon, location.lat]),
+    zoom: Math.max(currentZoom, zoomFloor),
+    duration: 700
+  });
+}
+
+function applyCurrentLocation(nextLocation, options = {}) {
+  if (!nextLocation) return;
+  userLocation.value = nextLocation;
+  userLocationStatus.value = 'ready';
+
+  if (options.animate !== false) {
+    animateToUserLocation(nextLocation, options);
+  }
+}
+
+function startCurrentLocationWatch() {
+  if (geolocationWatchId !== null) return;
+  if (typeof navigator === 'undefined' || !navigator.geolocation?.watchPosition) return;
+
+  geolocationWatchId = navigator.geolocation.watchPosition(
+    (position) => {
+      const nextLocation = createBrowserUserLocation(position);
+      if (!nextLocation) return;
+      const review = evaluateCurrentLocationCandidate(nextLocation);
+      if (!review.reliable) return;
+      applyCurrentLocation(nextLocation, { animate: false });
+    },
+    (error) => {
+      if (Number(error?.code) === 1) {
+        userLocationStatus.value = userLocation.value ? 'ready' : 'denied';
+        stopCurrentLocationWatch();
+        return;
+      }
+
+      if (!userLocation.value) {
+        userLocationStatus.value = 'error';
+      }
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 5000
+    }
+  );
+}
+
+function requestCurrentLocation() {
+  if (typeof navigator === 'undefined' || !navigator.geolocation?.getCurrentPosition) {
+    userLocationStatus.value = 'unsupported';
+    ElNotification.warning({
+      title: '定位不可用',
+      message: '当前浏览环境不支持获取设备位置，请直接输入一个地点。',
+      offset: 80
+    });
+    return Promise.resolve(null);
+  }
+
+  stopCurrentLocationWatch();
+  userLocationStatus.value = 'locating';
+
+  return new Promise((resolve) => {
+    const attemptDiagnostics = {
+      browserBrand: detectBrowserBrand(typeof navigator !== 'undefined' ? navigator.userAgent : ''),
+      permissionState: 'unknown'
+    };
+    let settled = false;
+    let tempWatchId = null;
+    let refinementTimerId = null;
+    let waitingNoticeShown = false;
+    let latestRetryableReview = null;
+
+    void readGeolocationPermissionState().then((state) => {
+      attemptDiagnostics.permissionState = state;
+    });
+
+    const clearTemporaryWatch = () => {
+      if (tempWatchId !== null && typeof navigator !== 'undefined' && navigator.geolocation?.clearWatch) {
+        navigator.geolocation.clearWatch(tempWatchId);
+      }
+      tempWatchId = null;
+
+      if (refinementTimerId !== null) {
+        window.clearTimeout(refinementTimerId);
+        refinementTimerId = null;
+      }
+    };
+
+    const finish = (location = null) => {
+      if (settled) return;
+      settled = true;
+      clearTemporaryWatch();
+      resolve(location);
+    };
+
+    const acceptLocation = (nextLocation, { animate = true } = {}) => {
+      applyCurrentLocation(nextLocation, { animate, zoomFloor: 16 });
+      startCurrentLocationWatch();
+      ElNotification.success({
+        title: '当前位置已启用',
+        message: '后续“我附近 / 离我最近 / 从我这里出发”都会以你的设备位置为锚点。',
+        offset: 80
+      });
+      finish(nextLocation);
+    };
+
+    const rejectLocation = (review = null) => {
+      userLocationStatus.value = userLocation.value ? 'ready' : 'error';
+      if (review && shouldRetryBrowserLocation(review)) {
+        startCurrentLocationWatch();
+      }
+      ElNotification.warning({
+        title: '定位可信度不足',
+        message: review
+          ? buildCurrentLocationWarningMessage(review, attemptDiagnostics)
+          : '这次只拿到了粗略网络位置，还没等到更精确的设备定位。你可以再试一次，或者直接告诉我一个地点。',
+        offset: 80,
+        duration: 4200
+      });
+      finish(null);
+    };
+
+    const handleLocationCandidate = (nextLocation, { animateOnAccept = true } = {}) => {
+      if (!nextLocation) {
+        userLocationStatus.value = userLocation.value ? 'ready' : 'error';
+        ElNotification.error({
+          title: '定位失败',
+          message: '浏览器返回了位置数据，但前端没有成功解析坐标。',
+          offset: 80
+        });
+        finish(null);
+        return true;
+      }
+
+      const review = evaluateCurrentLocationCandidate(nextLocation);
+      if (review.reliable) {
+        acceptLocation(nextLocation, { animate: animateOnAccept });
+        return true;
+      }
+
+      if (shouldRetryBrowserLocation(review)) {
+        latestRetryableReview = review;
+        if (!waitingNoticeShown) {
+          waitingNoticeShown = true;
+          ElNotification.info({
+            title: '正在细化定位',
+            message: buildCurrentLocationProgressMessage(review),
+            offset: 80,
+            duration: 2600
+          });
+        }
+        return false;
+      }
+
+      rejectLocation(review);
+      return true;
+    };
+
+    if (navigator.geolocation?.watchPosition) {
+      tempWatchId = navigator.geolocation.watchPosition(
+        (position) => {
+          if (settled) return;
+          handleLocationCandidate(createBrowserUserLocation(position), { animateOnAccept: true });
+        },
+        (error) => {
+          if (settled) return;
+
+          if (Number(error?.code) === 1) {
+            userLocationStatus.value = userLocation.value ? 'ready' : 'denied';
+            ElNotification.warning({
+              title: '未授权定位',
+              message: '请授权当前位置，或者直接告诉我一个地点。',
+              offset: 80
+            });
+            finish(null);
+          }
+        },
+        GEOLOCATION_REFINEMENT_WATCH_OPTIONS
+      );
+    }
+
+    refinementTimerId = window.setTimeout(() => {
+      if (settled) return;
+      rejectLocation(latestRetryableReview);
+    }, GEOLOCATION_REFINEMENT_TIMEOUT_MS);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (settled) return;
+        handleLocationCandidate(createBrowserUserLocation(position), { animateOnAccept: true });
+      },
+      (error) => {
+        if (settled) return;
+
+        if (Number(error?.code) === 1) {
+          userLocationStatus.value = 'denied';
+          ElNotification.warning({
+            title: '未授权定位',
+            message: '请授权当前位置，或者直接告诉我一个地点。',
+            offset: 80
+          });
+          finish(null);
+        } else if (Number(error?.code) === 3 && tempWatchId === null) {
+          userLocationStatus.value = userLocation.value ? 'ready' : 'error';
+          ElNotification.warning({
+            title: '定位超时',
+            message: '这次没等到定位结果，可以再试一次。',
+            offset: 80
+          });
+          finish(null);
+        } else if (Number(error?.code) !== 3 && tempWatchId === null) {
+          userLocationStatus.value = userLocation.value ? 'ready' : 'error';
+          ElNotification.error({
+            title: '定位失败',
+            message: error?.message || '浏览器暂时拿不到当前位置。',
+            offset: 80
+          });
+          finish(null);
+        } else {
+          latestRetryableReview = latestRetryableReview || null;
+        }
+      },
+      GEOLOCATION_OPTIONS
+    );
+  });
+}
+
+function scheduleTagDataSync(features, { defer = false } = {}) {
+  const nextFeatures = Array.isArray(features) ? features : [];
+  const token = ++tagDataSyncToken;
+  const commit = () => {
+    if (token !== tagDataSyncToken) return;
+    tagData.value = nextFeatures;
+  };
+
+  if (!defer) {
+    commit();
+    return;
+  }
+
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(() => commit(), { timeout: 180 });
+    return;
+  }
+
+  window.setTimeout(() => commit(), 64);
 }
 
 function normalizeCategoryPaths(paths) {
@@ -1262,6 +1690,21 @@ onMounted(() => {
 
   // 初始化标签云为空数据；用户需要显式加载数据
   tagData.value = [];
+
+  const deferMount = window.requestIdleCallback
+    ? (callback) => window.requestIdleCallback(callback, { timeout: 220 })
+    : (callback) => window.setTimeout(callback, 48);
+
+  deferMount(() => {
+    shouldMountAiChat.value = true;
+  });
+});
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize);
+  window.removeEventListener('mousemove', onDrag);
+  window.removeEventListener('mouseup', stopDrag);
+  stopCurrentLocationWatch();
 });
 
 // 开始拖- 地图/标签云分隔条
@@ -1450,7 +1893,8 @@ async function handleWeightChange(payload) {
   
   // 如果需要加载栅
   if (payload.needLoad && payload.enabled) {
-    if (!tagCloudRef.value) {
+    const tagCloud = await ensureTagCloudReady();
+    if (!tagCloud) {
       ElNotification.error({ title: '错误', message: '标签云组件未就绪', offset: 80 });
       return;
     }
@@ -1458,7 +1902,7 @@ async function handleWeightChange(payload) {
     ElNotification.info({ title: '加载中', message: '正在加载人口密度栅格数据...', offset: 80 });
     
     try {
-      const success = await tagCloudRef.value.loadRaster();
+      const success = await tagCloud.loadRaster();
       if (success) {
         ElNotification.success({ title: '成功', message: '人口密度栅格加载成功！权重渲染已启用', offset: 80 });
       } else {
@@ -1522,6 +1966,7 @@ const handleSearch = async (keyword) => {
     };
     
     // 调用智能语义搜索（自动判断走快速路径还RAG
+    const semanticSearch = await getSemanticSearch();
     const result = await semanticSearch(keyword.trim(), [], { 
       spatialContext,
       colorIndex: 0 
@@ -1533,19 +1978,16 @@ const handleSearch = async (keyword) => {
       
       // 1. 灞曞紑 AI 闈㈡澘
       if (!aiExpanded.value) {
-        toggleAiPanel();
+        toggleAiPanel(true);
       }
       
-      // 2. 等待面板展开动画完成
-      await nextTick();
-      setTimeout(async () => {
-        // 3. 自动发送消息到 AI 助手
-        if (aiChatRef.value?.autoSendMessage) {
-          await aiChatRef.value.autoSendMessage(keyword.trim());
-        }
-      }, 300);
+      // 2. 首次打开时先确保异步组件真正挂载完成
+      const aiChat = await ensureAiChatReady();
+      if (aiChat?.autoSendMessage) {
+        await aiChat.autoSendMessage(keyword.trim());
+      }
       
-      // 4. 通知子组件正在处理中
+      // 3. 通知子组件正在处理中
       if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
       return;
     }
@@ -1592,80 +2034,35 @@ const handleClearSearch = () => {
  * @param {Array} pois - 从标签云传来的POI 数组
  */
 function handleRenderPoisToMap(payload) {
-  const rawPois = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.pois)
-      ? payload.pois
-      : [];
-  const anchorFeature = payload && !Array.isArray(payload) ? payload.anchorFeature || null : null;
+  const { features, anchorFeature } = normalizeAiMapRenderPayload(payload, {
+    fallbackCoordSys: poiCoordSys
+  });
 
-  if (!rawPois.length) {
+  if (!features.length && !anchorFeature) {
     ElNotification.warning({ title: '提示', message: '没有可渲染的 POI 数据', offset: 80 });
     return;
   }
-  
-  console.log('[App] AI 标签云渲染 POI 到地图', rawPois.length, anchorFeature ? '(含检索锚点)' : '');
-  
-  // 个 POI 数据转换为GeoJSON Feature 格式（如果需要）
-  const features = rawPois.map(poi => {
-    // 如果已经是GeoJSON Feature 格式
-    if (poi.type === 'Feature' && poi.geometry) {
-      return poi;
-    }
-    
-    // 如果是后端返回的简化格式，转换为GeoJSON
-    const lon = poi.lon || poi.longitude || poi.geometry?.coordinates?.[0];
-    const lat = poi.lat || poi.latitude || poi.geometry?.coordinates?.[1];
-    
-    if (!lon || !lat) {
-      console.warn('[App] POI 缂哄皯鍧愭爣:', poi.name);
-      return null;
-    }
-    
-    return {
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: [lon, lat]
-      },
-      properties: {
-        名称: poi.name || poi.名称 || '未知',
-        澶х被: poi.type || poi.澶х被 || '',
-        灏忕被: poi.灏忕被 || poi.category || '',
-        // 保留原始属
-        ...poi.properties,
-        // 标记来源
-        _source: 'ai_tagcloud'
-      }
-    };
-  }).filter(Boolean);
-  
-  if (features.length === 0) {
-    ElNotification.warning({ title: '提示', message: 'POI 数据格式无效', offset: 80 });
-    return;
-  }
-  
-  // 更新标签云数据
-  tagData.value = features;
+
+  console.log('[App] AI 标签云渲染 POI 到地图', features.length, anchorFeature ? '(含检索锚点)' : '');
 
   const mapFeatures = anchorFeature ? [...features, anchorFeature] : features;
-  
-  // 渲染到地图并自适应视野
+
   if (mapComponent.value) {
     mapComponent.value.showHighlights(mapFeatures, { fitView: true });
   }
-  
-  // 通知子组件有搜索结果
+
+  scheduleTagDataSync(features, { defer: aiExpanded.value });
+
   if (controlPanelRefMap.value?.setSearchResult) {
     controlPanelRefMap.value.setSearchResult(true);
   }
-  
-  ElNotification.success({ 
-    title: '渲染成功', 
+
+  ElNotification.success({
+    title: '渲染成功',
     message: anchorFeature
       ? `已将 ${features.length} 个 POI 渲染到地图，并带上检索锚点`
-      : `已将 ${features.length} 个 POI 渲染到地图`, 
-    offset: 80 
+      : `已将 ${features.length} 个 POI 渲染到地图`,
+    offset: 80
   });
 }
 

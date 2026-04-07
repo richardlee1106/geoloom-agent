@@ -49,11 +49,11 @@ import { ref, onMounted, watch, computed } from 'vue';
 import * as d3 from 'd3';
 import BasicWorker from '../workers/basic.worker.js?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
-import GeoWorker from '../workers/geo.worker.js?worker';
 import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
-import { ElNotification } from 'element-plus';
+import { ElNotification } from 'element-plus/es/components/notification/index';
 import { rasterExtractor } from '../utils/RasterExtractor.js';
+import { toDisplayLonLat } from '../utils/userLocationContext.js';
 
 // 定义组件事件
 // hover-feature: 鼠标悬停在标签时通知地图对应 POI
@@ -107,6 +107,17 @@ const legendItems = ref([]);
 
 // 是否显示图例
 const showWeightLegend = computed(() => props.weightEnabled && classBreaks.value.length > 0);
+const poiCoordSys = (import.meta.env.VITE_POI_COORD_SYS || 'gcj02').toLowerCase();
+
+function resolveFeatureCoordSys(feature, fallback = poiCoordSys) {
+  return String(
+    feature?.coordSys
+    || feature?.coord_sys
+    || feature?.properties?.coordSys
+    || feature?.properties?._coordSys
+    || fallback
+  ).trim().toLowerCase() || fallback
+}
 
 /**
  * Jenks 自然断点分类算法
@@ -500,10 +511,12 @@ const runLayout = (algorithm) => {
     const name = feature?.properties?.['名称'] ?? feature?.properties?.name ?? feature?.properties?.Name ?? '';
     
     // 提取地理坐标用于 Geo 布局
-    let lon, lat;
+    let rawLon, rawLat;
+    let displayLon, displayLat;
     if (feature.geometry && feature.geometry.coordinates) {
       // 假设坐标是 [lon, lat] (GeoJSON 标准)
-      [lon, lat] = feature.geometry.coordinates;
+      [rawLon, rawLat] = feature.geometry.coordinates;
+      [displayLon, displayLat] = toDisplayLonLat(rawLon, rawLat, resolveFeatureCoordSys(feature));
     }
 
     // 权重：优先使用自带权重，其次使用提取权重
@@ -511,16 +524,16 @@ const runLayout = (algorithm) => {
     
     // 如果启用了权重且栅格已加载，从栅格中提取权重
     if (props.weightEnabled && rasterLoaded.value && rasterExtractor.loaded) {
-      if (lon !== undefined && lat !== undefined) {
-        weight = rasterExtractor.extractValue(lon, lat);
+      if (rawLon !== undefined && rawLat !== undefined) {
+        weight = rasterExtractor.extractValue(rawLon, rawLat);
       }
     }
 
     // 生成唯一坐标键
-    const coordKey = makeCoordKey(lon, lat);
+    const coordKey = makeCoordKey(rawLon, rawLat);
     
     // 建立映射表：coordKey -> 原始 feature
-    if (coordKey) {
+    if (Number.isFinite(rawLon) && Number.isFinite(rawLat)) {
       featureMap.set(coordKey, feature);
     }
 
@@ -534,7 +547,8 @@ const runLayout = (algorithm) => {
     return {
       name: displayName, // 传递完整显示名称给 worker
       weight, // 权重值用于颜色和排序
-      lon, lat, // 传递坐标
+      lon: displayLon, lat: displayLat, // 用地图显示坐标参与空间布局，避免与地图视图错位
+      rawLon, rawLat,
       coordKey, // 唯一坐标键
       x: width / 2, // 初始位置
       y: height / 2,
@@ -795,19 +809,15 @@ const resetZoom = () => {
 const centerOnFeature = (feature) => {
   if (!feature || !svgRef || !zoomBehavior) return;
 
-  // 使用坐标快速查找（O(n) 但不遍历 DOM）
   const targetCoords = feature.geometry?.coordinates;
   if (!targetCoords) return;
+  const targetCoordKey = makeCoordKey(targetCoords[0], targetCoords[1]);
   
   let targetD = null;
   for (const tag of cachedLayoutTags) {
-    if (tag.lon && tag.lat) {
-      const dx = Math.abs(tag.lon - targetCoords[0]);
-      const dy = Math.abs(tag.lat - targetCoords[1]);
-      if (dx < 0.000001 && dy < 0.000001) {
-        targetD = tag;
-        break;
-      }
+    if (tag.coordKey === targetCoordKey) {
+      targetD = tag;
+      break;
     }
   }
   
