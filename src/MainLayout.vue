@@ -280,7 +280,7 @@ import {
   createBrowserUserLocation,
   resolveLocationReferenceCenter,
   shouldRetryBrowserLocation
-} from './utils/userLocationContext.js';
+} from './utils/userLocationContext';
 import {
   buildCoarseLocationBrowserHint,
   detectBrowserBrand

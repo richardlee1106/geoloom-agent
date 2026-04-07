@@ -53,7 +53,7 @@ import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
 import { ElNotification } from 'element-plus/es/components/notification/index';
 import { rasterExtractor } from '../utils/RasterExtractor.js';
-import { toDisplayLonLat } from '../utils/userLocationContext.js';
+import { toDisplayLonLat } from '../utils/userLocationContext';
 
 // 定义组件事件
 // hover-feature: 鼠标悬停在标签时通知地图对应 POI

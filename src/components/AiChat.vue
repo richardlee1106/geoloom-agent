@@ -417,7 +417,7 @@ import {
 import {
   getLocationActionLabel,
   getUserLocationSummary
-} from '../utils/userLocationContext.js';
+} from '../utils/userLocationContext';
 
 const props = defineProps({
   // 当前选中的 POI 数据

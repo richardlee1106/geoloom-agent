@@ -8,7 +8,7 @@ import {
   shouldRetryBrowserLocation,
   getUserLocationSummary,
   toDisplayLonLat
-} from '../userLocationContext.js'
+} from '../userLocationContext'
 
 describe('userLocationContext', () => {
   it('projects browser WGS84 coordinates into display coordinates', () => {
@@ -134,6 +134,20 @@ describe('userLocationContext', () => {
       detail: '先授权当前位置，或直接说一个地点'
     })
     expect(getLocationActionLabel('denied')).toBe('重新授权')
+  })
+
+  it('normalizes user location status text before deriving summary and action labels', () => {
+    const summary = getUserLocationSummary({
+      userLocation: { accuracyM: 19.6 },
+      userLocationStatus: ' READY '
+    })
+
+    expect(summary).toEqual({
+      tone: 'active',
+      label: '当前位置已启用',
+      detail: '精度约 20 米'
+    })
+    expect(getLocationActionLabel(' Denied ')).toBe('重新授权')
   })
 
   it('treats coarse browser locations as retryable so we can wait for a better fix', () => {

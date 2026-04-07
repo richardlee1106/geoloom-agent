@@ -3,16 +3,77 @@ import { useProjection } from '../composables/map/useProjection'
 const { toGcj02IfNeeded } = useProjection()
 const EARTH_RADIUS_KM = 6371
 
-function toFiniteNumber(value) {
+type ReferenceCenter = {
+  lon: number
+  lat: number
+}
+
+type BrowserUserLocation = {
+  lon: number
+  lat: number
+  rawLon: number
+  rawLat: number
+  coordSys: 'gcj02'
+  rawCoordSys: 'wgs84'
+  accuracyM: number | null
+  source: 'browser_geolocation'
+  capturedAt: string
+}
+
+type BrowserUserLocationReview = {
+  reliable: boolean
+  reason: 'invalid_coordinates' | 'accuracy_too_coarse' | 'far_from_reference' | 'ok'
+  accuracyM: number | null
+  distanceKm: number | null
+}
+
+type UserLocationSummary = {
+  tone: 'active' | 'accent' | 'warning' | 'neutral'
+  label: string
+  detail: string
+}
+
+type UserLocationStatus = 'idle' | 'ready' | 'locating' | 'denied' | 'unsupported' | 'error'
+
+interface PositionLike {
+  coords?: {
+    longitude?: unknown
+    latitude?: unknown
+    accuracy?: unknown
+  } | null
+  timestamp?: string | number | Date | null
+}
+
+interface UserLocationLike {
+  lon?: unknown
+  lat?: unknown
+  accuracyM?: unknown
+}
+
+interface ReviewLike {
+  reliable?: boolean
+  reason?: unknown
+  accuracyM?: unknown
+}
+
+interface ReferenceCandidate {
+  lon?: unknown
+  lng?: unknown
+  longitude?: unknown
+  lat?: unknown
+  latitude?: unknown
+}
+
+function toFiniteNumber(value: unknown): number | null {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : null
 }
 
-function toRadians(value) {
+function toRadians(value: number): number {
   return value * Math.PI / 180
 }
 
-function normalizeReferenceCenter(candidate) {
+function normalizeReferenceCenter(candidate: ReferenceCandidate | null | undefined): ReferenceCenter | null {
   const lon = toFiniteNumber(candidate?.lon ?? candidate?.lng ?? candidate?.longitude)
   const lat = toFiniteNumber(candidate?.lat ?? candidate?.latitude)
   if (lon === null || lat === null) {
@@ -21,7 +82,11 @@ function normalizeReferenceCenter(candidate) {
   return { lon, lat }
 }
 
-function haversineDistanceKm(fromLon, fromLat, toLon, toLat) {
+function normalizeUserLocationStatus(status: unknown): UserLocationStatus | string {
+  return String(status ?? 'idle').trim().toLowerCase()
+}
+
+function haversineDistanceKm(fromLon: number, fromLat: number, toLon: number, toLat: number): number {
   const dLat = toRadians(toLat - fromLat)
   const dLon = toRadians(toLon - fromLon)
   const startLat = toRadians(fromLat)
@@ -32,7 +97,11 @@ function haversineDistanceKm(fromLon, fromLat, toLon, toLat) {
   return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-export function toDisplayLonLat(lon, lat, sourceCoordSys = 'gcj02') {
+export function toDisplayLonLat(
+  lon: unknown,
+  lat: unknown,
+  sourceCoordSys: unknown = 'gcj02'
+): [number | null, number | null] {
   const numericLon = toFiniteNumber(lon)
   const numericLat = toFiniteNumber(lat)
   if (numericLon === null || numericLat === null) {
@@ -41,7 +110,7 @@ export function toDisplayLonLat(lon, lat, sourceCoordSys = 'gcj02') {
   return toGcj02IfNeeded(numericLon, numericLat, sourceCoordSys)
 }
 
-export function createBrowserUserLocation(position) {
+export function createBrowserUserLocation(position: PositionLike | null | undefined): BrowserUserLocation | null {
   const coords = position?.coords || {}
   const rawLon = toFiniteNumber(coords.longitude)
   const rawLat = toFiniteNumber(coords.latitude)
@@ -67,20 +136,26 @@ export function createBrowserUserLocation(position) {
     rawCoordSys: 'wgs84',
     accuracyM,
     source: 'browser_geolocation',
-    capturedAt,
+    capturedAt
   }
 }
 
 export function assessBrowserUserLocation(
-  userLocation,
+  userLocation: UserLocationLike | null | undefined,
   {
     referenceLon = null,
     referenceLat = null,
     maxReasonableAccuracyM = 1500,
     maxReferenceDistanceKm = 80,
-    hardRejectAccuracyM = 5000,
+    hardRejectAccuracyM = 5000
+  }: {
+    referenceLon?: unknown
+    referenceLat?: unknown
+    maxReasonableAccuracyM?: number
+    maxReferenceDistanceKm?: number
+    hardRejectAccuracyM?: number
   } = {}
-) {
+): BrowserUserLocationReview {
   const lon = toFiniteNumber(userLocation?.lon)
   const lat = toFiniteNumber(userLocation?.lat)
   const accuracyM = toFiniteNumber(userLocation?.accuracyM)
@@ -90,13 +165,15 @@ export function assessBrowserUserLocation(
       reliable: false,
       reason: 'invalid_coordinates',
       accuracyM: null,
-      distanceKm: null,
+      distanceKm: null
     }
   }
 
-  const hasReference = toFiniteNumber(referenceLon) !== null && toFiniteNumber(referenceLat) !== null
+  const normalizedReferenceLon = toFiniteNumber(referenceLon)
+  const normalizedReferenceLat = toFiniteNumber(referenceLat)
+  const hasReference = normalizedReferenceLon !== null && normalizedReferenceLat !== null
   const distanceKm = hasReference
-    ? haversineDistanceKm(lon, lat, Number(referenceLon), Number(referenceLat))
+    ? haversineDistanceKm(lon, lat, normalizedReferenceLon, normalizedReferenceLat)
     : null
 
   if (accuracyM !== null && accuracyM > hardRejectAccuracyM) {
@@ -104,7 +181,7 @@ export function assessBrowserUserLocation(
       reliable: false,
       reason: 'accuracy_too_coarse',
       accuracyM,
-      distanceKm,
+      distanceKm
     }
   }
 
@@ -113,7 +190,7 @@ export function assessBrowserUserLocation(
       reliable: false,
       reason: 'far_from_reference',
       accuracyM,
-      distanceKm,
+      distanceKm
     }
   }
 
@@ -122,7 +199,7 @@ export function assessBrowserUserLocation(
       reliable: false,
       reason: 'accuracy_too_coarse',
       accuracyM,
-      distanceKm,
+      distanceKm
     }
   }
 
@@ -130,16 +207,16 @@ export function assessBrowserUserLocation(
     reliable: true,
     reason: 'ok',
     accuracyM,
-    distanceKm,
+    distanceKm
   }
 }
 
-export function shouldRetryBrowserLocation(review) {
+export function shouldRetryBrowserLocation(review: ReviewLike | null | undefined): boolean {
   if (!review || review.reliable) {
     return false
   }
 
-  const reason = String(review.reason || '')
+  const reason = String(review.reason || '').trim().toLowerCase()
   const accuracyM = toFiniteNumber(review.accuracyM)
 
   if (reason === 'accuracy_too_coarse') {
@@ -156,8 +233,12 @@ export function shouldRetryBrowserLocation(review) {
 export function resolveLocationReferenceCenter({
   mapCenter = null,
   mapBounds = null,
-  fallbackCenter = null,
-} = {}) {
+  fallbackCenter = null
+}: {
+  mapCenter?: ReferenceCandidate | null
+  mapBounds?: unknown[] | null
+  fallbackCenter?: ReferenceCandidate | null
+} = {}): ReferenceCenter | null {
   const normalizedMapCenter = normalizeReferenceCenter(mapCenter)
   if (normalizedMapCenter) {
     return normalizedMapCenter
@@ -171,7 +252,7 @@ export function resolveLocationReferenceCenter({
     if (minLon !== null && minLat !== null && maxLon !== null && maxLat !== null) {
       return {
         lon: (minLon + maxLon) / 2,
-        lat: (minLat + maxLat) / 2,
+        lat: (minLat + maxLat) / 2
       }
     }
   }
@@ -181,9 +262,12 @@ export function resolveLocationReferenceCenter({
 
 export function getUserLocationSummary({
   userLocation = null,
-  userLocationStatus = 'idle',
-} = {}) {
-  switch (String(userLocationStatus || 'idle')) {
+  userLocationStatus = 'idle'
+}: {
+  userLocation?: UserLocationLike | null
+  userLocationStatus?: unknown
+} = {}): UserLocationSummary {
+  switch (normalizeUserLocationStatus(userLocationStatus)) {
     case 'ready': {
       const accuracyM = toFiniteNumber(userLocation?.accuracyM)
       const accuracyText = accuracyM !== null
@@ -228,8 +312,8 @@ export function getUserLocationSummary({
   }
 }
 
-export function getLocationActionLabel(userLocationStatus = 'idle') {
-  switch (String(userLocationStatus || 'idle')) {
+export function getLocationActionLabel(userLocationStatus: unknown = 'idle'): string {
+  switch (normalizeUserLocationStatus(userLocationStatus)) {
     case 'ready':
       return '更新位置'
     case 'denied':
