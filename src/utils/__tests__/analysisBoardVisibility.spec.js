@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isGeneralQaMessage, shouldShowAnalysisBoard } from '../analysisBoardVisibility.js'
+import { isGeneralQaMessage, shouldShowAnalysisBoard } from '../analysisBoardVisibility'
 
 describe('analysisBoardVisibility', () => {
   it('recognizes general qa messages from query type or intent mode', () => {

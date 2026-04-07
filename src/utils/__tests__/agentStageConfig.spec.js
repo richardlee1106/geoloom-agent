@@ -4,7 +4,7 @@ import {
   getAgentStageSteps,
   getRunStatusCopy,
   normalizeAgentStage
-} from '../agentStageConfig.js'
+} from '../agentStageConfig'
 
 describe('agentStageConfig', () => {
   it('uses the real v4 pipeline instead of legacy v1 labels', () => {

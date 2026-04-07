@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolvePopupAnchorCoordinate } from '../popupFeatureAnchor.js'
+import { resolvePopupAnchorCoordinate } from '../popupFeatureAnchor'
 
 describe('popupFeatureAnchor', () => {
   it('prefers the rendered feature geometry so the tip stays pinned to the red point', () => {
@@ -49,6 +49,19 @@ describe('popupFeatureAnchor', () => {
       fallbackCoordinate: [118, 32],
       resolveDisplayLonLat: () => null,
       projectToMapCoordinate: (lonLat) => lonLat
+    })).toEqual([118, 32])
+  })
+
+  it('falls back to click coordinates when projected raw coordinates are invalid', () => {
+    expect(resolvePopupAnchorCoordinate({
+      feature: null,
+      raw: {
+        lon: 114.3292,
+        lat: 30.5907
+      },
+      fallbackCoordinate: [118, 32],
+      resolveDisplayLonLat: () => [114.3292, 30.5907],
+      projectToMapCoordinate: () => null
     })).toEqual([118, 32])
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAnalysisSignals } from '../analysisSignals.js';
+import { resolveAnalysisSignals } from '../analysisSignals';
 
 describe('resolveAnalysisSignals', () => {
   it('extracts cache transparency and quality risk flags from stats', () => {
@@ -25,4 +25,3 @@ describe('resolveAnalysisSignals', () => {
     expect(signals.riskWarnings).toHaveLength(0);
   });
 });
-

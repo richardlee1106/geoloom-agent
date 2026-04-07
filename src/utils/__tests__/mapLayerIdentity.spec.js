@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isPoiInteractionLayer } from '../mapLayerIdentity.js'
+import { isPoiInteractionLayer } from '../mapLayerIdentity'
 
 describe('mapLayerIdentity', () => {
   it('accepts the exact interaction layer instance', () => {

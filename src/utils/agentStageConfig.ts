@@ -1,4 +1,17 @@
-const V4_STAGE_STEPS = [
+export interface AgentStageStep {
+  key: string
+  label: string
+  hint: string
+  helper: string
+}
+
+export interface RunStatusCopy {
+  label: string
+  detail: string
+  tone: 'done' | 'running' | 'idle'
+}
+
+const V4_STAGE_STEPS: AgentStageStep[] = [
   {
     key: 'intent',
     label: '识别问题',
@@ -37,7 +50,7 @@ const V4_STAGE_STEPS = [
   }
 ]
 
-const LEGACY_STAGE_ALIASES = new Map([
+const LEGACY_STAGE_ALIASES = new Map<string, string>([
   ['intent', 'intent'],
   ['planner', 'intent'],
   ['memory', 'memory'],
@@ -50,14 +63,14 @@ const LEGACY_STAGE_ALIASES = new Map([
   ['answer', 'answer']
 ])
 
-export function getAgentStageSteps({ backendVersion = 'v4' } = {}) {
+export function getAgentStageSteps({ backendVersion = 'v4' }: { backendVersion?: unknown } = {}): AgentStageStep[] {
   if (String(backendVersion || '').toLowerCase() === 'v4') {
     return V4_STAGE_STEPS.slice()
   }
   return V4_STAGE_STEPS.slice()
 }
 
-export function normalizeAgentStage(stageName = '') {
+export function normalizeAgentStage(stageName: unknown = ''): string {
   const normalized = String(stageName || '').trim().toLowerCase()
   if (!normalized) return ''
   return LEGACY_STAGE_ALIASES.get(normalized) || normalized
@@ -68,7 +81,12 @@ export function getRunStatusCopy({
   isThinking = false,
   activeStageKey = '',
   stageSteps = V4_STAGE_STEPS
-} = {}) {
+}: {
+  pipelineCompleted?: boolean
+  isThinking?: boolean
+  activeStageKey?: unknown
+  stageSteps?: AgentStageStep[]
+} = {}): RunStatusCopy {
   if (pipelineCompleted) {
     return {
       label: '分析已经完成',

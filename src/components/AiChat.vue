@@ -399,7 +399,7 @@ import {
   getAgentStageSteps,
   getRunStatusCopy as buildRunStatusCopy,
   normalizeAgentStage
-} from '../utils/agentStageConfig.js';
+} from '../utils/agentStageConfig';
 import {
   refreshTemplateWeights,
   trackSessionOutcome
@@ -407,9 +407,9 @@ import {
 import { filterV3ChatOptions } from '../utils/v3RequestOptions.js';
 import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
 import { marked } from 'marked';
-import { resolveAnalysisSignals } from '../utils/analysisSignals.js';
+import { resolveAnalysisSignals } from '../utils/analysisSignals';
 import { normalizeMarkdownForRender } from '../utils/markdownContract.js';
-import { isGeneralQaMessage } from '../utils/analysisBoardVisibility.js';
+import { isGeneralQaMessage } from '../utils/analysisBoardVisibility';
 import { buildChatHistoryExportContent } from '../utils/chatHistoryExport.js';
 import {
   buildAiAnchorFeatureFromMessage
