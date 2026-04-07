@@ -1,4 +1,4 @@
-import { useProjection } from '../composables/map/useProjection.js'
+import { useProjection } from '../composables/map/useProjection'
 
 const { toGcj02IfNeeded } = useProjection()
 const EARTH_RADIUS_KM = 6371
