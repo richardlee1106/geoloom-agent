@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeHealthState } from './healthState.js'
+import { normalizeHealthState } from './healthState'
 
 describe('healthState', () => {
   it('normalizes dependency and provider snapshots', () => {
@@ -33,5 +33,15 @@ describe('healthState', () => {
     })
     expect(normalized.degradedDependencies).toEqual(['database', 'llm_provider'])
     expect(normalized.skillsRegistered).toBe(4)
+  })
+
+  it('ignores malformed dependency containers', () => {
+    const normalized = normalizeHealthState({
+      dependencies: 'database-down',
+      degraded_dependencies: 'database'
+    })
+
+    expect(normalized.dependencies).toEqual([])
+    expect(normalized.degradedDependencies).toEqual([])
   })
 })

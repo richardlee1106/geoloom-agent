@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyStreamEvent, createAssistantRun } from './chatStreamState.js'
+import { applyStreamEvent, createAssistantRun } from './chatStreamState'
 
 describe('chatStreamState', () => {
   it('collects trace, stage and refined evidence into a single run state', () => {

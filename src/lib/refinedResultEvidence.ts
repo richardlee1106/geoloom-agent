@@ -1,18 +1,40 @@
-﻿function pickArray(...candidates) {
+type PlainObject = Record<string, unknown>
+
+export interface IntentMeta {
+  queryType: string | null
+  intentMode: string | null
+  queryPlan: PlainObject | null
+}
+
+export interface NormalizedRefinedResultEvidence {
+  boundary: unknown
+  spatialClusters: PlainObject
+  vernacularRegions: unknown[]
+  fuzzyRegions: unknown[]
+  stats: PlainObject | null
+  evidenceView: PlainObject | null
+  toolCalls: unknown[]
+  intent: IntentMeta | null
+  hasEvidence: boolean
+}
+
+function pickArray(...candidates: unknown[]): unknown[] {
   for (const value of candidates) {
     if (Array.isArray(value)) return value
   }
   return []
 }
 
-function pickObject(...candidates) {
+function pickObject(...candidates: unknown[]): PlainObject | null {
   for (const value of candidates) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) return value
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return value as PlainObject
+    }
   }
   return null
 }
 
-function pickString(...candidates) {
+function pickString(...candidates: unknown[]): string {
   for (const value of candidates) {
     if (value === null || value === undefined) continue
     const text = String(value).trim()
@@ -21,7 +43,12 @@ function pickString(...candidates) {
   return ''
 }
 
-function normalizeIntentMeta(root, results) {
+function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMeta | null {
+  const rootStats = pickObject(root.stats)
+  const resultsStats = pickObject(results.stats)
+  const rootQueryExecuted = pickObject(root.query_executed, root.queryExecuted)
+  const resultsQueryExecuted = pickObject(results.query_executed, results.queryExecuted)
+
   const intentMetaCandidate = pickObject(
     results.intentMeta,
     results.intent_meta,
@@ -32,14 +59,14 @@ function normalizeIntentMeta(root, results) {
   const queryPlan = pickObject(
     results.query_plan,
     results.queryPlan,
-    results.stats?.query_plan,
-    results.stats?.queryPlan,
+    resultsStats?.query_plan,
+    resultsStats?.queryPlan,
     root.query_plan,
     root.queryPlan,
-    root.stats?.query_plan,
-    root.stats?.queryPlan,
-    results.query_executed,
-    root.query_executed,
+    rootStats?.query_plan,
+    rootStats?.queryPlan,
+    resultsQueryExecuted,
+    rootQueryExecuted,
     intentMetaCandidate?.queryPlan,
     intentMetaCandidate?.query_plan
   )
@@ -47,39 +74,39 @@ function normalizeIntentMeta(root, results) {
   const queryType = pickString(
     queryPlan?.query_type,
     queryPlan?.queryType,
-    results.query_executed?.query_type,
-    results.query_executed?.queryType,
-    root.query_executed?.query_type,
-    root.query_executed?.queryType,
+    resultsQueryExecuted?.query_type,
+    resultsQueryExecuted?.queryType,
+    rootQueryExecuted?.query_type,
+    rootQueryExecuted?.queryType,
     results.query_type,
     results.queryType,
-    results.stats?.query_type,
-    results.stats?.queryType,
+    resultsStats?.query_type,
+    resultsStats?.queryType,
     intentMetaCandidate?.queryType,
     intentMetaCandidate?.query_type,
     root.query_type,
     root.queryType,
-    root.stats?.query_type,
-    root.stats?.queryType
+    rootStats?.query_type,
+    rootStats?.queryType
   ).toLowerCase()
 
   const intentMode = pickString(
     queryPlan?.intent_mode,
     queryPlan?.intentMode,
-    results.query_executed?.intent_mode,
-    results.query_executed?.intentMode,
-    root.query_executed?.intent_mode,
-    root.query_executed?.intentMode,
+    resultsQueryExecuted?.intent_mode,
+    resultsQueryExecuted?.intentMode,
+    rootQueryExecuted?.intent_mode,
+    rootQueryExecuted?.intentMode,
     results.intent_mode,
     results.intentMode,
-    results.stats?.intent_mode,
-    results.stats?.intentMode,
+    resultsStats?.intent_mode,
+    resultsStats?.intentMode,
     intentMetaCandidate?.intentMode,
     intentMetaCandidate?.intent_mode,
     root.intent_mode,
     root.intentMode,
-    root.stats?.intent_mode,
-    root.stats?.intentMode
+    rootStats?.intent_mode,
+    rootStats?.intentMode
   ).toLowerCase()
 
   if (!queryPlan && !queryType && !intentMode) {
@@ -93,13 +120,13 @@ function normalizeIntentMeta(root, results) {
   }
 }
 
-export function resolveIntentMeta(payload) {
+export function resolveIntentMeta(payload: unknown): IntentMeta | null {
   const root = pickObject(payload) || {}
   const results = pickObject(root.results) || root
   return normalizeIntentMeta(root, results)
 }
 
-export function normalizeRefinedResultEvidence(payload) {
+export function normalizeRefinedResultEvidence(payload: unknown): NormalizedRefinedResultEvidence {
   const root = pickObject(payload) || {}
   const results = pickObject(root.results) || root
 
@@ -116,9 +143,12 @@ export function normalizeRefinedResultEvidence(payload) {
     results.toolCalls
   )
   const boundary = results.boundary ?? root.boundary ?? null
-  const spatialClusters =
-    pickObject(results.spatial_clusters, results.spatialClusters, root.spatial_clusters, root.spatialClusters) ||
-    { hotspots: [] }
+  const spatialClusters = pickObject(
+    results.spatial_clusters,
+    results.spatialClusters,
+    root.spatial_clusters,
+    root.spatialClusters
+  ) || { hotspots: [] }
   const vernacularRegions = pickArray(
     results.vernacular_regions,
     results.vernacularRegions,
@@ -134,13 +164,13 @@ export function normalizeRefinedResultEvidence(payload) {
   const stats = pickObject(results.stats, results.analysisStats, root.stats, root.analysisStats)
   const intent = resolveIntentMeta(payload)
 
-  const hotspotCount = Array.isArray(spatialClusters?.hotspots) ? spatialClusters.hotspots.length : 0
+  const hotspotList = Array.isArray(spatialClusters.hotspots) ? spatialClusters.hotspots : []
   const hasEvidence = Boolean(
     evidenceView ||
     boundary ||
-      hotspotCount > 0 ||
-      vernacularRegions.length > 0 ||
-      fuzzyRegions.length > 0
+    hotspotList.length > 0 ||
+    vernacularRegions.length > 0 ||
+    fuzzyRegions.length > 0
   )
 
   return {
@@ -155,4 +185,3 @@ export function normalizeRefinedResultEvidence(payload) {
     hasEvidence
   }
 }
-
