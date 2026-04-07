@@ -5,7 +5,7 @@ import {
   type TemplateDefinition
 } from '../../components/ai/templateRegistry'
 import type { IntentType, TemplateContext } from '../../utils/aiTemplateMetrics'
-import { getTemplateWeight } from '../../services/aiTelemetry.js'
+import { getTemplateWeight } from '../../services/aiTelemetry'
 
 interface TemplateWidget {
   id: string

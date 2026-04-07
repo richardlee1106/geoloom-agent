@@ -403,7 +403,7 @@ import {
 import {
   refreshTemplateWeights,
   trackSessionOutcome
-} from '../services/aiTelemetry.js';
+} from '../services/aiTelemetry';
 import { filterV3ChatOptions } from '../utils/v3RequestOptions.js';
 import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
 import { marked } from 'marked';

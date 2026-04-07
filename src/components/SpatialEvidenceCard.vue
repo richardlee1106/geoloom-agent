@@ -77,7 +77,7 @@ import {
   trackTemplateClick,
   trackLocateClick,
   trackFollowupClick
-} from '../services/aiTelemetry.js'
+} from '../services/aiTelemetry'
 
 const props = defineProps({
   clusters: { type: Object, default: null },
