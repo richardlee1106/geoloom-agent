@@ -52,7 +52,7 @@ import SpiralWorker from '../workers/spiral.worker.js?worker';
 import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
 import { ElNotification } from 'element-plus/es/components/notification/index';
-import { rasterExtractor } from '../utils/RasterExtractor.js';
+import { rasterExtractor } from '../utils/RasterExtractor';
 import { toDisplayLonLat } from '../utils/userLocationContext';
 
 // 定义组件事件
