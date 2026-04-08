@@ -49,7 +49,7 @@ import { ref, onMounted, watch, computed } from 'vue';
 import * as d3 from 'd3';
 import BasicWorker from '../workers/basic.worker?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
-import GravityWorker from '../workers/gravity.worker.js?worker';
+import GravityWorker from '../workers/gravity.worker.ts?worker';
 import { fromLonLat } from 'ol/proj';
 import { ElNotification } from 'element-plus/es/components/notification/index';
 import { rasterExtractor } from '../utils/RasterExtractor';
