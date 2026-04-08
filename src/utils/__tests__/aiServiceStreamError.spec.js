@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendChatMessageStream } from '../aiService.js'
+import { sendChatMessageStream } from '../aiService'
 
 function createSseResponse(chunks, headers = {}) {
   const encoder = new TextEncoder()
@@ -36,6 +36,27 @@ afterEach(() => {
 })
 
 describe('sendChatMessageStream', () => {
+  it('preserves visible whitespace across streamed chunks after think tags are removed', async () => {
+    const onChunk = vi.fn()
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      createSseResponse([
+        'data: {"content":"推荐 "}\n\n',
+        'data: {"content":"<think>internal</think>湖北大学附近"}\n\n'
+      ])
+    )
+
+    const responseText = await sendChatMessageStream(
+      [{ role: 'user', content: '给我推荐湖北大学附近的地方' }],
+      onChunk,
+      { requestId: 'req_stream_whitespace_001' }
+    )
+
+    expect(responseText).toBe('推荐 湖北大学附近')
+    expect(onChunk).toHaveBeenNthCalledWith(1, '推荐 ')
+    expect(onChunk).toHaveBeenNthCalledWith(2, '湖北大学附近')
+  })
+
   it('throws when backend sends SSE error event', async () => {
     const onChunk = vi.fn()
     const onMeta = vi.fn()

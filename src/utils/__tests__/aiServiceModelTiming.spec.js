@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendChatMessageStream } from '../aiService.js'
+import { sendChatMessageStream } from '../aiService'
 
 function createSseResponse(chunks, headers = {}) {
   const encoder = new TextEncoder()

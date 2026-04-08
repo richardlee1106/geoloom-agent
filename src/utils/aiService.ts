@@ -14,10 +14,100 @@ import { AI_API_BASE_URL, SPATIAL_API_BASE_URL } from '../config';
 import { validateSSEEventPayload } from '../../shared/sseEventSchema';
 import { sendV3ChatStream, checkV3Service, getV3Models, getV3Status } from './v3aiService';
 
+type AnyRecord = Record<string, unknown>
+type SpatialPoint = [number, number]
+
+type PoiProperties = Record<string, unknown> & {
+  名称?: string
+  name?: string
+  _groupIndex?: number
+}
+
+type PoiFeature = {
+  type?: string
+  properties?: PoiProperties | null
+  geometry?: {
+    type?: string
+    coordinates?: number[] | [number, number]
+  } | null
+  coordSys?: unknown
+  coord_sys?: unknown
+  [key: string]: unknown
+}
+
+type ChatMessage = {
+  role?: unknown
+  content?: unknown
+  [key: string]: unknown
+}
+
+type SpatialContext = {
+  boundary?: SpatialPoint[]
+  viewport?: [number, number, number, number]
+  center?: {
+    lat: string | number
+    lon: string | number
+  } | null
+}
+
+type ChatOptions = Record<string, unknown> & {
+  requestId?: string
+  request_id?: string
+  spatialContext?: SpatialContext
+  colorIndex?: number
+  isSearchOnly?: boolean
+}
+
+type MetaPayload = AnyRecord | unknown[] | null
+type MetaHandler = (type: string, data: MetaPayload) => void
+type ChunkHandler = (text: string) => void
+
+type CurrentProviderState = {
+  online: boolean
+  provider: string | null
+  providerName: string
+  model?: string | null
+  providerReady?: boolean
+  health?: unknown
+}
+
+type ModelTiming = {
+  vlm_ms?: unknown
+  llm_ms?: unknown
+  parallel_wall_ms?: unknown
+  budget_ms?: unknown
+}
+
+type QuickSearchResult = {
+  success: boolean
+  isComplex: boolean
+  pois: PoiFeature[]
+  error?: string
+  warning?: string
+  expandedTerms?: unknown
+}
+
+type SemanticSearchResult = {
+  pois: PoiFeature[]
+  isComplex: boolean
+  needsAiAssistant: boolean
+  expandedTerms?: unknown
+}
+
+type StripThinkTagOptions = {
+  trim?: boolean
+}
+
 const BACKEND_VERSION = String(import.meta.env.VITE_BACKEND_VERSION || import.meta.env.MODE || '').toLowerCase();
 const IS_V3_MODE = BACKEND_VERSION === 'v3';
 const IS_V4_MODE = BACKEND_VERSION === 'v4';
 const API_BASE = IS_V4_MODE ? `${AI_API_BASE_URL}/api/geo` : `${AI_API_BASE_URL}/api/ai`;
+
+const META_EVENT_TYPES = new Set([
+  'pois', 'stage', 'boundary', 'spatial_clusters',
+  'vernacular_regions', 'fuzzy_regions', 'stats', 'progress',
+  'partial', 'refined_result', 'schema_error', 'error'
+])
 
 // V3 模式日志（仅在开发环境）
 if (IS_V3_MODE && import.meta.env.DEV) {
@@ -27,7 +117,23 @@ if (IS_V4_MODE && import.meta.env.DEV) {
   console.log('[AI Service] V4 模式已启用');
 }
 
-function createClientRequestId() {
+function isRecord(value: unknown): value is AnyRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  return String(error || '')
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : fallback
+}
+
+function createClientRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
@@ -35,23 +141,29 @@ function createClientRequestId() {
   return `web_${Date.now()}_${random}`
 }
 
-function formatTimingValueMs(value) {
+function formatTimingValueMs(value: unknown): number {
   const num = Number(value)
   if (!Number.isFinite(num) || num < 0) return 0
   return Math.round(num)
 }
 
-function extractModelTiming(payload) {
-  if (!payload || typeof payload !== 'object') return null
-  if (payload.model_timing_ms && typeof payload.model_timing_ms === 'object') {
-    return payload.model_timing_ms
+function extractModelTiming(payload: unknown): ModelTiming | null {
+  if (!isRecord(payload)) return null
+  if (isRecord(payload.model_timing_ms)) {
+    return payload.model_timing_ms as ModelTiming
   }
-  if (payload.results?.stats?.model_timing_ms && typeof payload.results.stats.model_timing_ms === 'object') {
-    return payload.results.stats.model_timing_ms
+
+  const results = isRecord(payload.results) ? payload.results : null
+  const resultsStats = results && isRecord(results.stats) ? results.stats : null
+  if (resultsStats && isRecord(resultsStats.model_timing_ms)) {
+    return resultsStats.model_timing_ms as ModelTiming
   }
-  if (payload.stats?.model_timing_ms && typeof payload.stats.model_timing_ms === 'object') {
-    return payload.stats.model_timing_ms
+
+  const stats = isRecord(payload.stats) ? payload.stats : null
+  if (stats && isRecord(stats.model_timing_ms)) {
+    return stats.model_timing_ms as ModelTiming
   }
+
   return null
 }
 
@@ -72,8 +184,8 @@ const REASONING_MARKERS = [
   'refine'
 ]
 
-function stripThinkTags(text = '') {
-  let result = String(text || '')
+function stripThinkTags(text: unknown, { trim = true }: StripThinkTagOptions = {}): string {
+  const result = String(text || '')
     // 移除 XML 格式的思考标签
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<\/?think>/gi, '')
@@ -85,17 +197,16 @@ function stripThinkTags(text = '') {
     .replace(/\*\*(Analyze|Evaluate|Draft|Refine|Final|Thinking|Reasoning)[\s\S]*?\*\*[\s\S]*?(?=\n\s*您好|\n\s*你好|\n\s*\*{0,2}您好|$)/gi, '')
     // 移除 "1. **Analyze the Request**" 等编号列表思考块
     .replace(/1\.\s*\*\*[Aa]nalyze[\s\S]*?(?=\n\s*您好|\n\s*你好|\n\s*\*{0,2}您好|\n\s*\*{0,2}你好|$)/gi, '')
-    .trim()
-  return result
+  return trim ? result.trim() : result
 }
 
-function looksLikeReasoningTranscriptStart(text = '') {
+function looksLikeReasoningTranscriptStart(text: unknown = ''): boolean {
   const probe = String(text || '').trimStart()
   if (!probe) return false
   return REASONING_START_RE.test(probe) || REASONING_HEADING_RE.test(probe)
 }
 
-function looksLikeReasoningContinuation(text = '') {
+function looksLikeReasoningContinuation(text: unknown = ''): boolean {
   const probe = String(text || '').trim()
   if (!probe) return true
   if (looksLikeReasoningTranscriptStart(probe)) return true
@@ -110,7 +221,7 @@ function looksLikeReasoningContinuation(text = '') {
   return false
 }
 
-function sanitizeAssistantOutputText(text = '') {
+function sanitizeAssistantOutputText(text: unknown = ''): string {
   if (typeof text !== 'string') return ''
   const withoutThink = stripThinkTags(text)
   if (!withoutThink) return ''
@@ -120,7 +231,7 @@ function sanitizeAssistantOutputText(text = '') {
 }
 
 // 当前服务商信息（从后端获取）
-let currentProvider = {
+let currentProvider: CurrentProviderState = {
   online: false,
   provider: null,
   providerName: 'Unknown'
@@ -138,7 +249,7 @@ const LOCATION_KEYWORDS = [
  * @param {string} userMessage - 用户消息
  * @returns {boolean}
  */
-export function isLocationRelatedQuery(userMessage) {
+export function isLocationRelatedQuery(userMessage: string | null | undefined): boolean {
   if (!userMessage) return false
   return LOCATION_KEYWORDS.some(keyword => userMessage.includes(keyword))
 }
@@ -149,21 +260,24 @@ export function isLocationRelatedQuery(userMessage) {
  * @param {string} name - 要查找的名称
  * @returns {Object|null}
  */
-export function findPOIByName(features, name) {
+export function findPOIByName(
+  features: PoiFeature[] | null | undefined,
+  name: string | null | undefined
+): PoiFeature | null {
   if (!features || !name) return null
   
   // 精确匹配
-  let found = features.find(f => {
-    const poiName = f.properties?.['名称'] || f.properties?.name || ''
+  let found = features.find((feature) => {
+    const poiName = feature.properties?.['名称'] || feature.properties?.name || ''
     return poiName === name
-  })
+  }) || null
   
   // 模糊匹配
   if (!found) {
-    found = features.find(f => {
-      const poiName = f.properties?.['名称'] || f.properties?.name || ''
+    found = features.find((feature) => {
+      const poiName = feature.properties?.['名称'] || feature.properties?.name || ''
       return poiName.includes(name) || name.includes(poiName)
-    })
+    }) || null
   }
   
   return found
@@ -175,7 +289,7 @@ export function findPOIByName(features, name) {
  * @param {Array} coord2 - [lon, lat]
  * @returns {number} 距离（米）
  */
-export function calculateDistance(coord1, coord2) {
+export function calculateDistance(coord1: SpatialPoint, coord2: SpatialPoint): number {
   const R = 6371000 // 地球半径（米）
   const lat1 = coord1[1] * Math.PI / 180
   const lat2 = coord2[1] * Math.PI / 180
@@ -197,7 +311,8 @@ export function calculateDistance(coord1, coord2) {
  * @param {string} userMessage - 用户消息
  * @returns {string}
  */
-export function formatPOIContext(features, userMessage = '') {
+export function formatPOIContext(features: PoiFeature[] | null | undefined, userMessage = ''): string {
+  void userMessage
   if (!features || features.length === 0) {
     return '当前没有选中任何 POI 数据。'
   }
@@ -210,7 +325,9 @@ export function formatPOIContext(features, userMessage = '') {
  * @param {boolean} isLocationQuery - 是否为位置相关查询
  * @returns {string}
  */
-export function buildSystemPrompt(poiContext, isLocationQuery = false) {
+export function buildSystemPrompt(poiContext: string, isLocationQuery = false): string {
+  void poiContext
+  void isLocationQuery
   // 实际 system prompt 在后端构建
   return ''
 }
@@ -232,14 +349,20 @@ export function buildSystemPrompt(poiContext, isLocationQuery = false) {
  * @param {Function} onMeta - [新增] 接收元数据的回调 (type: string, data: any) => void
  * @returns {Promise<string>} 完整的 AI 回复
  */
-export async function sendChatMessageStream(messages, onChunk, options = {}, poiFeatures = [], onMeta = null) {
+export async function sendChatMessageStream(
+  messages: ChatMessage[],
+  onChunk: ChunkHandler,
+  options: ChatOptions = {},
+  poiFeatures: PoiFeature[] = [],
+  onMeta: MetaHandler | null = null
+): Promise<string> {
   // 仅开发环境打印关键信息
   if (import.meta.env.DEV) {
     console.log('[AI] 发送请求, POI:', poiFeatures.length)
   }
 
   const requestId = options?.requestId || options?.request_id || createClientRequestId()
-  const normalizedOptions = {
+  const normalizedOptions: ChatOptions = {
     ...options,
     requestId
   }
@@ -287,17 +410,21 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
     }
   }
 
+  if (!response.body) {
+    throw new Error('AI 响应缺少流式内容')
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let fullContent = ''
   let buffer = ''
-  let currentEvent = null // 跟踪当前 SSE 事件类型
-  let lastModelTimingSignature = null
+  let currentEvent: string | null = null // 跟踪当前 SSE 事件类型
+  let lastModelTimingSignature: string | null = null
   let hasTextOutput = false
   let suppressReasoningTranscript = false
 
-  const consumeAssistantText = (rawText) => {
-    const candidate = stripThinkTags(rawText)
+  const consumeAssistantText = (rawText: unknown): string => {
+    const candidate = stripThinkTags(rawText, { trim: false })
     if (!candidate) return ''
 
     if (looksLikeReasoningTranscriptStart(candidate)) {
@@ -337,17 +464,12 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
         const eventType = currentEvent
 
         try {
-          // 统一处理具名 SSE 元事件（查表模式，消除重复分支）
-          const META_EVENT_TYPES = new Set([
-            'pois', 'stage', 'boundary', 'spatial_clusters',
-            'vernacular_regions', 'fuzzy_regions', 'stats', 'progress',
-            'partial', 'refined_result', 'schema_error', 'error'
-          ])
-
           if (eventType && META_EVENT_TYPES.has(eventType)) {
-            const payload = JSON.parse(data)
-            if (eventType === 'refined_result' && typeof payload?.answer === 'string') {
-              payload.answer = sanitizeAssistantOutputText(payload.answer)
+            const payload = JSON.parse(data) as unknown
+            const payloadRecord = isRecord(payload) ? payload : null
+
+            if (eventType === 'refined_result' && typeof payloadRecord?.answer === 'string') {
+              payloadRecord.answer = sanitizeAssistantOutputText(payloadRecord.answer)
             }
             const validation = validateSSEEventPayload(eventType, payload)
             if (!validation.ok && import.meta.env.DEV) {
@@ -369,12 +491,12 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
               continue
             }
             // 仅开发环境打印阶段更新
-            if (import.meta.env.DEV && eventType === 'stage') {
-              console.log('[AI] Stage:', payload.name)
+            if (import.meta.env.DEV && eventType === 'stage' && payloadRecord) {
+              console.log('[AI] Stage:', payloadRecord.name)
             }
             // 错误日志始终打印
             if (eventType === 'error') {
-              console.error('[AI] Error:', payload?.message || payload)
+              console.error('[AI] Error:', payloadRecord?.message || payload)
             }
             if (eventType === 'stats' || eventType === 'refined_result') {
               const timing = extractModelTiming(payload)
@@ -392,17 +514,17 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
             }
             if (onMeta) {
               try {
-                if (payload && typeof payload === 'object' && !Array.isArray(payload) && !payload.trace_id) {
-                  payload.trace_id = responseTraceId
+                if (payloadRecord && !payloadRecord.trace_id) {
+                  payloadRecord.trace_id = responseTraceId
                 }
-                onMeta(eventType, payload)
+                onMeta(eventType, payloadRecord || (Array.isArray(payload) ? payload : null))
               } catch (metaErr) {
                 // 静默处理
               }
             }
             if (eventType === 'refined_result') {
               const answerText = consumeAssistantText(
-                typeof payload?.answer === 'string' ? payload.answer : ''
+                typeof payloadRecord?.answer === 'string' ? payloadRecord.answer : ''
               )
               if (!hasTextOutput && answerText.trim()) {
                 fullContent += answerText
@@ -411,7 +533,7 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
               }
             }
             if (eventType === 'error') {
-              const backendErrorMessage = payload?.message || '空间分析失败'
+              const backendErrorMessage = payloadRecord?.message || '空间分析失败'
               throw new Error(String(backendErrorMessage))
             }
             currentEvent = null
@@ -420,10 +542,10 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
 
 
           // 默认为 message chunk
-          const parsed = JSON.parse(data)
+          const parsed = JSON.parse(data) as unknown
           
           // 如果后端直接发的 { content: '...' } 格式 (index.js 修改后)
-          if (parsed.content !== undefined) {
+          if (isRecord(parsed) && parsed.content !== undefined) {
              const delta = consumeAssistantText(parsed.content)
              if (!delta) continue
              fullContent += delta
@@ -433,16 +555,23 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
           }
 
           // 兼容 OpenAI 格式
-          const choice = parsed.choices?.[0]
-          const delta = consumeAssistantText(choice?.delta?.content || choice?.text || '')
+          const choice = isRecord(parsed) && Array.isArray(parsed.choices) && isRecord(parsed.choices[0])
+            ? parsed.choices[0]
+            : null
+          const choiceDelta = choice && isRecord(choice.delta) ? choice.delta : null
+          const delta = consumeAssistantText(
+            typeof choiceDelta?.content === 'string'
+              ? choiceDelta.content
+              : (typeof choice?.text === 'string' ? choice.text : '')
+          )
           
           if (delta) {
              fullContent += delta
              hasTextOutput = true
              onChunk(delta)
-          } else if (parsed.error) {
+          } else if (isRecord(parsed) && isRecord(parsed.error)) {
              console.error('[AI Stream Error]', parsed.error)
-             onChunk(`\n[系统错误: ${parsed.error.message || '未知错误'}]\n`)
+             onChunk(`\n[系统错误: ${typeof parsed.error.message === 'string' ? parsed.error.message : '未知错误'}]\n`)
           }
         } catch (e) {
           if (eventType === 'error') {
@@ -466,7 +595,7 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
  * @param {Object} options - 可选配置
  * @returns {Promise<string>} AI 回复内容
  */
-export async function sendChatMessage(messages, options = {}) {
+export async function sendChatMessage(messages: ChatMessage[], options: ChatOptions = {}): Promise<string> {
   let result = ''
   await sendChatMessageStream(messages, (chunk) => {
     result += chunk
@@ -480,59 +609,59 @@ export async function sendChatMessage(messages, options = {}) {
  * @param {Object} options - 搜索选项
  * @returns {Promise<{ success: boolean, isComplex: boolean, pois: Array }>}
  */
-export async function quickSearch(keyword, options = {}) {
+export async function quickSearch(keyword: string, options: ChatOptions = {}): Promise<QuickSearchResult> {
   if (IS_V4_MODE) {
     return {
       success: false,
       isComplex: true,
       error: 'standalone_v4_routes_all_search_to_agent',
       pois: []
-    };
+    }
   }
 
-  const { spatialContext, colorIndex = 0 } = options;
-  const kw = keyword.trim();
+  const { spatialContext, colorIndex = 0 } = options
+  const kw = keyword.trim()
 
   // 构建查询参数
-  const params = new URLSearchParams({ q: kw, limit: '100' });
+  const params = new URLSearchParams({ q: kw, limit: '100' })
 
   // ========== 核心业务逻辑 ==========
   // 1. 选择/圆形选区优先
   // 2. 无选区 → 使用当前地图视野 (viewport) 作为边界
   // 3. 禁止无约束全库扫描
 
-  let hasGeometry = false;
+  let hasGeometry = false
 
   // 优先级1: 用户绘制的多边形选区
   if (spatialContext?.boundary && spatialContext.boundary.length >= 3) {
-    const points = spatialContext.boundary;
-    const closedPoints = [...points];
+    const points = spatialContext.boundary
+    const closedPoints = [...points]
     // 确保多边形闭合
     if (points[0][0] !== points[points.length-1][0] || points[0][1] !== points[points.length-1][1]) {
-      closedPoints.push(points[0]);
+      closedPoints.push(points[0])
     }
-    const wktPoints = closedPoints.map(p => `${p[0]} ${p[1]}`).join(', ');
-    params.set('geometry', `POLYGON((${wktPoints}))`);
-    hasGeometry = true;
+    const wktPoints = closedPoints.map((point) => `${point[0]} ${point[1]}`).join(', ')
+    params.set('geometry', `POLYGON((${wktPoints}))`)
+    hasGeometry = true
   }
   // 优先级2: 地图视野 bbox
   else if (spatialContext?.viewport && Array.isArray(spatialContext.viewport) && spatialContext.viewport.length >= 4) {
-    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport;
+    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport
     // 将 bbox 转换为 WKT Polygon
-    const bboxWkt = `POLYGON((${minLon} ${minLat}, ${maxLon} ${minLat}, ${maxLon} ${maxLat}, ${minLon} ${maxLat}, ${minLon} ${minLat}))`;
-    params.set('geometry', bboxWkt);
-    hasGeometry = true;
+    const bboxWkt = `POLYGON((${minLon} ${minLat}, ${maxLon} ${minLat}, ${maxLon} ${maxLat}, ${minLon} ${maxLat}, ${minLon} ${minLat}))`
+    params.set('geometry', bboxWkt)
+    hasGeometry = true
   }
 
   // 添加中心点（用于距离排序）
   if (spatialContext?.center) {
-    params.set('lat', spatialContext.center.lat);
-    params.set('lon', spatialContext.center.lon);
+    params.set('lat', String(spatialContext.center.lat))
+    params.set('lon', String(spatialContext.center.lon))
   } else if (spatialContext?.viewport) {
     // 使用视野中心
-    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport;
-    params.set('lat', ((minLat + maxLat) / 2).toString());
-    params.set('lon', ((minLon + maxLon) / 2).toString());
+    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport
+    params.set('lat', ((minLat + maxLat) / 2).toString())
+    params.set('lon', ((minLon + maxLon) / 2).toString())
   }
 
   // 如果没有空间约束，返回空结果
@@ -542,48 +671,49 @@ export async function quickSearch(keyword, options = {}) {
       isComplex: false,
       pois: [],
       warning: '请先绘制选区或确保地图视野有效'
-    };
+    }
   }
 
   try {
-    const response = await fetch(`${SPATIAL_API_BASE_URL}/api/search/quick?${params.toString()}`);
+    const response = await fetch(`${SPATIAL_API_BASE_URL}/api/search/quick?${params.toString()}`)
     if (!response.ok) {
-      throw new Error(`搜索失败: ${response.status}`);
+      throw new Error(`搜索失败: ${response.status}`)
     }
 
-    const data = await response.json();
+    const data = await response.json() as AnyRecord
 
     // 如果后端判断是复杂查询，返回标记
-    if (data.isComplex) {
+    if (Boolean(data.isComplex)) {
       return {
         success: true,
         isComplex: true,
         pois: []
-      };
+      }
     }
     
     // 设置颜色索引
-    const pois = (data.pois || []).map(poi => {
-      if (poi.properties) {
-        poi.properties._groupIndex = colorIndex;
+    const pois = (Array.isArray(data.pois) ? data.pois : []).map((poi) => {
+      const feature = isRecord(poi) ? poi as PoiFeature : {}
+      if (feature.properties) {
+        feature.properties._groupIndex = colorIndex
       }
-      return poi;
-    });
+      return feature
+    })
 
     return {
       success: true,
       isComplex: false,
       expandedTerms: data.expandedTerms,
       pois
-    };
+    }
   } catch (err) {
-    console.error('[QuickSearch] 错误:', err);
+    console.error('[QuickSearch] 错误:', err)
     return {
       success: false,
       isComplex: false,
-      error: err.message,
+      error: getErrorMessage(err),
       pois: []
-    };
+    }
   }
 }
 
@@ -594,9 +724,14 @@ export async function quickSearch(keyword, options = {}) {
  * @param {Object} options - 可选配置 { spatialContext: ..., colorIndex: ... }
  * @returns {Promise<{ pois: Array, isComplex: boolean, needsAiAssistant: boolean }>}
  */
-export async function semanticSearch(keyword, features = [], options = {}) {
+export async function semanticSearch(
+  keyword: string,
+  features: PoiFeature[] = [],
+  options: ChatOptions = {}
+): Promise<SemanticSearchResult> {
+  void features
   if (!keyword || !keyword.trim()) {
-    return { pois: [], isComplex: false, needsAiAssistant: false };
+    return { pois: [], isComplex: false, needsAiAssistant: false }
   }
 
   if (IS_V4_MODE) {
@@ -604,13 +739,13 @@ export async function semanticSearch(keyword, features = [], options = {}) {
       pois: [],
       isComplex: true,
       needsAiAssistant: true
-    };
+    }
   }
 
-  const kw = keyword.trim();
+  const kw = keyword.trim()
 
   // 1. 先尝试快速搜索
-  const quickResult = await quickSearch(kw, options);
+  const quickResult = await quickSearch(kw, options)
 
   // 2. 如果后端判断是复杂查询，需要走 AI 助手
   if (quickResult.isComplex) {
@@ -618,7 +753,7 @@ export async function semanticSearch(keyword, features = [], options = {}) {
       pois: [],
       isComplex: true,
       needsAiAssistant: true
-    };
+    }
   }
 
   // 3. 快速搜索成功
@@ -628,18 +763,18 @@ export async function semanticSearch(keyword, features = [], options = {}) {
       isComplex: false,
       needsAiAssistant: false,
       expandedTerms: quickResult.expandedTerms
-    };
+    }
   }
   
   // 4. 快速搜索无结果，降级到 RAG Pipeline
-  console.log(`[AI Search] 快速搜索无结果，尝试 RAG Pipeline`);
+  console.log(`[AI Search] 快速搜索无结果，尝试 RAG Pipeline`)
 
-  let matchedPOIs = [];
+  let matchedPOIs: Array<PoiFeature | AnyRecord> = []
 
   // 复用 RAG 管道进行搜索
   await sendChatMessageStream(
     [{ role: 'user', content: kw }],
-    (chunk) => {
+    () => {
        // 忽略文本响应流，只关注结果
     },
     {
@@ -649,50 +784,51 @@ export async function semanticSearch(keyword, features = [], options = {}) {
     [], // 不传前端 POI，强制走后端检索
     (type, data) => {
       if (type === 'pois' && Array.isArray(data)) {
-         matchedPOIs = data;
+         matchedPOIs = data as Array<PoiFeature | AnyRecord>
       }
     }
-  );
+  )
 
   // 转换为 GeoJSON Feature 格式 (如果后端返回的是 raw object)
-  const pois = matchedPOIs.map(p => {
+  const pois = matchedPOIs.map((poi) => {
     // 如果已经是 Feature 结构就不动，否则包装一下
-    if (p.type === 'Feature') {
-        // 确保颜色正确
-        if (!p.properties) p.properties = {};
-        p.properties._groupIndex = options.colorIndex !== undefined ? options.colorIndex : 0;
-        return p;
+    if (isRecord(poi) && poi.type === 'Feature') {
+        const feature = poi as PoiFeature
+        if (!feature.properties) feature.properties = {}
+        feature.properties._groupIndex = options.colorIndex !== undefined ? options.colorIndex : 0
+        return feature
     }
-    
+
+    const rawPoi = isRecord(poi) ? poi : {}
     return {
        type: 'Feature',
        properties: {
-          id: p.id,
-          '名称': p.name,
-          '小类': p.category || p.category_small || p.category_mid || p.category_big || p.type || '未分类',
-          '地址': p.address,
+          id: rawPoi.id,
+          '名称': String(rawPoi.name || ''),
+          '小类': String(rawPoi.category || rawPoi.category_small || rawPoi.category_mid || rawPoi.category_big || rawPoi.type || '未分类'),
+          '地址': rawPoi.address,
           // 0 = 红色(默认), 4 = 紫色(AI推荐)
           _groupIndex: options.colorIndex !== undefined ? options.colorIndex : 0 
        },
        geometry: {
           type: 'Point',
-          coordinates: [p.lon, p.lat]
+          coordinates: [toFiniteNumber(rawPoi.lon), toFiniteNumber(rawPoi.lat)]
        }
-    };
-  });
+    } satisfies PoiFeature
+  })
   
   return {
     pois,
     isComplex: false,
     needsAiAssistant: false
-  };
+  }
 }
 
 /**
  * 检查 AI 服务可用性 - 调用后端 API
  * @returns {Promise<boolean>}
  */
-export async function checkAIService() {
+export async function checkAIService(): Promise<boolean> {
   try {
     if (IS_V3_MODE) {
       const online = await checkV3Service()
@@ -713,14 +849,15 @@ export async function checkAIService() {
         return false
       }
 
-      const data = await response.json()
+      const data = await response.json() as AnyRecord
+      const llm = isRecord(data.llm) ? data.llm : null
       currentProvider = {
         online: true,
-        provider: data?.llm?.provider || 'geoloom-v4',
+        provider: typeof llm?.provider === 'string' ? llm.provider : 'geoloom-v4',
         providerName: data?.provider_ready
-          ? `GeoLoom V4 (${data?.llm?.provider || 'provider_ready'})`
+          ? `GeoLoom V4 (${typeof llm?.provider === 'string' ? llm.provider : 'provider_ready'})`
           : 'GeoLoom V4 (degraded)',
-        model: data?.llm?.model || 'fallback',
+        model: typeof llm?.model === 'string' ? llm.model : 'fallback',
         providerReady: data?.provider_ready === true,
         health: data
       }
@@ -733,11 +870,17 @@ export async function checkAIService() {
       return false
     }
 
-    const data = await response.json()
+    const data = await response.json() as AnyRecord
 
     // V1 模式
-    currentProvider = data
-    return data.online
+    currentProvider = {
+      online: Boolean(data.online),
+      provider: typeof data.provider === 'string' ? data.provider : null,
+      providerName: typeof data.providerName === 'string' ? data.providerName : 'Unknown',
+      model: typeof data.model === 'string' ? data.model : null,
+      health: data
+    }
+    return currentProvider.online
   } catch (e) {
     currentProvider.online = false
     return false
@@ -747,7 +890,12 @@ export async function checkAIService() {
 /**
  * 获取当前服务商信息
  */
-export function getCurrentProviderInfo() {
+export function getCurrentProviderInfo(): {
+  id: string | null
+  name: string
+  apiBase: string
+  modelId: string
+} {
   // V3 模式
   if (IS_V3_MODE) {
     return {
@@ -778,7 +926,7 @@ export function getCurrentProviderInfo() {
  * 获取可用模型列表 - 调用后端 API
  * @returns {Promise<Array>}
  */
-export async function getAvailableModels() {
+export async function getAvailableModels(): Promise<unknown[]> {
   try {
     if (IS_V3_MODE) {
       return getV3Models()
@@ -795,9 +943,9 @@ export async function getAvailableModels() {
 
     const response = await fetch(`${API_BASE}/models`)
     if (!response.ok) return []
-    const data = await response.json()
+    const data = await response.json() as AnyRecord
 
-    return data.models || []
+    return Array.isArray(data.models) ? data.models : []
   } catch {
     return []
   }

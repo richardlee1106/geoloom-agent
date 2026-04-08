@@ -60,7 +60,7 @@ import {
   getV2SummaryReportByFile,
   getV2SummaryReportHistory,
   pruneV2AuditRetention
-} from '../utils/aiService.js'
+} from '../utils/aiService'
 import { readV2TraceSession } from '../utils/v2TraceSession'
 
 const router = useRouter()

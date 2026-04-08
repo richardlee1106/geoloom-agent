@@ -391,7 +391,7 @@ import {
   sendChatMessageStream, 
   checkAIService, 
   getCurrentProviderInfo
-} from '../utils/aiService.js';
+} from '../utils/aiService';
 import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence';
 import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher';
 import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder';
