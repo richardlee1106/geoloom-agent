@@ -284,7 +284,7 @@ import {
 import {
   buildCoarseLocationBrowserHint,
   detectBrowserBrand
-} from './utils/geolocationDiagnostics.js';
+} from './utils/geolocationDiagnostics';
 import { SPATIAL_API_BASE_URL } from './config';
 import { useRegions } from './composables/useRegions';
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCoarseLocationBrowserHint,
   detectBrowserBrand
-} from '../geolocationDiagnostics.js'
+} from '../geolocationDiagnostics'
 
 describe('geolocationDiagnostics', () => {
   it('detects edge and chrome user agents separately', () => {
@@ -25,5 +25,13 @@ describe('geolocationDiagnostics', () => {
       accuracyM: 4000,
       permissionState: 'prompt'
     })).toContain('浏览器这次返回的位置精度仍然偏粗')
+  })
+
+  it('trims permission state text before generating browser hints', () => {
+    expect(buildCoarseLocationBrowserHint({
+      browserBrand: 'firefox',
+      accuracyM: 1200,
+      permissionState: ' granted '
+    })).toContain('权限已授权')
   })
 })

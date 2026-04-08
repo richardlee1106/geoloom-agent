@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   fetchCategoryCatalogTree,
   resetCategoryCatalogTreeCache,
-} from '../categoryCatalogClient.js'
+} from '../categoryCatalogClient'
 
 describe('fetchCategoryCatalogTree', () => {
   afterEach(() => {
@@ -51,5 +51,18 @@ describe('fetchCategoryCatalogTree', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(first).toEqual(second)
+  })
+
+  it('normalizes trailing slashes in API base URLs before requesting the catalog', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      async json() {
+        return []
+      }
+    })
+
+    await fetchCategoryCatalogTree(fetchMock, 'http://127.0.0.1:3200/')
+
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3200/api/category/tree')
   })
 })

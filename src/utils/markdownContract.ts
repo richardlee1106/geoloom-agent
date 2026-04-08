@@ -7,9 +7,9 @@ const KNOWN_SECTION_TITLES = [
   '先看结论',
   '结论',
   '建议'
-]
+] as const
 
-function splitHeadingAndBody(level, headingText = '') {
+function splitHeadingAndBody(level: string, headingText = ''): string {
   const normalized = String(headingText || '').trim()
   if (!normalized) return `${level}`
 
@@ -27,7 +27,7 @@ function splitHeadingAndBody(level, headingText = '') {
   return `${level} ${normalized}`
 }
 
-function normalizeHeadingLine(line = '') {
+function normalizeHeadingLine(line = ''): string {
   const raw = String(line || '')
   if (!raw.trim()) return ''
 
@@ -49,7 +49,7 @@ function normalizeHeadingLine(line = '') {
   return cleanedTitle ? splitHeadingAndBody(level, cleanedTitle) : `${level}`
 }
 
-export function normalizeMarkdownForRender(markdown = '') {
+export function normalizeMarkdownForRender(markdown = ''): string {
   const lines = String(markdown || '').split(/\r?\n/)
   return lines
     .map((line) => normalizeHeadingLine(line))

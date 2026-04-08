@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { normalizeMarkdownForRender } from '../markdownContract.js'
+import { normalizeMarkdownForRender } from '../markdownContract'
 
 describe('normalizeMarkdownForRender', () => {
   it('repairs malformed heading markers', () => {

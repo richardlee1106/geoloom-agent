@@ -40,4 +40,3 @@ export const NARRATIVE_TEXT_TEMPLATE_MARKDOWN = `
 }
 \`\`\`
 `.trim()
-

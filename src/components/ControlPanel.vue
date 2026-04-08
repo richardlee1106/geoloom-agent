@@ -388,7 +388,7 @@ import { ElSwitch } from 'element-plus/es/components/switch/index';
 import { ElTooltip } from 'element-plus/es/components/tooltip/index';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 import { SPATIAL_API_BASE_URL } from '../config';
-import { fetchCategoryCatalogTree } from '../utils/categoryCatalogClient.js';
+import { fetchCategoryCatalogTree } from '../utils/categoryCatalogClient';
 
 const emit = defineEmits(['data-loaded', 'data-removed', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'category-change', 'go-narrative', 'update:filterEnabled', 'update:heatmapEnabled', 'update:weightEnabled', 'update:showWeightValue', 'update:globalAnalysisEnabled']);
 // const selectedGroup = ref(''); // Replace with array path

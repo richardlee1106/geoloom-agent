@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { filterV3ChatOptions } from '../v3RequestOptions.js'
+import { filterV3ChatOptions } from '../v3RequestOptions'
 
 describe('filterV3ChatOptions', () => {
   it('drops V1-only heavy visual fields but keeps spatial context required by V3', () => {

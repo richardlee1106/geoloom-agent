@@ -163,7 +163,7 @@ import { marked } from 'marked';
 import { ArrowLeft, Close, Hide, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
 import { fromLonLat, toLonLat } from 'ol/proj';
 import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../utils/narrativeTextTemplate';
-import { normalizeMarkdownForRender } from '../utils/markdownContract.js';
+import { normalizeMarkdownForRender } from '../utils/markdownContract';
 
 const MapContainer = defineAsyncComponent(() => import('../components/MapContainer.vue'));
 

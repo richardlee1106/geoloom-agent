@@ -1,10 +1,18 @@
-function toRoundedAccuracyText(accuracyM) {
+type BrowserBrand = 'edge' | 'chrome' | 'firefox' | 'safari' | 'other'
+
+interface CoarseLocationBrowserHintArgs {
+  browserBrand?: BrowserBrand
+  accuracyM?: unknown
+  permissionState?: unknown
+}
+
+function toRoundedAccuracyText(accuracyM: unknown): string {
   const numeric = Number(accuracyM)
   return Number.isFinite(numeric) ? `当前精度约 ${Math.round(numeric)} 米` : '当前精度偏粗'
 }
 
-function toPermissionLabel(permissionState) {
-  switch (String(permissionState || '').toLowerCase()) {
+function toPermissionLabel(permissionState: unknown): string {
+  switch (String(permissionState || '').trim().toLowerCase()) {
     case 'granted':
       return '权限已授权'
     case 'prompt':
@@ -16,7 +24,7 @@ function toPermissionLabel(permissionState) {
   }
 }
 
-export function detectBrowserBrand(userAgent = '') {
+export function detectBrowserBrand(userAgent = ''): BrowserBrand {
   const normalized = String(userAgent || '')
   if (/Edg\//i.test(normalized)) return 'edge'
   if (/Chrome\//i.test(normalized) && !/Edg\//i.test(normalized)) return 'chrome'
@@ -29,7 +37,7 @@ export function buildCoarseLocationBrowserHint({
   browserBrand = 'other',
   accuracyM = null,
   permissionState = 'unknown'
-} = {}) {
+}: CoarseLocationBrowserHintArgs = {}): string {
   const accuracyText = toRoundedAccuracyText(accuracyM)
   const permissionLabel = toPermissionLabel(permissionState)
   const permissionSuffix = permissionLabel ? `，${permissionLabel}` : ''

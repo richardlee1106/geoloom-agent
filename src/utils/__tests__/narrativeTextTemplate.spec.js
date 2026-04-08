@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN } from '../narrativeTextTemplate.js'
+import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN } from '../narrativeTextTemplate'
 
 describe('narrativeTextTemplate', () => {
   it('contains three-section narrative template', () => {

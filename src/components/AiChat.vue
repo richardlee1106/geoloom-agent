@@ -404,11 +404,11 @@ import {
   refreshTemplateWeights,
   trackSessionOutcome
 } from '../services/aiTelemetry';
-import { filterV3ChatOptions } from '../utils/v3RequestOptions.js';
+import { filterV3ChatOptions } from '../utils/v3RequestOptions';
 import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
 import { marked } from 'marked';
 import { resolveAnalysisSignals } from '../utils/analysisSignals';
-import { normalizeMarkdownForRender } from '../utils/markdownContract.js';
+import { normalizeMarkdownForRender } from '../utils/markdownContract';
 import { isGeneralQaMessage } from '../utils/analysisBoardVisibility';
 import { buildChatHistoryExportContent } from '../utils/chatHistoryExport.js';
 import {
