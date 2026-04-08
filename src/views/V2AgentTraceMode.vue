@@ -61,7 +61,7 @@ import {
   getV2SummaryReportHistory,
   pruneV2AuditRetention
 } from '../utils/aiService.js'
-import { readV2TraceSession } from '../utils/v2TraceSession.js'
+import { readV2TraceSession } from '../utils/v2TraceSession'
 
 const router = useRouter()
 const traceSession = ref(readV2TraceSession())

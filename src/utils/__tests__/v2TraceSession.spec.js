@@ -3,7 +3,7 @@ import {
   finalizeV2TraceSession,
   readV2TraceSession,
   startV2TraceSession
-} from '../v2TraceSession.js'
+} from '../v2TraceSession'
 
 function createMemoryStorage() {
   const store = new Map()
@@ -58,5 +58,37 @@ describe('v2TraceSession', () => {
     expect(snapshot.job_state).toBe('S3_FAST_DONE')
     expect(snapshot.events).toHaveLength(1)
     expect(snapshot.latest_summary).toBe('assistant final text')
+  })
+
+  it('preserves the previous summary when finalize receives only blank message content', () => {
+    const storage = createMemoryStorage()
+
+    startV2TraceSession({
+      storage,
+      sessionId: 'session-v2',
+      query: 'analyze this area',
+      architectureMode: 'v2'
+    })
+
+    appendV2TraceEvent({
+      storage,
+      event: 'fast.result',
+      payload: {
+        trace_id: 'trace-2',
+        summary: {
+          text: 'already have summary'
+        }
+      }
+    })
+
+    finalizeV2TraceSession({
+      storage,
+      message: {
+        content: '   '
+      }
+    })
+
+    const snapshot = readV2TraceSession(storage)
+    expect(snapshot.latest_summary).toBe('already have summary')
   })
 })
