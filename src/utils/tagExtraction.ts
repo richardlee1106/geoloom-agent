@@ -17,25 +17,121 @@ const WEAK_CATEGORY_PATTERNS = [
   )
 ]
 
-const ALIAS_REPLACEMENTS = [
+const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [new RegExp('\\u6e56\\u5927', 'gu'), '\u6e56\u5317\u5927\u5b66'],
   [new RegExp('\\u6b66\\u5927', 'gu'), '\u6b66\u6c49\u5927\u5b66'],
   [new RegExp('\\u534e\\u79d1', 'gu'), '\u534e\u4e2d\u79d1\u6280\u5927\u5b66']
 ]
 
-function clamp01(value) {
+type AnyRecord = Record<string, unknown>
+
+type PoiLike = {
+  id?: unknown
+  poiid?: unknown
+  name?: unknown
+  poi_name?: unknown
+  poiName?: unknown
+  title?: unknown
+  label?: unknown
+  type?: unknown
+  category?: unknown
+  category_small?: unknown
+  category_mid?: unknown
+  category_big?: unknown
+  score?: unknown
+  relevance_score?: unknown
+  relevanceScore?: unknown
+  weight?: unknown
+  geometry?: {
+    coordinates?: unknown
+    [key: string]: unknown
+  } | null
+  properties?: AnyRecord | null
+  [key: string]: unknown
+}
+
+type IntentMetaLike = {
+  queryType?: unknown
+  query_type?: unknown
+  intentMode?: unknown
+  intent_mode?: unknown
+  queryPlan?: AnyRecord | null
+  query_plan?: AnyRecord | null
+}
+
+type NormalizedIntentMeta = {
+  queryType: string
+  intentMode: string
+  queryPlan: AnyRecord
+}
+
+type StageOneCandidate = {
+  id: unknown
+  poi: PoiLike
+  name: string
+  key: string
+  category: string
+  address: string
+  coords: [number, number] | null
+  baseScoreRaw: number
+  index: number
+}
+
+type MergedCandidate = {
+  key: string
+  names: string[]
+  pois: PoiLike[]
+  count: number
+  baseScoreRaw: number
+  strongestBase: number
+  category: string
+  address: string
+  coords: [number, number] | null
+  representativePoi?: PoiLike
+  representativeId?: unknown
+  name: string
+}
+
+type ScoredCandidate = MergedCandidate & {
+  baseScore: number
+  semanticScore: number
+  geoScore: number
+  rerankScore: number
+}
+
+type BuildPlaceTagsOptions = {
+  topK?: unknown
+  intentMeta?: IntentMetaLike | null
+}
+
+type PlaceTag = {
+  id: unknown
+  name: string
+  type: string
+  weight: number
+  score: number
+  scoreBreakdown: {
+    base: number
+    semantic: number
+    geo: number
+  }
+  aliasCount: number
+  originalPoi: PoiLike | null
+}
+
+function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
   if (value <= 0) return 0
   if (value >= 1) return 1
   return value
 }
 
-function toFiniteNumber(value, fallback = 0) {
+function toFiniteNumber(value: unknown, fallback = 0): number {
   const num = Number(value)
   return Number.isFinite(num) ? num : fallback
 }
 
-function pickText(...values) {
+function pickText(...values: unknown[]): string {
   for (const value of values) {
     if (value === null || value === undefined) continue
     const text = String(value).trim()
@@ -44,19 +140,19 @@ function pickText(...values) {
   return ''
 }
 
-function normalizeWhitespace(text) {
+function normalizeWhitespace(text: unknown): string {
   return String(text || '')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
-function normalizeNameForDisplay(name) {
+function normalizeNameForDisplay(name: string): string {
   return normalizeWhitespace(name)
     .replace(/(?:\uFF08|\()\s*/gu, '\uFF08')
     .replace(/\s*(?:\uFF09|\))/gu, '\uFF09')
 }
 
-function normalizeNameKey(name) {
+function normalizeNameKey(name: unknown): string {
   let text = normalizeWhitespace(name)
   if (!text) return ''
 
@@ -72,7 +168,7 @@ function normalizeNameKey(name) {
   return text
 }
 
-function isWeakName(name, category) {
+function isWeakName(name: string, category: string): boolean {
   const text = normalizeWhitespace(name)
   if (!text) return true
   if (text.length < 2) return true
@@ -82,12 +178,14 @@ function isWeakName(name, category) {
   return false
 }
 
-function normalizeIntentMeta(intentMeta) {
+function normalizeIntentMeta(intentMeta: IntentMetaLike | null | undefined): NormalizedIntentMeta {
   const queryType = pickText(intentMeta?.queryType, intentMeta?.query_type).toLowerCase()
   const intentMode = pickText(intentMeta?.intentMode, intentMeta?.intent_mode).toLowerCase()
   const queryPlan = intentMeta?.queryPlan && typeof intentMeta.queryPlan === 'object'
     ? intentMeta.queryPlan
-    : {}
+    : intentMeta?.query_plan && typeof intentMeta.query_plan === 'object'
+      ? intentMeta.query_plan
+      : {}
 
   return {
     queryType,
@@ -96,7 +194,7 @@ function normalizeIntentMeta(intentMeta) {
   }
 }
 
-function expandKeywordsFromText(text, output, seen) {
+function expandKeywordsFromText(text: unknown, output: string[], seen: Set<string>): void {
   const normalized = normalizeWhitespace(text)
   if (!normalized) return
 
@@ -127,11 +225,11 @@ function expandKeywordsFromText(text, output, seen) {
   }
 }
 
-function buildSemanticKeywords(intentMeta) {
+function buildSemanticKeywords(intentMeta: IntentMetaLike | null | undefined): string[] {
   const meta = normalizeIntentMeta(intentMeta)
   const queryPlan = meta.queryPlan
-  const keywords = []
-  const seen = new Set()
+  const keywords: string[] = []
+  const seen = new Set<string>()
 
   const sources = [
     queryPlan.semantic_query,
@@ -149,7 +247,7 @@ function buildSemanticKeywords(intentMeta) {
   return keywords.slice(0, 40)
 }
 
-function extractPoiName(poi = {}) {
+function extractPoiName(poi: PoiLike = {}): string {
   return pickText(
     poi.name,
     poi.poi_name,
@@ -164,7 +262,7 @@ function extractPoiName(poi = {}) {
   )
 }
 
-function extractPoiCategory(poi = {}) {
+function extractPoiCategory(poi: PoiLike = {}): string {
   return pickText(
     poi.type,
     poi.category,
@@ -181,7 +279,7 @@ function extractPoiCategory(poi = {}) {
   )
 }
 
-function extractPoiAddress(poi = {}) {
+function extractPoiAddress(poi: PoiLike = {}): string {
   return pickText(
     poi.address,
     poi.addr,
@@ -191,7 +289,7 @@ function extractPoiAddress(poi = {}) {
   )
 }
 
-function extractPoiCoordinates(poi = {}) {
+function extractPoiCoordinates(poi: PoiLike = {}): [number, number] | null {
   const geometry = poi.geometry && typeof poi.geometry === 'object' ? poi.geometry : {}
   const coordinates = Array.isArray(geometry.coordinates) ? geometry.coordinates : null
   if (!coordinates || coordinates.length < 2) return null
@@ -201,7 +299,7 @@ function extractPoiCoordinates(poi = {}) {
   return [lon, lat]
 }
 
-function extractBaseScore(poi = {}, fallback = 0) {
+function extractBaseScore(poi: PoiLike = {}, fallback = 0): number {
   const score = toFiniteNumber(
     poi.score ??
       poi.relevance_score ??
@@ -214,7 +312,10 @@ function extractBaseScore(poi = {}, fallback = 0) {
   return Number.isFinite(score) ? score : fallback
 }
 
-function semanticMatchScore(candidate, keywords) {
+function semanticMatchScore(
+  candidate: Pick<StageOneCandidate | MergedCandidate, 'name' | 'category' | 'address'>,
+  keywords: string[]
+): number {
   if (!keywords.length) return 0.5
   const text = `${candidate.name} ${candidate.category} ${candidate.address}`.toLowerCase()
   if (!text.trim()) return 0
@@ -231,8 +332,8 @@ function semanticMatchScore(candidate, keywords) {
   return clamp01(hit / Math.max(1, keywords.length * 0.85))
 }
 
-function estimateGeoScores(candidates) {
-  const withCoords = candidates.filter((item) => Array.isArray(item.coords))
+function estimateGeoScores(candidates: Array<Pick<StageOneCandidate | MergedCandidate, 'coords'>>): number[] {
+  const withCoords = candidates.filter((item): item is typeof item & { coords: [number, number] } => Array.isArray(item.coords))
   if (!withCoords.length) {
     return candidates.map(() => 0.25)
   }
@@ -274,7 +375,7 @@ function estimateGeoScores(candidates) {
   })
 }
 
-function resolveScoreWeights(intentMeta) {
+function resolveScoreWeights(intentMeta: IntentMetaLike | null | undefined): { base: number; semantic: number; geo: number } {
   const meta = normalizeIntentMeta(intentMeta)
   if (meta.queryType === 'poi_search' || meta.intentMode === 'local_search') {
     return { base: 0.42, semantic: 0.43, geo: 0.15 }
@@ -285,7 +386,7 @@ function resolveScoreWeights(intentMeta) {
   return { base: 0.4, semantic: 0.35, geo: 0.25 }
 }
 
-function pickRepresentativeName(names = [], fallback = '') {
+function pickRepresentativeName(names: string[] = [], fallback = ''): string {
   const valid = names
     .map((name) => normalizeNameForDisplay(name))
     .filter(Boolean)
@@ -294,8 +395,8 @@ function pickRepresentativeName(names = [], fallback = '') {
   return valid[0]
 }
 
-function buildCandidatesFromPois(pois = []) {
-  const candidates = []
+function buildCandidatesFromPois(pois: PoiLike[] = []): StageOneCandidate[] {
+  const candidates: StageOneCandidate[] = []
   for (let index = 0; index < pois.length; index += 1) {
     const poi = pois[index]
     const name = extractPoiName(poi)
@@ -318,8 +419,8 @@ function buildCandidatesFromPois(pois = []) {
   return candidates
 }
 
-function mergeAliasCandidates(candidates = []) {
-  const merged = new Map()
+function mergeAliasCandidates(candidates: StageOneCandidate[] = []): MergedCandidate[] {
+  const merged = new Map<string, Omit<MergedCandidate, 'name'>>()
 
   for (const candidate of candidates) {
     if (!candidate.key) continue
@@ -357,7 +458,10 @@ function mergeAliasCandidates(candidates = []) {
   }))
 }
 
-function applySecondStageRerank(candidates, { intentMeta, topK }) {
+function applySecondStageRerank(
+  candidates: MergedCandidate[],
+  { intentMeta, topK }: { intentMeta: IntentMetaLike | null | undefined; topK: number }
+): ScoredCandidate[] {
   if (!candidates.length) return []
 
   const meta = normalizeIntentMeta(intentMeta)
@@ -379,7 +483,7 @@ function applySecondStageRerank(candidates, { intentMeta, topK }) {
     const nameKey = normalizeNameKey(item.name)
     const categoryKey = normalizeNameKey(item.category)
     const anchorBoost = anchorToken && (nameKey.includes(anchorToken) || anchorToken.includes(nameKey)) ? 0.24 : 0
-    const categoryBoost = categoryTokens.some((token) => {
+    const categoryBoost = categoryKey && categoryTokens.some((token) => {
       if (!token) return false
       return (
         categoryKey.includes(token) ||
@@ -427,7 +531,10 @@ function applySecondStageRerank(candidates, { intentMeta, topK }) {
   return filtered.slice(0, Math.max(1, topK))
 }
 
-export function buildPlaceTags(pois = [], options = {}) {
+export function buildPlaceTags(
+  pois: PoiLike[] = [],
+  options: BuildPlaceTagsOptions = {}
+): PlaceTag[] {
   const topK = Math.max(1, Number(options?.topK) || 20)
   const intentMeta = options?.intentMeta || null
 

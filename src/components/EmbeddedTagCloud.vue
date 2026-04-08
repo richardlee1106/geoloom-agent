@@ -59,7 +59,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { buildPlaceTags } from '../utils/tagExtraction.js'
+import { buildPlaceTags } from '../utils/tagExtraction'
 
 const props = defineProps({
   pois: { type: Array, default: () => [] },

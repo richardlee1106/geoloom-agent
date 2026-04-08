@@ -95,4 +95,43 @@ describe('buildPlaceTags', () => {
     expect(tags.length).toBeGreaterThan(0)
     expect(tags[0].name.includes('湖北大学') || tags[0].name.includes('湖大')).toBe(true)
   })
+
+  it('does not give empty-category pois a higher rerank score than unrelated categorized pois', () => {
+    const options = {
+      topK: 20,
+      intentMeta: {
+        queryType: 'poi_search',
+        intentMode: 'local_search',
+        queryPlan: {
+          semantic_query: '湖北大学周边咖啡店',
+          anchor: '湖北大学',
+          categories: ['咖啡厅']
+        }
+      }
+    }
+
+    const [emptyCategoryTag] = buildPlaceTags([
+      createPoi({
+        id: 1,
+        name: '东湖游客中心',
+        category: '',
+        score: 0.95,
+        lon: 114.31,
+        lat: 30.60
+      })
+    ], options)
+
+    const [categorizedTag] = buildPlaceTags([
+      createPoi({
+        id: 2,
+        name: '东湖游客中心',
+        category: '游客中心',
+        score: 0.95,
+        lon: 114.31,
+        lat: 30.60
+      })
+    ], options)
+
+    expect(emptyCategoryTag.score).toBeLessThanOrEqual(categorizedTag.score)
+  })
 })
