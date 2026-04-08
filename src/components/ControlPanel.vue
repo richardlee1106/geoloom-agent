@@ -386,7 +386,7 @@ import { ElNotification } from 'element-plus/es/components/notification/index';
 import { ElOption, ElSelect } from 'element-plus/es/components/select/index';
 import { ElSwitch } from 'element-plus/es/components/switch/index';
 import { ElTooltip } from 'element-plus/es/components/tooltip/index';
-import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
+import DataLoaderWorker from '../workers/dataLoader.worker?worker';
 import { SPATIAL_API_BASE_URL } from '../config';
 import { fetchCategoryCatalogTree } from '../utils/categoryCatalogClient';
 

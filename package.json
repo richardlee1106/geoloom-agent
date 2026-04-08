@@ -19,7 +19,7 @@
     "build:backend": "npm --prefix backend run build",
     "typecheck:frontend": "vue-tsc --noEmit -p tsconfig.json",
     "test": "npm run test:frontend && npm run test:backend",
-    "test:frontend": "vitest run src/utils/__tests__/aiServiceModelTiming.spec.js src/utils/__tests__/refinedResultEvidence.spec.js src/utils/__tests__/sseEventSchema.spec.js src/composables/ai/__tests__/useSpatialRequestBuilder.spec.js",
+    "test:frontend": "vitest run src/utils/__tests__/aiServiceModelTiming.spec.js src/utils/__tests__/refinedResultEvidence.spec.js src/utils/__tests__/sseEventSchema.spec.js src/composables/ai/__tests__/useSpatialRequestBuilder.spec.js src/workers/__tests__/dataLoader.worker.spec.js",
     "test:backend": "npm --prefix backend run test",
     "prestart": "node scripts/cleanup-ports.mjs 3210 4173 3411 8100",
     "preview": "npm run preview:v4",
