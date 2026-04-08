@@ -437,7 +437,7 @@ function renderToMap() {
 }
 
 onMounted(() => {
-  worker = new Worker(new URL('../workers/basic.worker.js', import.meta.url), { type: 'module' })
+  worker = new Worker(new URL('../workers/basic.worker.ts', import.meta.url), { type: 'module' })
 
   worker.onmessage = (event) => {
     const layoutTags = Array.isArray(event.data) ? event.data : []

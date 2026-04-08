@@ -47,7 +47,7 @@
 <script setup>
 import { ref, onMounted, watch, computed } from 'vue';
 import * as d3 from 'd3';
-import BasicWorker from '../workers/basic.worker.js?worker';
+import BasicWorker from '../workers/basic.worker?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
 import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
