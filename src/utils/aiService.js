@@ -12,7 +12,7 @@
 // 后端 API 基础路径
 import { AI_API_BASE_URL, SPATIAL_API_BASE_URL } from '../config';
 import { validateSSEEventPayload } from '../../shared/sseEventSchema';
-import { sendV3ChatStream, checkV3Service, getV3Models, getV3Status } from './v3aiService.js';
+import { sendV3ChatStream, checkV3Service, getV3Models, getV3Status } from './v3aiService';
 
 const BACKEND_VERSION = String(import.meta.env.VITE_BACKEND_VERSION || import.meta.env.MODE || '').toLowerCase();
 const IS_V3_MODE = BACKEND_VERSION === 'v3';

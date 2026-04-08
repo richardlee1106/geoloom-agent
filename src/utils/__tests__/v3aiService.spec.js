@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { sendV3ChatStream } from '../v3aiService.js'
+import { sendV3ChatStream } from '../v3aiService'
 
 function createSseResponse(chunks) {
   const encoder = new TextEncoder()
@@ -100,5 +100,26 @@ describe('sendV3ChatStream', () => {
       errors: expect.any(Array)
     }))
     expect(onMeta).not.toHaveBeenCalledWith('stage', expect.anything())
+  })
+
+  it('preserves visible whitespace between streamed text chunks after stripping think tags', async () => {
+    const onChunk = vi.fn()
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      createSseResponse([
+        'data: {"type":"text","content":"推荐 "}\n\n',
+        'data: {"type":"text","content":"<think>internal</think>湖北大学附近"}\n\n'
+      ])
+    )
+
+    const fullText = await sendV3ChatStream(
+      [{ role: 'user', content: '给我推荐一个地方' }],
+      onChunk,
+      { requestId: 'req_v3_spaces_001' }
+    )
+
+    expect(fullText).toBe('推荐 湖北大学附近')
+    expect(onChunk).toHaveBeenNthCalledWith(1, '推荐 ')
+    expect(onChunk).toHaveBeenNthCalledWith(2, '湖北大学附近')
   })
 })
