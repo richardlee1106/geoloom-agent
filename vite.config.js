@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
 const childProcessShimPath = fileURLToPath(
-  new URL('./src/shims/child-process-browser.js', import.meta.url)
+  new URL('./src/shims/child-process-browser.ts', import.meta.url)
 )
 const earcutEsmPath = fileURLToPath(
   new URL('./node_modules/earcut/src/earcut.js', import.meta.url)
