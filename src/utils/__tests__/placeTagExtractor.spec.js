@@ -66,4 +66,28 @@ describe('buildPlaceTagsFromPois', () => {
     expect(tags[0].name).toBe('D地标')
     expect(tags[1].name).toBe('C地标')
   })
+
+  it('keeps the highest-weight poi as the representative sample when weights come from fallback relevance fields', () => {
+    const pois = [
+      createPoi('沙湖公园', undefined, {
+        category: '公园',
+        properties: {
+          relevance_score: 0.95,
+          marker: 'strong'
+        }
+      }),
+      createPoi('沙湖公园(东门)', 0.2, {
+        category: '景点',
+        properties: {
+          marker: 'weak'
+        }
+      })
+    ]
+
+    const [tag] = buildPlaceTagsFromPois(pois, { intentMode: 'macro', maxCount: 5 })
+
+    expect(tag.name).toBe('沙湖公园')
+    expect(tag.originalPoi?.properties?.marker).toBe('strong')
+    expect(tag.type).toBe('公园')
+  })
 })
