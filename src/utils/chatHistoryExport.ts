@@ -1,18 +1,40 @@
-const CIRCLED_NUMERALS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳']
+const CIRCLED_NUMERALS = [
+  '①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩',
+  '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'
+] as const
 
-function formatDialogueIndex(index) {
+type ChatHistoryMessage = {
+  role?: unknown
+  content?: unknown
+  timestamp?: unknown
+  thinkingMessage?: unknown
+  reasoningContent?: unknown
+}
+
+type BuildChatHistoryExportOptions = {
+  poiCount?: number
+  exportedAt?: unknown
+  sanitizeAssistantText?: (text: string) => unknown
+  formatNow?: (value: unknown) => string
+  formatTimestamp?: (value: unknown) => string
+}
+
+function formatDialogueIndex(index: unknown): string {
   const numeric = Number(index)
   if (!Number.isFinite(numeric) || numeric <= 0) return ''
   return CIRCLED_NUMERALS[numeric - 1] || `(${numeric})`
 }
 
-export function buildChatHistoryExportContent(messages = [], {
-  poiCount = 0,
-  exportedAt = new Date(),
-  sanitizeAssistantText = (text) => String(text || ''),
-  formatNow = (value) => new Date(value).toLocaleString(),
-  formatTimestamp = (value) => new Date(value).toLocaleTimeString()
-} = {}) {
+export function buildChatHistoryExportContent(
+  messages: ChatHistoryMessage[] = [],
+  {
+    poiCount = 0,
+    exportedAt = new Date(),
+    sanitizeAssistantText = (text) => text,
+    formatNow = (value) => new Date(value as string | number | Date).toLocaleString(),
+    formatTimestamp = (value) => new Date(value as string | number | Date).toLocaleTimeString()
+  }: BuildChatHistoryExportOptions = {}
+): string {
   let content = '===== 标签云智能助手对话记录 =====\n\n'
   content += `导出时间: ${formatNow(exportedAt)}\n`
   content += `选中POI数量: ${poiCount}\n\n`
@@ -32,7 +54,7 @@ export function buildChatHistoryExportContent(messages = [], {
     const time = formatTimestamp(msg?.timestamp ?? exportedAt)
     const rawContent = String(msg?.content || '')
     const safeContent = msg?.role === 'assistant'
-      ? sanitizeAssistantText(rawContent)
+      ? String(sanitizeAssistantText(rawContent) || '')
       : rawContent
 
     content += `${dialogueMarker} [${role}] ${time}:\n${safeContent}\n\n`

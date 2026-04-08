@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildChatHistoryExportContent } from '../chatHistoryExport.js'
+import { buildChatHistoryExportContent } from '../chatHistoryExport'
 
 describe('chatHistoryExport', () => {
   it('includes numbered dialogue entries and assistant reasoning content in exported chat history', () => {

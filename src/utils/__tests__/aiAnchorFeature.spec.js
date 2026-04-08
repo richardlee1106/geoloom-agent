@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildAiAnchorFeatureFromMessage } from '../aiAnchorFeature.js'
+import { buildAiAnchorFeatureFromMessage } from '../aiAnchorFeature'
 
 describe('aiAnchorFeature', () => {
   it('keeps the semantic anchor even when a poi shares the same coordinates', () => {
@@ -55,6 +55,34 @@ describe('aiAnchorFeature', () => {
       properties: {
         名称: '三角路地铁站',
         title: '三角路地铁站'
+      }
+    })
+  })
+
+  it('falls back to poi coord sys hints when analysis stats only provide blank coord sys text', () => {
+    const message = {
+      analysisStats: {
+        anchor_lon: 114.33,
+        anchor_lat: 30.58,
+        anchor_coord_sys: '   '
+      },
+      intentPreview: {
+        displayAnchor: '湖北大学'
+      }
+    }
+
+    const pois = [
+      {
+        properties: {
+          _coordSys: 'wgs84'
+        }
+      }
+    ]
+
+    expect(buildAiAnchorFeatureFromMessage(message, pois, { fallbackCoordSys: 'gcj02' })).toMatchObject({
+      coordSys: 'wgs84',
+      properties: {
+        _coordSys: 'wgs84'
       }
     })
   })

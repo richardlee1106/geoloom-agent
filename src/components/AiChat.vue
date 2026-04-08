@@ -392,7 +392,7 @@ import {
   checkAIService, 
   getCurrentProviderInfo
 } from '../utils/aiService.js';
-import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence.js';
+import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence';
 import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher';
 import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder';
 import {
@@ -410,10 +410,10 @@ import { marked } from 'marked';
 import { resolveAnalysisSignals } from '../utils/analysisSignals';
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
 import { isGeneralQaMessage } from '../utils/analysisBoardVisibility';
-import { buildChatHistoryExportContent } from '../utils/chatHistoryExport.js';
+import { buildChatHistoryExportContent } from '../utils/chatHistoryExport';
 import {
   buildAiAnchorFeatureFromMessage
-} from '../utils/aiAnchorFeature.js';
+} from '../utils/aiAnchorFeature';
 import {
   getLocationActionLabel,
   getUserLocationSummary

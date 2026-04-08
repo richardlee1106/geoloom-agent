@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
 import { useAiStreamDispatcher } from '../useAiStreamDispatcher'
-import { normalizeRefinedResultEvidence } from '../../../utils/refinedResultEvidence.js'
+import { normalizeRefinedResultEvidence } from '../../../utils/refinedResultEvidence'
 
 function setupDispatcher() {
   const messagesRef = ref([{ role: 'assistant', content: '' }])
