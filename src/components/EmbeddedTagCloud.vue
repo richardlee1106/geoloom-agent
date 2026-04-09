@@ -1,24 +1,11 @@
 ﻿<template>
   <div ref="containerRef" class="embedded-tagcloud-container">
     <div class="tagcloud-header">
-      <span class="tagcloud-title">地名标签云</span>
+      <div class="tagcloud-title-group">
+        <span class="tagcloud-title">代表性点标签云</span>
+        <span class="tagcloud-subtitle">基于当前回答回传的代表性样本，不是全量 POI</span>
+      </div>
       <div class="tagcloud-controls">
-        <button
-          class="control-btn"
-          :class="{ active: currentMode === 'coarse' }"
-          title="粗粒聚合（最多 50 个）"
-          @click="switchMode('coarse')"
-        >
-          粗粒聚合
-        </button>
-        <button
-          class="control-btn"
-          :class="{ active: currentMode === 'fine' }"
-          title="精细聚合（最多 20 个）"
-          @click="switchMode('fine')"
-        >
-          精细聚合
-        </button>
         <button
           class="control-btn render-btn"
           title="将当前标签对应 POI 渲染到地图"
@@ -31,15 +18,11 @@
 
     <div
       class="tagcloud-canvas-wrapper"
-      @mouseenter="lockContextScroll"
-      @mouseleave="unlockContextScroll"
     >
       <canvas
         ref="canvasRef"
         class="tagcloud-canvas"
         @click="handleCanvasClick"
-        @mousedown="handleCanvasMouseDown"
-        @wheel.passive="handleCanvasWheel"
       ></canvas>
 
       <div v-if="isCalculating" class="loading-overlay">
@@ -50,9 +33,9 @@
 
     <div class="tagcloud-footer">
       <span class="tag-count">
-        {{ placedTags.length }} / {{ currentMode === 'coarse' ? 50 : 20 }} 个标签
+        样本 {{ pois.length }} 个
       </span>
-      <span class="mode-indicator">{{ modeLabel }}</span>
+      <span class="mode-indicator">{{ modeLabel }} · 已提炼 {{ placedTags.length }} 个标签</span>
     </div>
   </div>
 </template>
@@ -79,17 +62,11 @@ const placedTags = ref([])
 const canvasWidth = ref(Math.max(240, Number(props.width) || 360))
 
 const transform = ref({ k: 1, x: 0, y: 0 })
-const isDragging = ref(false)
-const lastMousePos = ref({ x: 0, y: 0 })
-const dragStartPos = ref({ x: 0, y: 0 })
 
 let worker = null
 let resizeObserver = null
 let renderRaf = null
 let originalPoiById = new Map()
-let scrollLockTarget = null
-let previousOverflowY = ''
-let previousOverscrollBehavior = ''
 
 const modeLabel = computed(() => {
   const mode = String(props.intentMeta?.intent_mode || props.intentMeta?.intentMode || props.intentMode || '')
@@ -107,26 +84,6 @@ function scheduleRender() {
     renderRaf = null
     renderCanvas()
   })
-}
-
-function lockContextScroll() {
-  if (scrollLockTarget) return
-  const target = containerRef.value?.closest('.chat-messages')
-  if (!target) return
-  scrollLockTarget = target
-  previousOverflowY = target.style.overflowY
-  previousOverscrollBehavior = target.style.overscrollBehavior
-  target.style.overflowY = 'hidden'
-  target.style.overscrollBehavior = 'none'
-}
-
-function unlockContextScroll() {
-  if (!scrollLockTarget) return
-  scrollLockTarget.style.overflowY = previousOverflowY
-  scrollLockTarget.style.overscrollBehavior = previousOverscrollBehavior
-  scrollLockTarget = null
-  previousOverflowY = ''
-  previousOverscrollBehavior = ''
 }
 
 function getTagColor(index) {
@@ -313,7 +270,7 @@ function fitToView() {
     return
   }
 
-  const padding = 20
+  const padding = 30
   const w = Math.max(200, canvasWidth.value)
   const h = props.height
   const contentWidth = Math.max(1, maxX - minX + padding * 2)
@@ -321,7 +278,7 @@ function fitToView() {
 
   const scaleX = w / contentWidth
   const scaleY = h / contentHeight
-  const scale = Math.min(scaleX, scaleY, 1.15)
+  const scale = Math.min(scaleX, scaleY, 1)
 
   const contentCenterX = (minX + maxX) / 2
   const contentCenterY = (minY + maxY) / 2
@@ -335,66 +292,7 @@ function fitToView() {
   scheduleRender()
 }
 
-function switchMode(mode) {
-  if (mode === currentMode.value) return
-  currentMode.value = mode
-  calculateLayout()
-}
-
-function handleCanvasMouseDown(event) {
-  isDragging.value = true
-  lastMousePos.value = { x: event.clientX, y: event.clientY }
-  dragStartPos.value = { x: event.clientX, y: event.clientY }
-  document.body.style.cursor = 'grabbing'
-
-  window.addEventListener('mousemove', handleWindowMouseMove)
-  window.addEventListener('mouseup', handleWindowMouseUp)
-}
-
-function handleWindowMouseMove(event) {
-  if (!isDragging.value) return
-
-  const dx = event.clientX - lastMousePos.value.x
-  const dy = event.clientY - lastMousePos.value.y
-
-  transform.value.x += dx
-  transform.value.y += dy
-  lastMousePos.value = { x: event.clientX, y: event.clientY }
-  scheduleRender()
-}
-
-function handleWindowMouseUp() {
-  isDragging.value = false
-  document.body.style.cursor = ''
-  window.removeEventListener('mousemove', handleWindowMouseMove)
-  window.removeEventListener('mouseup', handleWindowMouseUp)
-}
-
-function handleCanvasWheel(event) {
-  const zoomIntensity = 0.1
-  const delta = event.deltaY > 0 ? 1 - zoomIntensity : 1 + zoomIntensity
-
-  const rect = canvasRef.value?.getBoundingClientRect()
-  if (!rect) return
-
-  const mouseX = event.clientX - rect.left
-  const mouseY = event.clientY - rect.top
-
-  const newK = transform.value.k * delta
-  if (newK < 0.1 || newK > 10) return
-
-  transform.value.x = mouseX - (mouseX - transform.value.x) * delta
-  transform.value.y = mouseY - (mouseY - transform.value.y) * delta
-  transform.value.k = newK
-
-  scheduleRender()
-}
-
 function handleCanvasClick(event) {
-  const dx = Math.abs(event.clientX - dragStartPos.value.x)
-  const dy = Math.abs(event.clientY - dragStartPos.value.y)
-  if (dx > 3 || dy > 3) return
-
   const rect = canvasRef.value?.getBoundingClientRect()
   if (!rect) return
 
@@ -482,8 +380,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  unlockContextScroll()
-
   if (renderRaf) {
     cancelAnimationFrame(renderRaf)
     renderRaf = null
@@ -498,9 +394,6 @@ onUnmounted(() => {
     resizeObserver.disconnect()
     resizeObserver = null
   }
-
-  window.removeEventListener('mousemove', handleWindowMouseMove)
-  window.removeEventListener('mouseup', handleWindowMouseUp)
 })
 
 watch(
@@ -525,11 +418,19 @@ watch(
 
 .tagcloud-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid rgba(100, 120, 180, 0.2);
   background: rgba(40, 50, 70, 0.5);
+}
+
+.tagcloud-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .tagcloud-title {
@@ -538,9 +439,16 @@ watch(
   font-weight: 600;
 }
 
+.tagcloud-subtitle {
+  color: rgba(150, 170, 200, 0.74);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .tagcloud-controls {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .control-btn {
@@ -557,12 +465,6 @@ watch(
 .control-btn:hover {
   border-color: rgba(120, 160, 220, 0.6);
   background: rgba(80, 100, 150, 0.5);
-}
-
-.control-btn.active {
-  border-color: rgba(100, 160, 240, 0.7);
-  background: rgba(60, 120, 200, 0.5);
-  color: #fff;
 }
 
 .control-btn.render-btn {
@@ -582,12 +484,8 @@ watch(
 
 .tagcloud-canvas {
   display: block;
-  cursor: grab;
+  cursor: default;
   user-select: none;
-}
-
-.tagcloud-canvas:active {
-  cursor: grabbing;
 }
 
 .loading-overlay {
@@ -631,5 +529,25 @@ watch(
 
 .mode-indicator {
   font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .tagcloud-header {
+    flex-direction: column;
+  }
+
+  .tagcloud-controls {
+    width: 100%;
+  }
+
+  .control-btn.render-btn {
+    width: 100%;
+  }
+
+  .tagcloud-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
 }
 </style>

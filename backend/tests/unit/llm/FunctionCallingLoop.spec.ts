@@ -115,4 +115,48 @@ describe('runFunctionCallingLoop', () => {
     expect(result.assistantMessage?.content).toBe('这是完整上下文下的大模型总结。')
     expect(result.traces).toHaveLength(1)
   })
+
+  it('forwards request-level timeout hints to the provider', async () => {
+    const provider = {
+      isReady: () => true,
+      getStatus: () => ({
+        ready: true,
+        provider: 'mock-openai-compatible',
+        model: 'mock-model',
+      }),
+      complete: vi.fn().mockResolvedValue({
+        assistantMessage: {
+          role: 'assistant',
+          content: '完成',
+          toolCalls: [],
+        },
+        toolCalls: [],
+        finishReason: 'stop' as const,
+      }),
+    }
+
+    await runFunctionCallingLoop({
+      provider,
+      tools: [],
+      messages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: '请快速读懂当前区域' },
+      ],
+      requestTimeoutMs: 30000,
+      onToolCall: async () => ({
+        content: '{}',
+        trace: {
+          id: 'noop',
+          skill: 'postgis',
+          action: 'noop',
+          status: 'done',
+          payload: {},
+        },
+      }),
+    })
+
+    expect(provider.complete).toHaveBeenCalledWith(expect.objectContaining({
+      timeoutMs: 30000,
+    }))
+  })
 })

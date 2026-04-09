@@ -1,3 +1,5 @@
+import type { SemanticEvidenceStatus } from '../../../integration/dependencyStatus.js'
+import { mergeSemanticEvidenceStatuses } from '../../../integration/dependencyStatus.js'
 import type { SkillExecutionResult } from '../../types.js'
 import type { VectorRecord } from './encodeQuery.js'
 
@@ -22,6 +24,7 @@ export function scoreSimilarityAction(
   },
 ): SkillExecutionResult<{
   scores: Array<{ candidate_id: string, score: number }>
+  semantic_evidence?: SemanticEvidenceStatus
 }> {
   const query = deps.store.get(payload.query_vector_ref)
   if (!query) {
@@ -46,10 +49,20 @@ export function scoreSimilarityAction(
       score: Number(cosineSimilarity(query.vector, candidate.vector).toFixed(4)),
     }))
     .sort((a, b) => b.score - a.score)
+  const matchedCandidates = payload.candidate_vector_refs
+    .map((vectorRef) => deps.store.get(vectorRef))
+    .filter((item): item is VectorRecord => Boolean(item))
+  const semanticEvidence = mergeSemanticEvidenceStatuses([
+    query.semanticEvidence,
+    ...matchedCandidates.map((candidate) => candidate.semanticEvidence),
+  ])
 
   return {
     ok: true,
-    data: { scores },
+    data: {
+      scores,
+      semantic_evidence: semanticEvidence,
+    },
     meta: {
       action: 'score_similarity',
       audited: false,

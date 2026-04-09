@@ -12,6 +12,7 @@ type NormalizedRefinedResultEvidence = {
   vernacularRegions: unknown[]
   fuzzyRegions: unknown[]
   stats: AnyRecord | null
+  toolCalls: unknown[]
   intent: NormalizedIntentMeta | null
   hasEvidence: boolean
 }
@@ -140,6 +141,12 @@ export function normalizeRefinedResultEvidence(payload: unknown): NormalizedRefi
     root.fuzzyRegions
   )
   const stats = pickObject(results.stats, results.analysisStats, root.stats, root.analysisStats)
+  const toolCalls = pickArray(
+    root.tool_calls,
+    root.toolCalls,
+    results.tool_calls,
+    results.toolCalls
+  )
   const intent = resolveIntentMeta(payload)
 
   const hotspotCount = Array.isArray(spatialClusters.hotspots) ? spatialClusters.hotspots.length : 0
@@ -156,6 +163,7 @@ export function normalizeRefinedResultEvidence(payload: unknown): NormalizedRefi
     vernacularRegions,
     fuzzyRegions,
     stats,
+    toolCalls,
     intent,
     hasEvidence
   }

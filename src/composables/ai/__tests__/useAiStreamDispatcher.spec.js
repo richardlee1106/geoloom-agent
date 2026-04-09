@@ -1,117 +1,80 @@
-import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
+import { describe, expect, it } from 'vitest'
 
 import { useAiStreamDispatcher } from '../useAiStreamDispatcher'
 import { normalizeRefinedResultEvidence } from '../../../utils/refinedResultEvidence'
 
-function setupDispatcher() {
-  const messagesRef = ref([{ role: 'assistant', content: '' }])
-  const extractedPOIsRef = ref([])
-  const emit = vi.fn()
+describe('useAiStreamDispatcher', () => {
+  it('records message-level agent events and tool calls for the new process timeline', () => {
+    const messagesRef = ref([
+      {
+        role: 'assistant',
+        content: '',
+        agentEvents: [],
+        toolCalls: [],
+      },
+    ])
+    const extractedPOIsRef = ref([])
+    const emitted = []
 
-  const dispatcher = useAiStreamDispatcher({
-    messagesRef,
-    extractedPOIsRef,
-    emit,
-    normalizeRefinedResultEvidence,
-    toEmbeddedIntentMode: () => ''
-  })
+    const { dispatchMetaEvent } = useAiStreamDispatcher({
+      messagesRef,
+      extractedPOIsRef,
+      emit: (eventName, payload) => emitted.push({ eventName, payload }),
+      normalizeRefinedResultEvidence,
+      toEmbeddedIntentMode: () => 'macro',
+    })
 
-  return {
-    dispatcher,
-    emit,
-    messagesRef
-  }
-}
-
-describe('useAiStreamDispatcher prefetch debug fields', () => {
-  it('hydrates schema metadata from trace events', () => {
-    const { dispatcher, messagesRef } = setupDispatcher()
-
-    dispatcher.dispatchMetaEvent({
-      type: 'trace',
+    dispatchMetaEvent({
+      type: 'thinking',
+      data: { status: 'start', message: '正在思考...' },
+      aiMessageIndex: 0,
+    })
+    dispatchMetaEvent({
+      type: 'intent_preview',
       data: {
-        request_id: 'req-42',
-        schema_version: 'v4.1',
-        capabilities: ['intent_meta', 'prefetch_debug']
+        displayAnchor: '湖北大学',
+        targetCategory: '咖啡店',
+        confidence: 0.92,
       },
       aiMessageIndex: 0,
-      fallbackIntentMode: 'macro'
     })
-
-    expect(messagesRef.value[0].traceId).toBe('req-42')
-    expect(messagesRef.value[0].schemaVersion).toBe('v4.1')
-    expect(messagesRef.value[0].capabilities).toEqual(['intent_meta', 'prefetch_debug'])
-  })
-
-  it('stores prefetch debug info from stats event', () => {
-    const { dispatcher, messagesRef } = setupDispatcher()
-
-    dispatcher.dispatchMetaEvent({
-      type: 'stats',
-      data: {
-        prefetch_degraded: true,
-        prefetch_wasted: false,
-        prefetch_overlap_delta_ms: -42
-      },
+    dispatchMetaEvent({
+      type: 'stage',
+      data: { name: 'tool_run' },
       aiMessageIndex: 0,
-      fallbackIntentMode: 'macro'
     })
-
-    expect(messagesRef.value[0].prefetchDebug).toEqual({
-      degraded: true,
-      wasted: false,
-      overlapDeltaMs: -42,
-      status: 'degraded'
-    })
-  })
-
-  it('stores prefetch debug info from refined_result event', () => {
-    const { dispatcher, messagesRef } = setupDispatcher()
-
-    dispatcher.dispatchMetaEvent({
+    dispatchMetaEvent({
       type: 'refined_result',
       data: {
         results: {
-          stats: {
-            prefetch_degraded: false,
-            prefetch_wasted: true,
-            prefetch_overlap_delta_ms: -120
-          }
-        }
+          boundary: { type: 'Polygon' },
+          stats: { cluster_count: 1 },
+          tool_calls: [
+            {
+              skill: 'postgis',
+              action: 'viewport_poi_scan',
+              status: 'done',
+            },
+          ],
+        },
       },
       aiMessageIndex: 0,
-      fallbackIntentMode: 'macro'
     })
 
-    expect(messagesRef.value[0].prefetchDebug).toEqual({
-      degraded: false,
-      wasted: true,
-      overlapDeltaMs: -120,
-      status: 'wasted'
+    const message = messagesRef.value[0]
+
+    expect(message.thinkingMessage).toBe('已识别：湖北大学 · 咖啡店')
+    expect(message.agentEvents.map((item) => item.title)).toEqual([
+      '识别问题',
+      '执行检索',
+      '汇总证据并生成回答',
+    ])
+    expect(message.toolCalls).toHaveLength(1)
+    expect(message.toolCalls[0]).toMatchObject({
+      skill: 'postgis',
+      action: 'viewport_poi_scan',
     })
-  })
-
-  it('keeps assistant message in thinking state until the outer stream finalizer completes', () => {
-    const { dispatcher, messagesRef } = setupDispatcher()
-    messagesRef.value[0] = {
-      role: 'assistant',
-      content: '',
-      isThinking: true,
-      isStreaming: true
-    }
-
-    dispatcher.dispatchMetaEvent({
-      type: 'thinking',
-      data: {
-        status: 'end',
-        message: '证据整理完成，正在生成结果...'
-      },
-      aiMessageIndex: 0,
-      fallbackIntentMode: 'macro'
-    })
-
-    expect(messagesRef.value[0].isThinking).toBe(true)
-    expect(messagesRef.value[0].thinkingMessage).toBe('证据整理完成，正在生成结果...')
+    expect(emitted.some((item) => item.eventName === 'ai-boundary')).toBe(true)
   })
 })

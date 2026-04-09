@@ -1,4 +1,4 @@
-import type { ComparisonPair, DeterministicIntent, EvidenceItem, EvidenceView, ResolvedAnchor } from '../chat/types.js'
+import type { AreaInsightInput, ComparisonPair, DeterministicIntent, EvidenceItem, EvidenceView, ResolvedAnchor } from '../chat/types.js'
 import { buildAreaOverviewView } from './views/AreaOverviewView.js'
 import { buildBucketView } from './views/BucketView.js'
 import { buildComparisonView } from './views/ComparisonView.js'
@@ -12,6 +12,7 @@ export class EvidenceViewFactory {
     anchor: ResolvedAnchor
     rows?: Record<string, unknown>[]
     items?: EvidenceItem[]
+    areaInsight?: AreaInsightInput
     secondaryAnchor?: ResolvedAnchor
     pairs?: ComparisonPair[]
   }): EvidenceView {
@@ -45,6 +46,7 @@ export class EvidenceViewFactory {
         anchor: input.anchor,
         rows: input.rows || [],
         intent: input.intent,
+        areaInsight: input.areaInsight,
       })
     }
 

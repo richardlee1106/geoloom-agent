@@ -21,4 +21,29 @@ describe('resolveApiBaseUrls', () => {
       spatialBase: 'http://127.0.0.1:3200'
     })
   })
+
+  it('keeps v4 dev requests on same-origin proxy when ai and spatial both point to the local v4 backend', () => {
+    expect(resolveApiBaseUrls({
+      MODE: 'v4',
+      VITE_BACKEND_VERSION: 'v4',
+      VITE_DEV_API_BASE: 'http://127.0.0.1:3210',
+      VITE_AI_DEV_API_BASE: 'http://127.0.0.1:3210',
+      VITE_SPATIAL_DEV_API_BASE: 'http://127.0.0.1:3210'
+    }, true)).toEqual({
+      aiBase: '',
+      spatialBase: ''
+    })
+  })
+
+  it('keeps explicit v4 split backends when spatial service is intentionally separated', () => {
+    expect(resolveApiBaseUrls({
+      MODE: 'v4',
+      VITE_BACKEND_VERSION: 'v4',
+      VITE_AI_DEV_API_BASE: 'http://127.0.0.1:3210',
+      VITE_SPATIAL_DEV_API_BASE: 'http://127.0.0.1:3411'
+    }, true)).toEqual({
+      aiBase: 'http://127.0.0.1:3210',
+      spatialBase: 'http://127.0.0.1:3411'
+    })
+  })
 })

@@ -50,6 +50,7 @@ export interface LLMResponse {
 export interface LLMCompletionRequest {
   messages: LLMMessage[]
   tools: ToolSchema[]
+  timeoutMs?: number
 }
 
 export interface LLMProvider {

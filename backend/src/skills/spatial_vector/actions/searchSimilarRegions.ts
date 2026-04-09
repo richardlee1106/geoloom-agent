@@ -1,3 +1,5 @@
+import type { SemanticEvidenceStatus } from '../../../integration/dependencyStatus.js'
+import { toSemanticEvidenceStatus } from '../../../integration/dependencyStatus.js'
 import type { SkillExecutionResult } from '../../types.js'
 import type { FaissIndex } from '../../../integration/faissIndex.js'
 
@@ -6,6 +8,7 @@ export async function searchSimilarRegionsAction(
   deps: { index: FaissIndex },
 ): Promise<SkillExecutionResult<{
   regions: Array<{ region_id: string, name: string, score: number, summary: string }>
+  semantic_evidence: SemanticEvidenceStatus
 }>> {
   const regions = (await deps.index.searchSimilarRegions(payload.text, payload.top_k || 5))
     .map((item) => ({
@@ -14,10 +17,14 @@ export async function searchSimilarRegionsAction(
       score: item.score,
       summary: item.summary,
     }))
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus())
 
   return {
     ok: true,
-    data: { regions },
+    data: {
+      regions,
+      semantic_evidence: semanticEvidence,
+    },
     meta: {
       action: 'search_similar_regions',
       audited: false,

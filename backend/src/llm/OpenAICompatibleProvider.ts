@@ -103,8 +103,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
       }
     }
 
+    const requestTimeoutMs = Number.isFinite(Number(request.timeoutMs)) && Number(request.timeoutMs) > 0
+      ? Number(request.timeoutMs)
+      : this.timeoutMs
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
 
     try {
       const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {

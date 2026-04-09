@@ -104,6 +104,7 @@ const IS_V4_MODE = BACKEND_VERSION === 'v4';
 const API_BASE = IS_V4_MODE ? `${AI_API_BASE_URL}/api/geo` : `${AI_API_BASE_URL}/api/ai`;
 
 const META_EVENT_TYPES = new Set([
+  'thinking', 'reasoning',
   'pois', 'stage', 'boundary', 'spatial_clusters',
   'vernacular_regions', 'fuzzy_regions', 'stats', 'progress',
   'partial', 'refined_result', 'schema_error', 'error'

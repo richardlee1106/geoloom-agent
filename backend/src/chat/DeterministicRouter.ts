@@ -30,8 +30,11 @@ const CATEGORY_HINTS: CategoryHint[] = [
 ]
 
 const AMBIGUOUS_ANCHORS = new Set(['这里', '这里附近', '这附近', '这片区', '当前区域', '当前片区', '此处'])
-const CURRENT_AREA_RE = /(这里|这里附近|这附近|这片区|当前区域|当前片区|此处)/u
-const AREA_OVERVIEW_RE = /(配套|业态|缺口|机会|主导业态|活力热点|热点|异常点|读懂当前区域|读懂这个区域|总结当前区域|看看.*配套|看看.*业态)/u
+const CURRENT_AREA_RE = /(这里|这里附近|这附近|这片区|这片区域|这个片区|这一片|当前区域|当前片区|此处)/u
+const AREA_OVERVIEW_RE = /(配套|业态|缺口|机会|主导业态|活力热点|热点|异常点|供给|需求|竞争|开店|开什么店|适合开什么店|值得优先考虑|读懂当前区域|读懂这个区域|读懂这片区域|读懂这片区|总结当前区域|总结这片区域|快速读懂这片区域|看看.*配套|看看.*业态)/u
+const AREA_SEMANTIC_CONTEXT_RE = /(居住片区|商业片区|混合片区|片区类型|更像.*片区|更像.*(居住|商业|混合)|说明依据)/u
+const ANCHOR_LEAD_IN_RE = /^(?:请帮我看看|请帮我看下|请帮我看一下|请帮我|帮我看看|帮我看下|帮我看一下|帮我|请把|把|请快速|请直接|请|麻烦你|看看|看下|看一下|看一看|先看看|先看下|先看一下)\s*/u
+const ANCHOR_TRAILING_CONJUNCTION_RE = /(?:和|与|及|以及|还有)\s*$/u
 
 function normalizeSelectedCategories(selectedCategories: unknown[] = []) {
   return selectedCategories
@@ -45,6 +48,29 @@ function normalizeSelectedCategories(selectedCategories: unknown[] = []) {
     .filter(Boolean)
 }
 
+function normalizeSelectedRegions(rawRegions: unknown[] = []) {
+  if (!Array.isArray(rawRegions) || rawRegions.length === 0) {
+    return []
+  }
+
+  return rawRegions
+    .map((region) => {
+      if (!region || typeof region !== 'object') {
+        return null
+      }
+      const record = region as Record<string, unknown>
+      const name = String(record.name || record.id || '').trim()
+      if (!name) {
+        return null
+      }
+
+      return {
+        name,
+      }
+    })
+    .filter((region): region is { name: string } => Boolean(region))
+}
+
 function stripDecorators(text: string) {
   return text
     .replace(/^(请问|请帮我|帮我|想知道|我想知道|请直接|麻烦你)\s*/u, '')
@@ -53,12 +79,21 @@ function stripDecorators(text: string) {
 }
 
 function sanitizeAnchor(rawAnchor: string) {
-  const cleaned = stripDecorators(
+  let cleaned = stripDecorators(
     rawAnchor
       .replace(/^(离|从)\s*/u, '')
       .replace(/(有哪些|有什么|都有什么|最近的?|是什么|气质相似.*|附近.*|周边.*|餐饮活跃度.*).*$/u, '')
       .trim(),
   )
+
+  let previous = ''
+  while (cleaned && cleaned !== previous) {
+    previous = cleaned
+    cleaned = cleaned
+      .replace(ANCHOR_LEAD_IN_RE, '')
+      .replace(ANCHOR_TRAILING_CONJUNCTION_RE, '')
+      .trim()
+  }
 
   if (!cleaned || AMBIGUOUS_ANCHORS.has(cleaned)) {
     return null
@@ -80,17 +115,24 @@ function extractNearestAnchor(text: string) {
 }
 
 function extractCompareAnchors(text: string) {
-  const match = text.match(/(?:比较|对比)(.+?)和(.+?)(?:附近|周边)?的/u)
-  if (!match) {
+  const patterns = [
+    /^(?:请把|把|请)?(?:比较|对比)\s*(.+?)(?:和|与|跟)(.+?)(?:附近|周边)?的/u,
+    /^(?:请把|把|请)?(.+?)(?:和|与|跟)(.+?)做(?:一下|个)?对比/u,
+  ]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (!match) continue
+
     return {
-      primary: null,
-      secondary: null,
+      primary: sanitizeAnchor(match[1]),
+      secondary: sanitizeAnchor(match[2]),
     }
   }
 
   return {
-    primary: sanitizeAnchor(match[1]),
-    secondary: sanitizeAnchor(match[2]),
+    primary: null,
+    secondary: null,
   }
 }
 
@@ -164,9 +206,13 @@ function hasSpatialViewContext(request: ChatRequestV4) {
   const candidate = request.options?.spatialContext as Record<string, unknown> | undefined
   const viewport = Array.isArray(candidate?.viewport) ? candidate.viewport : []
   const boundary = Array.isArray(candidate?.boundary) ? candidate.boundary : []
+  const regions = normalizeSelectedRegions([
+    ...(Array.isArray(request.options?.regions) ? request.options?.regions : []),
+    ...(Array.isArray(candidate?.regions) ? candidate.regions : []),
+  ])
   const center = candidate?.center
 
-  if (viewport.length >= 4 || boundary.length >= 3) {
+  if (viewport.length >= 4 || boundary.length >= 3 || regions.length > 0) {
     return true
   }
 
@@ -192,28 +238,62 @@ function hasCurrentAreaReference(text: string) {
 }
 
 function isAreaOverviewQuery(text: string) {
-  return AREA_OVERVIEW_RE.test(text)
+  return AREA_OVERVIEW_RE.test(text) || AREA_SEMANTIC_CONTEXT_RE.test(text)
 }
 
 export class DeterministicRouter {
   route(request: ChatRequestV4): DeterministicIntent {
     const text = this.extractLastUserText(request.messages)
     const selectedCategories = normalizeSelectedCategories(request.options?.selectedCategories || [])
+    const selectedRegions = normalizeSelectedRegions([
+      ...(Array.isArray(request.options?.regions) ? request.options?.regions : []),
+      ...(Array.isArray((request.options?.spatialContext as Record<string, unknown> | undefined)?.regions)
+        ? ((request.options?.spatialContext as Record<string, unknown>).regions as unknown[])
+        : []),
+    ])
     const normalizedText = stripDecorators(text)
     const { categoryKey, targetCategory } = inferCategoryFromText(normalizedText, selectedCategories)
     const requestHasUserLocation = hasUserLocation(request)
     const requestHasSpatialView = hasSpatialViewContext(request)
+    const compareRequested = /(比较|对比)/u.test(normalizedText) && /和/u.test(normalizedText)
+    const compareAnchors = compareRequested
+      ? extractCompareAnchors(normalizedText)
+      : { primary: null, secondary: null }
+    const shouldPreferMapViewOverview = compareRequested
+      && (!compareAnchors.primary || !compareAnchors.secondary)
+      && requestHasSpatialView
+      && hasCurrentAreaReference(normalizedText)
+      && isAreaOverviewQuery(normalizedText)
+    const compareAnchorsMatchSelectedRegions = Boolean(compareAnchors.primary && compareAnchors.secondary)
+      && selectedRegions.some((region) => region.name === compareAnchors.primary)
+      && selectedRegions.some((region) => region.name === compareAnchors.secondary)
 
-    if (/(比较|对比)/u.test(normalizedText) && /和/u.test(normalizedText)) {
-      const anchors = extractCompareAnchors(normalizedText)
-      const needsClarification = !anchors.primary || !anchors.secondary
+    if (compareRequested && selectedRegions.length >= 2 && (!compareAnchors.primary || !compareAnchors.secondary || compareAnchorsMatchSelectedRegions)) {
       return {
         queryType: 'compare_places',
         intentMode: 'agent_full_loop',
         rawQuery: normalizedText,
-        placeName: anchors.primary,
+        placeName: compareAnchors.primary || selectedRegions[0].name,
+        anchorSource: 'map_view',
+        secondaryPlaceName: compareAnchors.secondary || selectedRegions[1].name,
+        targetCategory: targetCategory || '片区对比',
+        comparisonTarget: targetCategory || '业态分布',
+        categoryKey: categoryKey || null,
+        radiusM: 1200,
+        needsClarification: false,
+        clarificationHint: null,
+      }
+    }
+
+    if (compareRequested && !shouldPreferMapViewOverview) {
+      const needsClarification = !compareAnchors.primary || !compareAnchors.secondary
+      return {
+        queryType: 'compare_places',
+        intentMode: 'agent_full_loop',
+        rawQuery: normalizedText,
+        placeName: compareAnchors.primary,
         anchorSource: 'place',
-        secondaryPlaceName: anchors.secondary,
+        secondaryPlaceName: compareAnchors.secondary,
         targetCategory: targetCategory || '餐饮',
         comparisonTarget: targetCategory || '餐饮活跃度',
         categoryKey: categoryKey || 'food',
@@ -241,7 +321,10 @@ export class DeterministicRouter {
       }
 
       const placeName = extractNearbyAnchor(normalizedText)
-      const useMapViewAnchor = !placeName && (hasCurrentAreaReference(normalizedText) || requestHasSpatialView)
+      const currentAreaReference = hasCurrentAreaReference(normalizedText)
+      const useMapViewAnchor = requestHasSpatialView
+        ? (currentAreaReference || !placeName)
+        : (!placeName && currentAreaReference)
       const needsClarification = useMapViewAnchor ? !requestHasSpatialView : !placeName
 
       return {
@@ -251,7 +334,7 @@ export class DeterministicRouter {
         placeName: useMapViewAnchor ? '当前区域' : placeName,
         anchorSource: useMapViewAnchor ? 'map_view' : 'place',
         targetCategory: '区域洞察',
-        categoryKey: null,
+        categoryKey,
         radiusM: 1200,
         needsClarification,
         clarificationHint: needsClarification ? buildClarificationHint('area_overview') : null,

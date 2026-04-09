@@ -34,6 +34,10 @@ export class SSEWriter {
     return this.write('thinking', payload)
   }
 
+  reasoning(payload: Record<string, unknown>) {
+    return this.write('reasoning', payload)
+  }
+
   intentPreview(payload: Record<string, unknown>) {
     return this.write('intent_preview', payload)
   }

@@ -20,6 +20,17 @@ const actions: Record<string, SkillActionDefinition> = {
       type: 'object',
       properties: {
         candidates: { type: 'array', items: { type: 'object' } },
+        semantic_evidence: {
+          type: 'object',
+          properties: {
+            dependency: { type: 'string' },
+            level: { type: 'string' },
+            weakEvidence: { type: 'boolean' },
+            mode: { type: 'string' },
+            reason: { type: 'string' },
+            target: { type: 'string' },
+          },
+        },
       },
     },
   },
@@ -38,6 +49,17 @@ const actions: Record<string, SkillActionDefinition> = {
       type: 'object',
       properties: {
         regions: { type: 'array', items: { type: 'object' } },
+        semantic_evidence: {
+          type: 'object',
+          properties: {
+            dependency: { type: 'string' },
+            level: { type: 'string' },
+            weakEvidence: { type: 'boolean' },
+            mode: { type: 'string' },
+            reason: { type: 'string' },
+            target: { type: 'string' },
+          },
+        },
       },
     },
   },

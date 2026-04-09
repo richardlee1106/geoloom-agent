@@ -6,7 +6,13 @@ export interface FunctionCallingLoopOptions<TResult> {
   tools: ToolSchema[]
   messages: LLMMessage[]
   maxRounds?: number
+  requestTimeoutMs?: number
   onToolCall: (call: ToolCallRequest) => Promise<{ content: string, trace: ToolExecutionTrace }>
+  onAssistantMessage?: (message: LLMAssistantMessage, meta: {
+    round: number
+    finishReason: 'tool_calls' | 'stop'
+    toolCallCount: number
+  }) => Promise<void> | void
 }
 
 export interface FunctionCallingLoopResult {
@@ -46,7 +52,16 @@ export async function runFunctionCallingLoop<TResult = unknown>(
     const response = normalizeResponse(await options.provider.complete({
       messages,
       tools: options.tools,
+      timeoutMs: options.requestTimeoutMs,
     }))
+
+    if (options.onAssistantMessage) {
+      await options.onAssistantMessage(response.assistantMessage, {
+        round,
+        finishReason: response.finishReason,
+        toolCallCount: response.toolCalls.length,
+      })
+    }
 
     if (response.toolCalls.length === 0) {
       return {

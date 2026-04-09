@@ -1,385 +1,99 @@
 <template>
-  <div class="ai-chat-container">
-    <!-- 头部状态栏 -->
-    <div class="chat-header">
-      <div class="header-main-row">
-        <!-- 左侧：头像 + 信息 -->
-        <div class="header-left">
-          <div class="ai-avatar">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-            </svg>
-          </div>
-          <div class="header-info">
-            <span class="ai-name">GeoAI 助手</span>
-            <div class="header-status-row">
-              <span class="ai-status" :class="{ online: isOnline === true, offline: isOnline === false, probing: isOnline === null }">
-                {{ statusText }}
-              </span>
-              <div class="location-meta-pill compact" :class="`is-${userLocationSummary.tone}`">
-                <span class="location-meta-label">{{ userLocationSummary.label }}</span>
-                <small class="location-meta-detail">{{ compactLocationDetail }}</small>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- 右侧：按钮组 -->
-        <div class="header-actions">
-           <!-- POI 徽章（在按钮组左侧，空间不足时可隐藏） -->
-           <div class="poi-badge" v-if="poiCount > 0">
-             <span class="poi-icon">📍</span>
-             <span>{{ poiCount }}</span>
-           </div>
+  <div class="ai-chat-container ai-agent-panel">
+    <header class="agent-shell-header">
+      <div class="agent-shell-meta">
+        <span
+          v-for="item in panelMetaChips"
+          :key="item.key"
+          class="agent-meta-chip"
+          :class="`tone-${item.tone}`"
+        >
+          <span class="agent-meta-label">{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+        </span>
+      </div>
+    </header>
 
-           <button
-             class="action-btn location-btn"
-             :class="`is-${userLocationSummary.tone}`"
-             :disabled="userLocationStatus === 'locating'"
-             @click="emit('request-current-location')"
-             :title="userLocationSummary.detail"
-            >
-             <span class="location-btn-icon">
-               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                 <path d="M12 21s-6-4.35-6-10a6 6 0 1112 0c0 5.65-6 10-6 10z" />
-                 <circle cx="12" cy="11" r="2.5" />
-               </svg>
-             </span>
-             <span class="location-btn-label">{{ userLocationStatus === 'locating' ? '定位中' : locationActionLabel }}</span>
-           </button>
+    <div class="agent-scroll-area chat-messages" ref="messagesContainer">
+      <div class="chat-feed">
+        <section v-if="messages.length === 0" class="agent-empty-state">
+          <p class="empty-state-text">
+            默认分析当前地图视图；有选区按选区，有类别过滤就只分析该类别。
+          </p>
+        </section>
 
-           <button class="action-btn clear-btn" @click="clearChat" title="清空">
-             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-             </svg>
-           </button>
-           <button class="action-btn save-btn" @click="saveChatHistory" title="保存">
-             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-             </svg>
-           </button>
-           <button
-             class="action-btn refresh-btn"
-             :class="{ active: forceRecomputeNext }"
-             @click="toggleForceRecompute"
-             :title="forceRecomputeNext ? 'Force recompute on next query (enabled)' : 'Force recompute on next query (skip cache)'"
-           >
-             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-               <polyline points="21 3 21 9 15 9" />
-             </svg>
-           </button>
-           <button class="action-btn close-btn" @click="emit('close')" title="收起">
-             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M18 6L6 18M6 6l12 12" />
-             </svg>
-           </button>
-         </div>
-       </div>
-
-     </div>
-
-    <div class="chat-body">
-      <div class="chat-messages" ref="messagesContainer">
-        <!-- 欢迎消息 -->
-        <div v-if="messages.length === 0" class="welcome-message">
-          <section class="welcome-shell">
-            <div class="welcome-hero">
-              <div class="welcome-heading-row">
-                <div class="welcome-kicker">
-                  <span class="kicker-dot"></span>
-                  <span>GeoAI 助手</span>
-                </div>
-                <span class="welcome-route-pill" :class="`is-${reasoningRouteTone}`">
-                  {{ reasoningRouteLabel }}
-                </span>
-              </div>
-              <div class="welcome-title-row">
-                <h3>问地点、周边和选址</h3>
-                <span class="welcome-location-note" :class="`is-${userLocationSummary.tone}`">
-                  {{ userLocationSummary.label }}
-                </span>
-              </div>
-              <p>
-                默认按问题里的地点和当前地图范围来推理；如果要按你的位置来问，点头部“{{ locationActionLabel }}”。
-              </p>
-              <div class="welcome-meta-strip">
-                <div
-                  v-for="stat in welcomeContextStats"
-                  :key="stat.label"
-                  class="welcome-meta-chip"
-                  :class="`is-${stat.tone}`"
-                >
-                  <span class="meta-chip-label">{{ stat.label }}</span>
-                  <strong class="meta-chip-value">{{ stat.value }}</strong>
-                </div>
-              </div>
-              <div class="welcome-formula">
-                <span class="formula-label">输入公式</span>
-                <p class="formula-text">地点 + 空间关系 + 需求，例如“湖北大学附近有哪些地铁站？”。</p>
-              </div>
-            </div>
-
-            <div class="welcome-command-grid">
-              <div class="welcome-section welcome-section-compact">
-                <div class="welcome-section-head compact">
-                  <div>
-                    <span class="welcome-section-kicker">常用入口</span>
-                    <h4>一键起手</h4>
-                  </div>
-                  <p>点一下就直接发送。</p>
-                </div>
-
-                <div class="scenario-list compact">
-                  <button
-                    v-for="action in welcomePrimaryScenarios"
-                    :key="action.title"
-                    type="button"
-                    class="scenario-card compact"
-                    :class="`accent-${action.accent}`"
-                    @click="sendQuickAction(action.prompt)"
-                  >
-                    <span class="scenario-badge">{{ action.badge }}</span>
-                    <strong class="scenario-title">{{ action.title }}</strong>
-                  </button>
-                </div>
-              </div>
-
-              <div class="welcome-section welcome-examples welcome-section-compact">
-                <div class="welcome-section-head compact">
-                  <div>
-                    <span class="welcome-section-kicker">示例问法</span>
-                    <h4>直接开问</h4>
-                  </div>
-                  <p>也可以改几个词继续追问。</p>
-                </div>
-                <div class="example-list compact">
-                  <button
-                    v-for="example in welcomeExamples"
-                    :key="example.label"
-                    type="button"
-                    class="example-chip"
-                    @click="sendQuickAction(example.prompt)"
-                  >
-                    {{ example.label }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <!-- 消息列表 -->
-        <div v-for="(msg, index) in messages" :key="index" class="message" :class="msg.role">
-          <div class="message-avatar">
+        <div
+          v-for="(msg, index) in messages"
+          :key="index"
+          class="chat-row"
+          :class="`role-${msg.role}`"
+        >
+          <div class="chat-row-avatar" :class="`role-${msg.role}`">
             <template v-if="msg.role === 'user'">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
               </svg>
             </template>
             <template v-else>
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
               </svg>
             </template>
           </div>
-          <div class="message-content">
-            <div
-              v-if="shouldShowPipelineForMessage(msg, index)"
-              class="pipeline-tracker-inline"
-            >
-              <div class="pipeline-trace-inline">
-                <template v-for="(step, idx) in stageSteps" :key="step.key">
-                  <div
-                    class="trace-step-inline"
-                    :class="{
-                      active: !msg.pipelineCompleted && getPipelineStageIndexForMessage(msg, index) === idx,
-                      completed: msg.pipelineCompleted || getPipelineStageIndexForMessage(msg, index) > idx
-                    }"
-                  >
-                    <div class="step-icon-wrapper">
-                      <svg v-if="!msg.pipelineCompleted && getPipelineStageIndexForMessage(msg, index) === idx" class="step-spinner" viewBox="0 0 24 24" width="14" height="14">
-                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="32" stroke-linecap="round"/>
-                      </svg>
-                      <svg v-else-if="msg.pipelineCompleted || getPipelineStageIndexForMessage(msg, index) > idx" class="step-check" viewBox="0 0 16 16" width="12" height="12">
-                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" fill="currentColor"/>
-                      </svg>
-                      <span v-else class="step-number">{{ idx + 1 }}</span>
-                    </div>
-                  <span class="step-label-inline">{{ step.label }}</span>
-                </div>
-              </template>
-            </div>
-              <div
-                v-if="msg.intentPreview && (msg.intentPreview.displayAnchor || msg.intentPreview.targetCategory)"
-                class="pipeline-recognized-inline"
-              >
-                <span
-                  v-if="msg.intentPreview.displayAnchor"
-                  class="recognized-pill"
-                  :class="{ tentative: msg.intentPreview.needsClarification }"
-                >
-                  已识别地点：{{ msg.intentPreview.displayAnchor }}
-                </span>
-                <span v-if="msg.intentPreview.targetCategory" class="recognized-pill">
-                  已识别需求：{{ msg.intentPreview.targetCategory }}
-                </span>
-                <span v-if="msg.intentPreview.isAbbreviation" class="recognized-pill subtle">
-                  {{ msg.intentPreview.normalizedAnchor && msg.intentPreview.normalizedAnchor !== msg.intentPreview.displayAnchor
-                    ? `简称展开：${msg.intentPreview.normalizedAnchor}`
-                    : '简称锚点' }}
-                </span>
-                <span
-                  v-if="typeof msg.intentPreview.confidence === 'number'"
-                  class="recognized-pill subtle"
-                >
-                  置信度：{{ formatIntentConfidence(msg.intentPreview.confidence) }}
-                </span>
-              </div>
-              <div
-                v-if="msg.intentPreview?.needsClarification && msg.intentPreview?.clarificationHint"
-                class="pipeline-clarification-inline"
-              >
-                {{ msg.intentPreview.clarificationHint }}
-              </div>
-              <div v-if="msg.queryType || msg.intentMeta?.intentMode" class="pipeline-intent-inline">
-                <span v-if="msg.queryType" class="intent-pill">Type: {{ msg.queryType }}</span>
-                <span v-if="msg.intentMeta?.intentMode" class="intent-pill">Mode: {{ msg.intentMeta.intentMode }}</span>
-              </div>
-              <div
-                v-if="DSL_META_GRAY_ENABLED && msg.prefetchDebug"
-                class="pipeline-prefetch-inline"
-              >
-                <span class="prefetch-pill" :class="`is-${msg.prefetchDebug.status || 'unknown'}`">
-                  Prefetch: {{ formatPrefetchState(msg.prefetchDebug) }}
-                </span>
-                <span class="prefetch-overlap-inline">
-                  Δ{{ formatPrefetchOverlap(msg.prefetchDebug.overlapDeltaMs) }}
-                </span>
-              </div>
-            </div>
 
-            <!-- 思考过程展示组件 (V3 推理模型) -->
-            <div
-              v-if="msg.role === 'assistant' && shouldShowRunStatus(msg, index)"
-              class="run-status-inline"
-              :class="`tone-${getRunStatusForMessage(msg, index).tone}`"
-            >
-              <div
-                class="run-status-header"
-                :class="{ clickable: Boolean(msg.reasoningContent) }"
-                @click="msg.reasoningContent ? msg.isReasoningExpanded = !msg.isReasoningExpanded : null"
-              >
-                <div class="run-status-main">
-                  <svg v-if="msg.isThinking && !msg.pipelineCompleted" class="thinking-spinner" viewBox="0 0 24 24" width="16" height="16">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="32" stroke-linecap="round"/>
-                  </svg>
-                  <svg v-else class="thinking-check" viewBox="0 0 16 16" width="14" height="14">
-                    <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" fill="currentColor"/>
-                  </svg>
-                  <div class="run-status-copy">
-                    <span class="run-status-label">
-                      {{ getRunStatusForMessage(msg, index).label }}
-                    </span>
-                    <small class="run-status-detail">
-                      {{ getRunStatusForMessage(msg, index).detail }}
-                    </small>
-                  </div>
-                </div>
-                <svg
-                  v-if="msg.reasoningContent"
-                  class="thinking-expand-icon"
-                  :class="{ expanded: msg.isReasoningExpanded }"
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                >
-                  <path d="M7 10l5 5 5-5z" fill="currentColor"/>
-                </svg>
-              </div>
-              <div
-                v-if="msg.reasoningContent"
-                class="thinking-content"
-                :class="{ collapsed: !msg.isReasoningExpanded }"
-              >
-                <div class="thinking-text">{{ msg.reasoningContent }}</div>
-              </div>
-            </div>
-
-            <div
-              v-if="msg.content && msg.content.trim()"
-              class="message-text"
-              :class="{ 'streaming-markdown': shouldRenderStreamingMarkdown(msg, index) }"
-              v-html="renderMessageHtml(msg, { streaming: shouldRenderStreamingMarkdown(msg, index) })"
-            ></div>
-
-            <div
-              v-if="msg.role === 'assistant' && getMessageCacheLabel(msg)"
-              class="message-meta-row"
-            >
-              <span class="meta-pill cache-pill" :class="{ hit: isMessageCacheHit(msg), miss: !isMessageCacheHit(msg) }">
-                {{ getMessageCacheLabel(msg) }}
-              </span>
-            </div>
-            <div
-              v-if="msg.role === 'assistant' && getMessageRiskWarnings(msg).length > 0"
-              class="message-risk-list"
-            >
-              <span
-                v-for="warning in getMessageRiskWarnings(msg)"
-                :key="`${index}-${warning.code}`"
-                class="meta-pill risk-pill"
-              >
-                {{ warning.message }}
-              </span>
-            </div>
-
-            <EmbeddedTagCloud 
-              v-if="msg.role === 'assistant' && !isGeneralQaMessage(msg) && msg.pois && msg.pois.length > 0"
-              :pois="msg.pois"
-              :intent-mode="resolveEmbeddedIntentMode(msg)"
-              :intent-meta="msg.intentMeta || null"
-              :width="360"
-              :height="200"
+          <div class="chat-row-main">
+            <AgentMessageCard
+              v-if="msg.role === 'assistant'"
+              :message="msg"
+              :message-html="renderMessageHtml(msg, { streaming: shouldRenderStreamingMarkdown(msg, index) })"
+              :formatted-time="formatTime(msg.timestamp)"
+              :embedded-intent-mode="resolveEmbeddedIntentMode(msg)"
+              :show-tag-cloud="!isGeneralQaMessage(msg) && Array.isArray(msg.pois) && msg.pois.length > 0"
               @render-to-map="(pois) => handleRenderToMap(msg, pois)"
               @tag-click="handleTagClick"
             />
 
-            <div v-if="msg.content && msg.content.trim()" class="message-time">{{ formatTime(msg.timestamp) }}</div>
+            <div v-else class="user-message-card">
+              <div
+                class="user-message-text"
+                v-html="renderMessageHtml(msg, { streaming: false })"
+              ></div>
+              <div class="user-message-time">{{ formatTime(msg.timestamp) }}</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 输入区域 -->
-    <div class="chat-input-area">
-      <div class="input-wrapper">
-        <textarea 
+    <div class="agent-input-shell">
+      <div class="agent-input-box">
+        <textarea
           ref="inputRef"
           v-model="inputText"
           @keydown.enter.exact.prevent="sendMessage"
           @keydown.shift.enter="insertNewline"
-          placeholder="例如：武汉大学附近有哪些咖啡店？这片区适合开什么店？"
+          placeholder="例如：请快速读懂当前区域"
           :disabled="isTyping"
           rows="1"
         ></textarea>
-        <button 
-          class="send-btn" 
+        <button
+          class="agent-send-btn"
           @click="sendMessage"
           :disabled="!inputText.trim() || isTyping"
         >
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
           </svg>
+          <span>{{ isTyping ? '处理中' : '发送' }}</span>
         </button>
       </div>
-      <div class="input-hint">
-        <span v-if="isOnline === null" class="probing-hint">正在检测 AI 服务...</span>
-        <span v-else-if="isOnline === false" class="offline-hint">
-          AI 服务未连接
-          <button class="retry-link" type="button" @click="checkOnlineStatus">重试连接</button>
+
+      <div v-if="isOnline !== true" class="agent-input-hint">
+        <span v-if="isOnline === null">正在检测 AI 服务...</span>
+        <span v-else>
+          AI 服务未连接，
+          <button class="inline-link-btn" type="button" @click="checkOnlineStatus">点这里重试</button>
         </span>
-        <span v-else>按 Enter 发送，Shift+Enter 换行。推荐按“地点 + 空间关系 + 需求”来提问。</span>
       </div>
     </div>
   </div>
@@ -389,12 +103,13 @@
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import {
   sendChatMessageStream, 
-  checkAIService, 
-  getCurrentProviderInfo
+  checkAIService
 } from '../utils/aiService';
+import { buildAgentPanelMeta } from '../utils/agentPanelMeta';
 import { normalizeRefinedResultEvidence } from '../utils/refinedResultEvidence';
 import { useAiStreamDispatcher } from '../composables/ai/useAiStreamDispatcher';
 import { useSpatialRequestBuilder } from '../composables/ai/useSpatialRequestBuilder';
+import { appendAgentEventToMessage } from '../utils/agentRunTimeline';
 import {
   getAgentStageSteps,
   getRunStatusCopy as buildRunStatusCopy,
@@ -405,19 +120,16 @@ import {
   trackSessionOutcome
 } from '../services/aiTelemetry';
 import { filterV3ChatOptions } from '../utils/v3RequestOptions';
-import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
+import AgentMessageCard from './AgentMessageCard.vue';
 import { marked } from 'marked';
 import { resolveAnalysisSignals } from '../utils/analysisSignals';
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
 import { isGeneralQaMessage } from '../utils/analysisBoardVisibility';
 import { buildChatHistoryExportContent } from '../utils/chatHistoryExport';
+import { resolveStreamFinalState } from '../utils/streamFinalState';
 import {
   buildAiAnchorFeatureFromMessage
 } from '../utils/aiAnchorFeature';
-import {
-  getLocationActionLabel,
-  getUserLocationSummary
-} from '../utils/userLocationContext';
 
 const props = defineProps({
   // 当前选中的 POI 数据
@@ -501,14 +213,6 @@ const forceRecomputeNext = ref(false);
 // V3 模式检测
 const isV3Mode = import.meta.env.VITE_BACKEND_VERSION === 'v3';
 const isV4Mode = import.meta.env.VITE_BACKEND_VERSION === 'v4';
-
-const reasoningRouteLabel = computed(() => {
-  if (isV3Mode) return 'V3 流式';
-  if (isV4Mode) return 'V4 Agent';
-  return 'V1 模板';
-});
-
-const reasoningRouteTone = computed(() => (isV3Mode || isV4Mode ? 'active' : 'neutral'));
 
 const stageSteps = getAgentStageSteps({
   backendVersion: isV4Mode ? 'v4' : (isV3Mode ? 'v3' : 'v1')
@@ -693,120 +397,11 @@ const SNAPSHOT_CACHE_TTL_MS = 25000;
 // 计算 POI 数量
 const poiCount = computed(() => props.poiFeatures?.length || 0);
 const defaultPoiCoordSys = (import.meta.env.VITE_POI_COORD_SYS || 'gcj02').toLowerCase();
-const userLocationSummary = computed(() => getUserLocationSummary({
-  userLocation: props.userLocation,
-  userLocationStatus: props.userLocationStatus
+const panelMetaChips = computed(() => buildAgentPanelMeta({
+  isOnline: isOnline.value,
+  poiCount: poiCount.value,
+  selectedCategories: props.selectedCategories
 }));
-const locationActionLabel = computed(() => getLocationActionLabel(props.userLocationStatus));
-const compactLocationDetail = computed(() => {
-  switch (String(props.userLocationStatus || 'idle')) {
-    case 'ready':
-      return userLocationSummary.value.detail;
-    case 'locating':
-      return '正在等待浏览器返回位置';
-    case 'denied':
-      return '授权后才能回答“我附近”';
-    case 'error':
-      return '重试定位，或改用文本地点';
-    case 'unsupported':
-      return '当前环境只能按文本地点检索';
-    default:
-      return '未启用定位时，附近按问题里的地点检索';
-  }
-});
-
-const welcomeContextStats = computed(() => [
-  {
-    label: '当前 POI',
-    value: poiCount.value > 0 ? `${poiCount.value} 个` : '未圈选',
-    tone: poiCount.value > 0 ? 'active' : 'muted'
-  },
-  {
-    label: '分析范围',
-    value: props.globalAnalysisEnabled ? '全域感知' : '当前范围',
-    tone: props.globalAnalysisEnabled ? 'accent' : 'neutral'
-  },
-  {
-    label: '推理链路',
-    value: reasoningRouteLabel.value,
-    tone: reasoningRouteTone.value
-  },
-  {
-    label: '类别过滤',
-    value: props.selectedCategories?.length ? `${props.selectedCategories.length} 类` : '未限定',
-    tone: props.selectedCategories?.length ? 'accent' : 'muted'
-  }
-]);
-
-const welcomePrimaryScenarios = computed(() => welcomeScenarios.slice(0, 3));
-
-// 欢迎态场景入口
-const welcomeScenarios = [
-  {
-    badge: '片区速读',
-    title: '快速读懂这片区',
-    desc: '先做全局扫描，快速看主导业态、活力热点、异常信号和最值得关注的机会。',
-    accent: 'cyan',
-    prompt: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。'
-  },
-  {
-    badge: '周边检索',
-    title: '附近有什么值得关注',
-    desc: '适合围绕学校、商圈、地铁站来查咖啡店、商超、地铁站与生活配套。',
-    accent: 'amber',
-    prompt: '请帮我看看这里附近有什么值得关注的配套、热门业态和明显缺口，并按相关性排序。'
-  },
-  {
-    badge: '选址机会',
-    title: '这里适合开什么店',
-    desc: '从供给密度、竞争关系和周边需求判断，更适合优先布局哪类业态。',
-    accent: 'emerald',
-    prompt: '如果要在当前区域开店，哪些业态更值得优先考虑？请结合周边供给、需求和竞争关系说明理由。'
-  },
-  {
-    badge: '空间对比',
-    title: '和另一片区比一比',
-    desc: '比较两块区域的人气、业态结构、功能分工和商业机会差异。',
-    accent: 'violet',
-    prompt: '请把当前区域和周边热点片区做对比，说明它们在人流、业态结构和商业机会上的差异，并给出建议。'
-  },
-  {
-    badge: '配套检查',
-    title: '周边配套够不够',
-    desc: '快速判断交通、生活服务、餐饮和休闲娱乐是否均衡，哪里还短板明显。',
-    accent: 'rose',
-    prompt: '请评估当前区域周边配套是否均衡，重点看交通、餐饮、生活服务和休闲娱乐，并指出短板。'
-  },
-  {
-    badge: '提问灵感',
-    title: '给我几个高质量问法',
-    desc: '生成更容易触发空间检索、空间推理和结构化回答的自然语言问题。',
-    accent: 'slate',
-    prompt: '请给我 6 个高质量的 GeoAI 提问示例，覆盖附近检索、片区分析、业态判断和对比场景。'
-  }
-];
-
-const welcomeExamples = [
-  {
-    label: '武汉大学附近有哪些咖啡店？',
-    prompt: '武汉大学附近有哪些咖啡店？'
-  },
-  {
-    label: '湖北大学附近有哪些地铁站？',
-    prompt: '湖北大学附近有哪些地铁站？'
-  },
-  {
-    label: '武汉二中附近有哪些商超？',
-    prompt: '武汉二中附近有哪些商超？'
-  },
-  {
-    label: '这片区适合开轻食店还是咖啡店？',
-    prompt: '这片区适合开轻食店还是咖啡店？请从供给、竞争和周边需求角度分析。'
-  }
-];
-
-const providerName = ref('');
-const isLocalProvider = ref(false);
 
 function stopStatusPolling() {
   if (statusTimer) {
@@ -824,24 +419,18 @@ function startStatusPolling() {
 
 // 计算状态文本
 const statusText = computed(() => {
-  if (isOnline.value === null) return '检测中...';
+  if (isOnline.value === null) return '检测中';
   if (isOnline.value === false) return '离线';
-  // 本地显示 "Local LM"，云端统丢显示 "在线"
-  return isLocalProvider.value ? 'Local LM' : '在线';
+  return '在线';
 });
 
 // 检查 AI 服务状态
 async function checkOnlineStatus() {
   isOnline.value = await checkAIService();
   if (isOnline.value) {
-    const config = getCurrentProviderInfo();
-    providerName.value = config.name;
-    isLocalProvider.value = config.id === 'local';
     startStatusPolling();
     refreshTemplateWeights({ force: false }).catch(() => {});
   } else {
-    providerName.value = '';
-    isLocalProvider.value = false;
     stopStatusPolling();
   }
   return isOnline.value;
@@ -1066,11 +655,6 @@ function shouldRenderStreamingMarkdown(message, index) {
   return isStreamingMessage(message, index)
 }
 
-
-function toggleForceRecompute() {
-  forceRecomputeNext.value = !forceRecomputeNext.value;
-}
-
 function resolveMessageSignals(message) {
   const stats = message?.analysisStats && typeof message.analysisStats === 'object'
     ? message.analysisStats
@@ -1133,19 +717,26 @@ async function sendMessage(directText = '') {
   });
 
   aiMessageIndex = messages.value.length;
-  messages.value.push({
+  const assistantMessage = {
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
     isThinking: true,
     thinkingMessage: initialRunStatus.label,
     isReasoningExpanded: false,
+    isProcessExpanded: true,
     intentPreview: null,
     isStreaming: true,
     pipelineCompleted: false,
     pipelineStage: 'intent',
-    pipelineHighWaterStageIndex: 0
+    pipelineHighWaterStageIndex: 0,
+    agentEvents: [],
+    toolCalls: []
+  };
+  appendAgentEventToMessage(assistantMessage, 'queued', {
+    message: '已进入本轮 agent 分析，正在准备上下文与工具。'
   });
+  messages.value.push(assistantMessage);
 
   await nextTick();
   scrollToBottom(true, 'auto');
@@ -1304,6 +895,9 @@ async function sendMessage(directText = '') {
       const existingContent = String(currentMessage.content || '').trim();
       currentMessage.content = existingContent ? `${existingContent}\n\n${failedContent}` : failedContent;
       currentMessage.error = true;
+      appendAgentEventToMessage(currentMessage, 'error', {
+        message: error.message || '本轮请求失败'
+      });
     } else {
       messages.value.push({
         role: 'assistant',
@@ -1320,12 +914,19 @@ async function sendMessage(directText = '') {
     }
     resetStreamState();
     if (!skipFinalize && aiMessageIndex >= 0 && messages.value[aiMessageIndex]) {
-      messages.value[aiMessageIndex].isStreaming = false;
-      messages.value[aiMessageIndex].isThinking = false;
-      messages.value[aiMessageIndex].thinkingMessage = '分析已经完成';
-      messages.value[aiMessageIndex].pipelineStage = 'answer';
-      updateMessagePipelineHighWater(messages.value[aiMessageIndex], 'answer');
-      messages.value[aiMessageIndex].pipelineCompleted = true;
+      const finalState = resolveStreamFinalState({ requestSucceeded });
+      messages.value[aiMessageIndex].isStreaming = finalState.isStreaming;
+      messages.value[aiMessageIndex].isThinking = finalState.isThinking;
+      messages.value[aiMessageIndex].thinkingMessage = finalState.thinkingMessage;
+      if (finalState.finalizeAtAnswerStage) {
+        messages.value[aiMessageIndex].pipelineStage = 'answer';
+        updateMessagePipelineHighWater(messages.value[aiMessageIndex], 'answer');
+      }
+      messages.value[aiMessageIndex].pipelineCompleted = finalState.pipelineCompleted;
+      appendAgentEventToMessage(messages.value[aiMessageIndex], 'finalize', {
+        requestSucceeded,
+        message: finalState.thinkingMessage
+      });
     }
     const finalAssistantMessage = messages.value[aiMessageIndex] || null;
     trackSessionOutcome({
@@ -3397,6 +2998,289 @@ defineExpose({
 
   .chat-messages {
     scroll-behavior: auto;
+  }
+}
+
+.ai-agent-panel {
+  background:
+    radial-gradient(circle at top right, rgba(53, 114, 197, 0.1), transparent 34%),
+    linear-gradient(180deg, #07111d 0%, #09111b 100%);
+}
+
+.agent-shell-header,
+.agent-shell-meta,
+.chat-row,
+.chat-row-avatar,
+.agent-input-box,
+.agent-send-btn,
+.agent-input-hint {
+  display: flex;
+  align-items: center;
+}
+
+.agent-shell-header {
+  justify-content: flex-start;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.agent-shell-meta {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.agent-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(225, 231, 240, 0.86);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.agent-meta-label {
+  color: rgba(161, 171, 188, 0.74);
+}
+
+.agent-meta-chip.tone-active {
+  border-color: rgba(88, 162, 242, 0.2);
+  color: #dcecff;
+}
+
+.agent-meta-chip.tone-warning {
+  border-color: rgba(255, 174, 89, 0.18);
+  color: #ffc782;
+}
+
+.agent-scroll-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px 0 14px;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.chat-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 4px 16px 0;
+  min-height: min-content;
+  min-width: 0;
+}
+
+.agent-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.empty-state-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: rgba(191, 199, 214, 0.8);
+}
+
+.chat-row {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.chat-row.role-user {
+  justify-content: flex-end;
+}
+
+.chat-row-avatar {
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(224, 231, 242, 0.84);
+  flex-shrink: 0;
+}
+
+.chat-row-avatar.role-assistant {
+  background: rgba(87, 166, 255, 0.12);
+  color: #8dc7ff;
+}
+
+.chat-row-avatar.role-user {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-row-main {
+  width: 100%;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.chat-row.role-user .chat-row-main {
+  display: flex;
+  justify-content: flex-end;
+  margin-right: 0;
+  margin-left: auto;
+}
+
+.user-message-card {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(100%, 720px);
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.user-message-text {
+  color: rgba(241, 244, 250, 0.94);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.user-message-text :deep(p:first-child) {
+  margin-top: 0;
+}
+
+.user-message-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.user-message-time {
+  font-size: 11px;
+  color: rgba(173, 182, 197, 0.7);
+  align-self: flex-end;
+}
+
+.agent-input-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 14px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(5, 8, 14, 0.44);
+  backdrop-filter: blur(12px);
+}
+
+.agent-input-box {
+  width: min(100%, 336px);
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.agent-input-box textarea {
+  flex: 1;
+  min-height: 40px;
+  max-height: 112px;
+  padding: 0 2px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: rgba(244, 247, 252, 0.94);
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: inherit;
+}
+
+.agent-input-box textarea::placeholder {
+  color: rgba(155, 165, 182, 0.6);
+}
+
+.agent-send-btn {
+  justify-content: center;
+  gap: 8px;
+  min-width: 78px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(87, 166, 255, 0.9), rgba(59, 135, 227, 0.92));
+  color: #06111d;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.agent-send-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.agent-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agent-input-hint {
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(179, 188, 204, 0.76);
+}
+
+.inline-link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #8dc7ff;
+  cursor: pointer;
+}
+
+@media (max-width: 980px) {
+  .agent-shell-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 680px) {
+  .agent-shell-header,
+  .agent-input-shell {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .agent-scroll-area {
+    padding-left: 12px;
+    padding-right: 10px;
+  }
+
+  .chat-row {
+    gap: 10px;
+  }
+
+  .chat-row-main {
+    width: calc(100% - 46px);
+  }
+
+  .agent-input-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .agent-send-btn {
+    width: 100%;
   }
 }
 </style>

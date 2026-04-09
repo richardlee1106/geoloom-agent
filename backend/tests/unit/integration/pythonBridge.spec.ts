@@ -3,6 +3,88 @@ import { describe, expect, it, vi } from 'vitest'
 import { LocalPythonBridge, RemoteFirstPythonBridge } from '../../../src/integration/pythonBridge.js'
 
 describe('RemoteFirstPythonBridge', () => {
+  it('extracts structured poi role features from a poi profile in local fallback mode', async () => {
+    const bridge = new LocalPythonBridge()
+
+    const encoded = await (bridge as any).encodePoiProfile({
+      name: '湖北大学地铁站E口',
+      categoryMain: '交通设施服务',
+      categorySub: '地铁站',
+      distanceM: 120,
+      areaSubject: '湖北大学校园生活带',
+      hotspotLabel: '湖北大学地铁站E口、武昌鱼馆一带',
+      surroundingCategories: ['餐饮美食', '购物服务', '交通设施服务'],
+      aoiContext: [
+        { name: '湖北大学生活区', fclass: 'residential', areaSqm: 180000 },
+      ],
+    })
+
+    expect(encoded.dimension).toBeGreaterThan(0)
+    expect(encoded.feature_tags.map((item: { label: string }) => item.label)).toEqual(expect.arrayContaining([
+      '交通接驳点',
+      '热点锚点',
+      '核心圈层样本',
+    ]))
+    expect(encoded.summary).toMatch(/湖北大学地铁站E口/)
+  })
+
+  it('extracts structured region features from a region snapshot in local fallback mode', async () => {
+    const bridge = new LocalPythonBridge()
+
+    const encoded = await (bridge as any).encodeRegionSnapshot({
+      subjectName: '湖北大学校园生活带',
+      dominantCategories: [
+        { label: '餐饮美食', count: 14, share: 0.58 },
+        { label: '购物服务', count: 6, share: 0.25 },
+        { label: '交通设施服务', count: 4, share: 0.17 },
+      ],
+      hotspots: [
+        { label: '湖北大学地铁站E口、武昌鱼馆一带', poiCount: 9 },
+      ],
+      representativePois: [
+        { name: '湖北大学地铁站E口', categoryMain: '交通设施服务', categorySub: '地铁站' },
+        { name: '武昌鱼馆', categoryMain: '餐饮美食', categorySub: '中餐厅' },
+        { name: '校园便利店', categoryMain: '购物服务', categorySub: '便利店' },
+      ],
+      aoiContext: [
+        { name: '湖北大学生活区', fclass: 'residential', population: 2800, areaSqm: 180000 },
+        { name: '三角路地铁商业带', fclass: 'commercial', areaSqm: 64000 },
+      ],
+      landuseContext: [
+        { landType: 'education', parcelCount: 3, totalAreaSqm: 93000 },
+        { landType: 'residential', parcelCount: 6, totalAreaSqm: 86000 },
+        { landType: 'commercial', parcelCount: 4, totalAreaSqm: 52000 },
+      ],
+      competitionDensity: [
+        { label: '餐饮美食', count: 10, avgDistanceM: 135 },
+      ],
+    })
+
+    expect(encoded.dimension).toBeGreaterThan(0)
+    expect(encoded.feature_tags.map((item: { label: string }) => item.label)).toEqual(expect.arrayContaining([
+      '校园主导',
+      '居住商业混合',
+      '餐饮竞争偏密',
+    ]))
+    expect(encoded.summary).toMatch(/湖北大学|校园|混合/)
+    expect(encoded.tokens).toEqual(expect.arrayContaining([
+      'feature:campus_anchor',
+      'feature:mixed_use',
+    ]))
+  })
+
+  it('reports degraded local status when no remote encoder is configured', async () => {
+    const bridge = new RemoteFirstPythonBridge()
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      name: 'spatial_encoder',
+      mode: 'local',
+      ready: true,
+      degraded: true,
+      reason: 'remote_unconfigured',
+    })
+  })
+
   it('prefers the remote encoder when configured and reachable', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)
@@ -59,6 +141,94 @@ describe('RemoteFirstPythonBridge', () => {
       degraded: true,
       reason: 'remote_request_failed',
     })
+  })
+
+  it('prefers the remote region snapshot encoder when configured and reachable', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/health')) {
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+      }
+
+      return new Response(JSON.stringify({
+        vector: [0.33, 0.67],
+        tokens: ['feature:campus_anchor', 'feature:mixed_use'],
+        dimension: 2,
+        summary: '校园主导、居住商业混合、热点围绕地铁口展开。',
+        feature_tags: [
+          { key: 'campus_anchor', label: '校园主导', score: 0.91 },
+          { key: 'mixed_use', label: '居住商业混合', score: 0.86 },
+        ],
+      }), { status: 200 })
+    })
+
+    const bridge = new RemoteFirstPythonBridge({
+      baseUrl: 'http://encoder.test',
+      fetchImpl,
+      fallback: new LocalPythonBridge(),
+    })
+
+    const encoded = await (bridge as any).encodeRegionSnapshot({
+      subjectName: '湖北大学校园生活带',
+      dominantCategories: [{ label: '餐饮美食', count: 14, share: 0.58 }],
+    })
+
+    expect(encoded).toMatchObject({
+      vector: [0.33, 0.67],
+      dimension: 2,
+      summary: expect.stringMatching(/校园主导/),
+      feature_tags: expect.arrayContaining([
+        expect.objectContaining({ label: '校园主导' }),
+      ]),
+    })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringMatching(/encode-region-snapshot$/),
+      expect.any(Object),
+    )
+  })
+
+  it('prefers the remote poi profile encoder when configured and reachable', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/health')) {
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+      }
+
+      return new Response(JSON.stringify({
+        vector: [0.42, 0.58],
+        tokens: ['feature:transit_gateway', 'feature:hotspot_anchor'],
+        dimension: 2,
+        summary: '湖北大学地铁站E口更像交通接驳点、热点锚点。',
+        feature_tags: [
+          { key: 'transit_gateway', label: '交通接驳点', score: 0.95 },
+          { key: 'hotspot_anchor', label: '热点锚点', score: 0.82 },
+        ],
+      }), { status: 200 })
+    })
+
+    const bridge = new RemoteFirstPythonBridge({
+      baseUrl: 'http://encoder.test',
+      fetchImpl,
+      fallback: new LocalPythonBridge(),
+    })
+
+    const encoded = await (bridge as any).encodePoiProfile({
+      name: '湖北大学地铁站E口',
+      categoryMain: '交通设施服务',
+      categorySub: '地铁站',
+    })
+
+    expect(encoded).toMatchObject({
+      vector: [0.42, 0.58],
+      summary: expect.stringMatching(/交通接驳点/),
+      feature_tags: expect.arrayContaining([
+        expect.objectContaining({ label: '交通接驳点' }),
+      ]),
+    })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringMatching(/encode-poi-profile$/),
+      expect.any(Object),
+    )
   })
 
   it('recovers health status after a transient remote encoder failure', async () => {

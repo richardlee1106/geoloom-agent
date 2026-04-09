@@ -1,10 +1,11 @@
 export interface MiniMaxPhase83SmokeCase {
   id: string
   query: string
-  expectedQueryType: 'nearby_poi' | 'nearest_station' | 'similar_regions' | 'compare_places'
-  expectedEvidenceType: 'poi_list' | 'transport' | 'semantic_candidate' | 'comparison'
+  expectedQueryType: 'nearby_poi' | 'nearest_station' | 'similar_regions' | 'compare_places' | 'area_overview'
+  expectedEvidenceType: 'poi_list' | 'transport' | 'semantic_candidate' | 'comparison' | 'area_overview'
   expectedAnchorKeyword?: string
   expectedKeyword?: string
+  requestOptions?: Record<string, unknown>
 }
 
 export const minimaxPhase83SmokeCases: MiniMaxPhase83SmokeCase[] = [
@@ -85,5 +86,44 @@ export const minimaxPhase83SmokeCases: MiniMaxPhase83SmokeCase[] = [
     expectedQueryType: 'similar_regions',
     expectedEvidenceType: 'semantic_candidate',
     expectedAnchorKeyword: '武汉大学',
+  },
+  {
+    id: 'smoke_area_current_summary',
+    query: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。',
+    expectedQueryType: 'area_overview',
+    expectedEvidenceType: 'area_overview',
+    expectedKeyword: '主导业态',
+    requestOptions: {
+      spatialContext: {
+        viewport: [114.30, 30.54, 114.38, 30.60],
+        mapZoom: 15,
+      },
+    },
+  },
+  {
+    id: 'smoke_area_open_shop',
+    query: '如果要在当前区域开店，哪些业态更值得优先考虑？请结合周边供给、需求和竞争关系说明理由。',
+    expectedQueryType: 'area_overview',
+    expectedEvidenceType: 'area_overview',
+    expectedKeyword: '供给',
+    requestOptions: {
+      spatialContext: {
+        viewport: [114.30, 30.54, 114.38, 30.60],
+        mapZoom: 15,
+      },
+    },
+  },
+  {
+    id: 'smoke_area_semantic_context',
+    query: '请判断当前区域更像居住片区、商业片区还是混合片区，并说明依据。',
+    expectedQueryType: 'area_overview',
+    expectedEvidenceType: 'area_overview',
+    expectedKeyword: '混合',
+    requestOptions: {
+      spatialContext: {
+        viewport: [114.30, 30.54, 114.38, 30.60],
+        mapZoom: 15,
+      },
+    },
   },
 ]

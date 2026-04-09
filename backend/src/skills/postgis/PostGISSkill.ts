@@ -33,6 +33,20 @@ export interface CreatePostgisSkillOptions {
   healthcheck?: () => Promise<boolean>
 }
 
+const POSTGIS_TEMPLATE_NAMES = [
+  'nearby_poi',
+  'nearest_station',
+  'compare_places',
+  'area_overview',
+  'area_category_histogram',
+  'area_ring_distribution',
+  'area_representative_sample',
+  'area_competition_density',
+  'area_h3_hotspots',
+  'area_aoi_context',
+  'area_landuse_context',
+] as const
+
 const postgisActions: Record<string, SkillActionDefinition> = {
   get_schema_catalog: {
     name: 'get_schema_catalog',
@@ -45,11 +59,29 @@ const postgisActions: Record<string, SkillActionDefinition> = {
     description: '离线规则 + POI 模糊检索的锚点解析',
     inputSchema: {
       type: 'object',
-      required: ['place_name'],
       properties: {
-        place_name: { type: 'string' },
+        place_name: { type: 'string', description: '标准锚点字段，优先使用。' },
+        placeName: { type: 'string' },
+        anchor_text: { type: 'string' },
+        anchor_name: { type: 'string' },
+        anchorName: { type: 'string' },
+        anchor: { type: 'string' },
+        place: { type: 'string' },
+        query: { type: 'string' },
+        name: { type: 'string' },
         role: { type: 'string' },
       },
+      anyOf: [
+        { type: 'object', required: ['place_name'] },
+        { type: 'object', required: ['placeName'] },
+        { type: 'object', required: ['anchor_text'] },
+        { type: 'object', required: ['anchor_name'] },
+        { type: 'object', required: ['anchorName'] },
+        { type: 'object', required: ['anchor'] },
+        { type: 'object', required: ['place'] },
+        { type: 'object', required: ['query'] },
+        { type: 'object', required: ['name'] },
+      ],
     },
     outputSchema: {
       type: 'object',
@@ -78,13 +110,43 @@ const postgisActions: Record<string, SkillActionDefinition> = {
   },
   execute_spatial_sql: {
     name: 'execute_spatial_sql',
-    description: '执行经过校验的只读模板化 SQL',
+    description: '执行只读空间查询。优先使用 template 模式，让系统按当前锚点和上下文自动组装安全 SQL；只有在没有模板可用时才传 sql。',
     inputSchema: {
       type: 'object',
-      required: ['sql'],
-      properties: {
-        sql: { type: 'string' },
-      },
+      oneOf: [
+        {
+          type: 'object',
+          required: ['template'],
+          properties: {
+            template: {
+              type: 'string',
+              enum: [...POSTGIS_TEMPLATE_NAMES],
+              description: '优先使用模板，不要为常见空间问题手写 SQL。',
+            },
+            category_key: { type: 'string' },
+            categoryKey: { type: 'string' },
+            limit: { type: 'number' },
+            map_view: {
+              type: 'object',
+              properties: {},
+              additionalProperties: true,
+              description: '当问题针对当前地图视口时，可以传一个空对象表示沿用当前 map_view。',
+            },
+          },
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          required: ['sql'],
+          properties: {
+            sql: {
+              type: 'string',
+              description: '仅在没有模板可用时使用。必须是只读 SQL，并且带空间过滤与 LIMIT。',
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
     },
     outputSchema: {
       type: 'object',

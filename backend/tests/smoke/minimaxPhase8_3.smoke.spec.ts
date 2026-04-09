@@ -55,7 +55,10 @@ describe('MiniMax Phase 8.3 smoke', () => {
         url: '/api/geo/chat',
         payload: {
           messages: [{ role: 'user', content: query.query }],
-          options: { requestId: query.id },
+          options: {
+            requestId: query.id,
+            ...(query.requestOptions || {}),
+          },
         },
       })
 

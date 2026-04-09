@@ -11,6 +11,7 @@ import type {
 
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01'
 const DEFAULT_MAX_TOKENS = 2048
+const MAX_SAFE_OUTPUT_TOKENS = 8192
 
 interface ProviderMessage {
   role: 'user' | 'assistant'
@@ -56,6 +57,15 @@ function asTextBlock(text: string) {
     type: 'text',
     text,
   }
+}
+
+function clampMaxTokens(value: unknown) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_MAX_TOKENS
+  }
+
+  return Math.min(Math.max(Math.round(numeric), 256), MAX_SAFE_OUTPUT_TOKENS)
 }
 
 function toAssistantBlocks(message: LLMMessage) {
@@ -154,7 +164,7 @@ export class AnthropicCompatibleProvider implements LLMProvider {
   private readonly model = String(process.env.LLM_MODEL || '').trim()
   private readonly timeoutMs = Number(process.env.LLM_TIMEOUT_MS || '12000')
   private readonly apiVersion = String(process.env.LLM_ANTHROPIC_VERSION || DEFAULT_ANTHROPIC_VERSION).trim()
-  private readonly maxTokens = Number(process.env.LLM_MAX_TOKENS || `${DEFAULT_MAX_TOKENS}`)
+  private readonly maxTokens = clampMaxTokens(process.env.LLM_MAX_TOKENS || `${DEFAULT_MAX_TOKENS}`)
 
   private get endpoint() {
     return normalizeMessagesEndpoint(this.baseUrl)
@@ -194,8 +204,11 @@ export class AnthropicCompatibleProvider implements LLMProvider {
       }
     }
 
+    const requestTimeoutMs = Number.isFinite(Number(request.timeoutMs)) && Number(request.timeoutMs) > 0
+      ? Number(request.timeoutMs)
+      : this.timeoutMs
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
 
     try {
       const response = await fetch(this.endpoint, {
@@ -208,9 +221,7 @@ export class AnthropicCompatibleProvider implements LLMProvider {
         signal: controller.signal,
         body: JSON.stringify({
           model: this.model,
-          max_tokens: Number.isFinite(this.maxTokens) && this.maxTokens > 0
-            ? this.maxTokens
-            : DEFAULT_MAX_TOKENS,
+          max_tokens: this.maxTokens,
           system: toSystemPrompt(request) || undefined,
           messages: toProviderMessages(request),
           tools: request.tools.length > 0 ? toToolDefinitions(request) : undefined,

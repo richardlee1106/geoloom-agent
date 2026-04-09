@@ -121,7 +121,7 @@
     >
       <!-- 三列横向布局（AI 展开） | 两列布局（默认） -->
       <section class="left-section" :class="{ 'three-column': aiExpanded }" 
-               :style="aiExpanded ? { width: splitPercentage1 + '%' } : {}">
+               :style="leftSectionStyle">
         <!-- 地图面板 -->
         <div class="map-panel" :style="mapPanelStyle">
           <div class="panel-content">
@@ -193,7 +193,7 @@
       <section 
         class="right-panel ai-panel" 
         :class="{ 'panel-hidden': !aiExpanded }"
-        :style="{ width: aiExpanded ? (100 - splitPercentage1) + '%' : '0px' }"
+        :style="aiPanelStyle"
       >
         <div class="panel-content">
       <div v-if="aiExpanded && !shouldMountAiChat" class="map-loading-placeholder ai-panel-placeholder">
@@ -346,6 +346,7 @@ const shouldMountAiChat = ref(false);
 const shouldMountTagCloud = ref(false); // 标签云改为按需挂载，避免首屏先把预算吃光
 const aiPanelPercent = ref(33.33); // AI 面板宽度百分比（默认 1/3）
 const splitPercentage1 = ref(65); // 默认展开比例：Map 65% / AI 35%
+const AI_PANEL_FIXED_WIDTH_PX = 500;
 const isDragging1 = ref(false);
 const hSplitPercent = ref(50); // 已不再使用但保留以防依赖错误
 const isTagDrawerExpanded = ref(false); // 移动端标签云抽屉展开状态
@@ -397,6 +398,18 @@ const tagPanelStyle = computed(() => {
     flexShrink: 0
   };
 });
+
+const leftSectionStyle = computed(() => {
+  if (!aiExpanded.value) return {}
+
+  return {
+    width: `calc(100% - ${AI_PANEL_FIXED_WIDTH_PX}px)`
+  }
+});
+
+const aiPanelStyle = computed(() => ({
+  width: aiExpanded.value ? `${AI_PANEL_FIXED_WIDTH_PX}px` : '0px'
+}));
 
 // 切换 AI 面板
 function toggleAiPanel(forceState = null) {
@@ -3030,6 +3043,7 @@ html, body, #app {
   overflow: hidden; 
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   min-width: 0;
   min-height: 0;
   background: linear-gradient(180deg, #0a0f1a 0%, #111827 100%);

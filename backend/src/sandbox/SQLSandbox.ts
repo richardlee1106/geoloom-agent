@@ -52,7 +52,8 @@ export class SQLSandbox {
   validate(sql: string): ValidationResult {
     const errors: string[] = []
     const normalizedSql = String(sql || '').trim()
-    const lowerSql = normalizedSql.toLowerCase()
+    const scrubbedSql = this.stripStringLiterals(normalizedSql)
+    const lowerSql = scrubbedSql.toLowerCase()
     const tables = this.extractTables(lowerSql)
     const functions = this.extractFunctions(lowerSql)
     const limit = this.extractLimit(lowerSql)
@@ -168,15 +169,19 @@ export class SQLSandbox {
   }
 
   private extractTables(sql: string) {
-    const matches = [...sql.matchAll(/\bfrom\s+([a-z_][a-z0-9_]*)/g), ...sql.matchAll(/\bjoin\s+([a-z_][a-z0-9_]*)/g)]
+    const matches = [
+      ...sql.matchAll(/\bfrom\s+(?![a-z_][a-z0-9_]*\s*\()([a-z_][a-z0-9_]*)/g),
+      ...sql.matchAll(/\bjoin\s+(?![a-z_][a-z0-9_]*\s*\()([a-z_][a-z0-9_]*)/g),
+    ]
     return [...new Set(matches.map((match) => match[1]))]
   }
 
   private extractFunctions(sql: string) {
+    const ignoredNames = new Set(['select', 'from', 'where', 'limit', 'and', 'or', 'over'])
     return [...new Set(
       [...sql.matchAll(/\b([a-z_][a-z0-9_]*)\s*\(/gi)]
         .map((match) => match[1].toLowerCase())
-        .filter((name) => !['select', 'from', 'where', 'limit', 'and', 'or'].includes(name)),
+        .filter((name) => !ignoredNames.has(name)),
     )]
   }
 
@@ -187,6 +192,10 @@ export class SQLSandbox {
 
   private extractSelectedColumns(sql: string) {
     const columnsByTable: Record<string, string[]> = {}
+    if (/\b(from|join)\s+\(/.test(sql)) {
+      return columnsByTable
+    }
+
     const table = this.extractTables(sql)[0]
     const selectMatch = sql.match(/\bselect\s+(.+?)\s+from\s+/s)
     if (!selectMatch || !table) {
@@ -207,6 +216,10 @@ export class SQLSandbox {
       .filter((entry): entry is string => Boolean(entry))
 
     return columnsByTable
+  }
+
+  private stripStringLiterals(sql: string) {
+    return sql.replace(/'(?:''|[^'])*'/g, '\'\'')
   }
 }
 

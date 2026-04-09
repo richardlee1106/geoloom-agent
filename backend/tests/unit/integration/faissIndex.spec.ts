@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { LocalFaissIndex, RemoteFirstFaissIndex } from '../../../src/integration/faissIndex.js'
 
 describe('RemoteFirstFaissIndex', () => {
+  it('reports degraded local status when no remote vector service is configured', async () => {
+    const index = new RemoteFirstFaissIndex()
+
+    await expect(index.getStatus()).resolves.toMatchObject({
+      name: 'spatial_vector',
+      mode: 'local',
+      ready: true,
+      degraded: true,
+      reason: 'remote_unconfigured',
+    })
+  })
+
   it('uses remote semantic search results when the vector service is reachable', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)

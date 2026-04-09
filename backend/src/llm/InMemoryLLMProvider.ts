@@ -7,6 +7,11 @@ function getLastUserText(messages: LLMCompletionRequest['messages']) {
   return String(user?.content || '')
 }
 
+function getFirstSystemText(messages: LLMCompletionRequest['messages']) {
+  const system = messages.find((message) => message.role === 'system')
+  return String(system?.content || '')
+}
+
 function getToolResults(messages: LLMCompletionRequest['messages']) {
   return messages.filter((message) => message.role === 'tool').map((message) => {
     try {
@@ -15,6 +20,99 @@ function getToolResults(messages: LLMCompletionRequest['messages']) {
       return {}
     }
   })
+}
+
+function hasTemplateResult(toolResults: Record<string, unknown>[], template: string) {
+  return toolResults.some((item) => {
+    const meta = item.meta as Record<string, unknown> | undefined
+    return String(meta?.template || '') === template && Array.isArray(item.rows)
+  })
+}
+
+function inferCategoryKey(query: string) {
+  if (/咖啡/.test(query)) return 'coffee'
+  if (/地铁|站点|站/.test(query)) return 'metro_station'
+  if (/餐饮|美食|吃饭/.test(query)) return 'food'
+  if (/超市|便利店|商超/.test(query)) return 'supermarket'
+  return ''
+}
+
+function isCurrentAreaQuery(query: string) {
+  return /这里|这附近|当前区域|当前片区|此处/.test(query)
+}
+
+function isAreaSummaryQuery(query: string) {
+  return /读懂|总结|主导业态|活力热点|热点|异常点/.test(query)
+}
+
+function isStoreOpportunityQuery(query: string) {
+  return /开店|开什么店|适合开什么店|值得优先考虑|补什么配套|补位|供给|需求|竞争/.test(query)
+}
+
+function needsAreaSemanticContext(query: string) {
+  return /居住|商业|混合|片区类型|说明依据/.test(query)
+    || isStoreOpportunityQuery(query)
+    || isAreaSummaryQuery(query)
+    || /配套|业态|缺口|机会/.test(query)
+}
+
+function buildIntentClassifierJson(query: string) {
+  const hasSpatialView = /has_spatial_view:\s*true/i.test(query)
+  const hasUserLocation = /has_user_location:\s*true/i.test(query)
+  const rawQueryMatch = query.match(/user_query:\s*(.+)/)
+  const rawQuery = String(rawQueryMatch?.[1] || query).trim()
+
+  if (/相似|气质/.test(rawQuery)) {
+    return {
+      queryType: 'similar_regions',
+      anchorSource: 'place',
+      needsClarification: !/武汉大学|湖北大学|光谷|大学|商圈/.test(rawQuery),
+      clarificationHint: null,
+    }
+  }
+
+  if (/比较|对比/.test(rawQuery)) {
+    return {
+      queryType: 'compare_places',
+      anchorSource: hasSpatialView ? 'map_view' : 'place',
+      needsClarification: false,
+      clarificationHint: null,
+    }
+  }
+
+  if (/最近/.test(rawQuery) && /地铁|站/.test(rawQuery)) {
+    return {
+      queryType: 'nearest_station',
+      anchorSource: hasUserLocation ? 'user_location' : 'place',
+      needsClarification: false,
+      clarificationHint: null,
+    }
+  }
+
+  if (/解读|分析|读懂|看看.*区域|这片区域|这片区|当前区域|当前片区|这里|此处/.test(rawQuery)) {
+    return {
+      queryType: 'area_overview',
+      anchorSource: hasSpatialView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',
+      needsClarification: !hasSpatialView && !hasUserLocation && !/大学|商圈|步行街/.test(rawQuery),
+      clarificationHint: null,
+    }
+  }
+
+  if (/附近|周边/.test(rawQuery)) {
+    return {
+      queryType: 'nearby_poi',
+      anchorSource: hasUserLocation ? 'user_location' : 'place',
+      needsClarification: false,
+      clarificationHint: null,
+    }
+  }
+
+  return {
+    queryType: 'unsupported',
+    anchorSource: 'unknown',
+    needsClarification: true,
+    clarificationHint: null,
+  }
 }
 
 export class InMemoryLLMProvider implements LLMProvider {
@@ -50,12 +148,20 @@ export class InMemoryLLMProvider implements LLMProvider {
   }
 
   async complete(request: LLMCompletionRequest): Promise<LLMResponse> {
+    const systemPrompt = getFirstSystemText(request.messages)
     const query = getLastUserText(request.messages)
     const toolResults = getToolResults(request.messages)
     const hasAnchor = toolResults.some((item) => Boolean(item.anchor))
     const hasSql = toolResults.some((item) => Array.isArray(item.rows))
     const hasRegions = toolResults.some((item) => Array.isArray(item.regions))
     const hasComparison = toolResults.some((item) => Array.isArray(item.comparison_pairs))
+
+    if (/GeoLoom V4 的意图理解器/.test(systemPrompt)) {
+      return this.createResponse({
+        content: JSON.stringify(buildIntentClassifierJson(query)),
+        finishReason: 'stop',
+      })
+    }
 
     if (/比较|对比/.test(query) && /武汉大学/.test(query) && /湖北大学/.test(query)) {
       if (!toolResults.some((item) => item.anchor && item.role === 'primary')) {
@@ -127,6 +233,66 @@ export class InMemoryLLMProvider implements LLMProvider {
               },
             },
           ],
+        })
+      }
+
+      return this.createResponse({ finishReason: 'stop' })
+    }
+
+    if (/业态|热点|异常点|供给|需求|竞争|开店|机会|读懂|配套|居住|商业|混合|片区类型|说明依据/.test(query)) {
+      const useCurrentArea = isCurrentAreaQuery(query)
+      const areaCategoryKey = inferCategoryKey(query)
+      const includeSemanticContext = needsAreaSemanticContext(query)
+
+      if (!useCurrentArea && !hasAnchor) {
+        const anchor = query.split(/附近|周边/)[0]?.trim() || ''
+        return this.createResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: randomUUID(),
+              name: 'postgis',
+              arguments: {
+                action: 'resolve_anchor',
+                payload: {
+                  place_name: anchor,
+                  role: 'primary',
+                },
+              },
+            },
+          ],
+        })
+      }
+
+      const missingAreaCalls = [
+        ['area_category_histogram', 8],
+        ['area_ring_distribution', 8],
+        ['area_representative_sample', 18],
+        ['area_competition_density', 8],
+        ['area_h3_hotspots', 5],
+        ...(includeSemanticContext
+          ? [
+              ['area_aoi_context', 5],
+              ['area_landuse_context', 6],
+            ]
+          : []),
+      ].filter(([template]) => !hasTemplateResult(toolResults, template))
+
+      if (missingAreaCalls.length > 0) {
+        return this.createResponse({
+          finishReason: 'tool_calls',
+          toolCalls: missingAreaCalls.map(([template, limit]) => ({
+            id: randomUUID(),
+            name: 'postgis',
+            arguments: {
+              action: 'execute_spatial_sql',
+              payload: {
+                template,
+                category_key: areaCategoryKey,
+                limit,
+              },
+            },
+          })),
         })
       }
 

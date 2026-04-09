@@ -4,8 +4,8 @@ import { buildRegressionApp, parseSSE } from '../helpers/chatRegressionHarness.j
 import { phase83RegressionFixtures } from './phase8_3_regression.fixture.js'
 
 describe('Phase 8.3 regression fixtures', () => {
-  it('declares the full 10-question regression corpus', () => {
-    expect(phase83RegressionFixtures).toHaveLength(10)
+  it('declares the full regression corpus including area-insight golden cases', () => {
+    expect(phase83RegressionFixtures).toHaveLength(14)
   })
 
   for (const fixture of phase83RegressionFixtures) {
@@ -20,7 +20,10 @@ describe('Phase 8.3 regression fixtures', () => {
         url: '/api/geo/chat',
         payload: {
           messages: [{ role: 'user', content: fixture.query }],
-          options: { requestId: `phase83_${fixture.id}` },
+          options: {
+            requestId: `phase83_${fixture.id}`,
+            ...(fixture.requestOptions || {}),
+          },
         },
       })
 

@@ -330,6 +330,83 @@ export function buildRegressionApp(options: {
       catalog,
       sandbox,
       query: vi.fn(async (sql) => {
+        if (sql.includes('COUNT(id) AS poi_count') && sql.includes('GROUP BY category_main')) {
+          return {
+            rows: [
+              { category_main: '餐饮美食', poi_count: 14 },
+              { category_main: '购物服务', poi_count: 6 },
+              { category_main: '交通设施服务', poi_count: 4 },
+            ],
+            rowCount: 3,
+          }
+        }
+
+        if (sql.includes('AS ring_label') && sql.includes('GROUP BY ring_label, ring_order')) {
+          return {
+            rows: [
+              { ring_label: '0-300m', ring_order: 1, poi_count: 12 },
+              { ring_label: '300-600m', ring_order: 2, poi_count: 8 },
+              { ring_label: '600-900m', ring_order: 3, poi_count: 4 },
+            ],
+            rowCount: 3,
+          }
+        }
+
+        if (sql.includes('AVG(ST_Distance') && sql.includes('GROUP BY 1')) {
+          return {
+            rows: [
+              { competition_key: '餐饮美食', poi_count: 14, nearest_distance_m: 52, avg_distance_m: 238 },
+              { competition_key: '购物服务', poi_count: 6, nearest_distance_m: 136, avg_distance_m: 311 },
+            ],
+            rowCount: 2,
+          }
+        }
+
+        if (sql.includes('ST_SquareGrid') && sql.includes('GROUP BY grid.geom')) {
+          return {
+            rows: [
+              { grid_wkt: 'POLYGON((114.3295 30.5765,114.3322 30.5765,114.3322 30.5778,114.3295 30.5778,114.3295 30.5765))', poi_count: 9 },
+              { grid_wkt: 'POLYGON((114.3330 30.5780,114.3345 30.5780,114.3345 30.5792,114.3330 30.5792,114.3330 30.5780))', poi_count: 5 },
+            ],
+            rowCount: 2,
+          }
+        }
+
+        if (sql.includes('FROM aois')) {
+          return {
+            rows: [
+              {
+                id: 8101,
+                name: '湖北大学生活区',
+                fclass: 'residential',
+                code: '3100',
+                population: 2600,
+                area_sqm: 180000,
+              },
+              {
+                id: 8102,
+                name: '三角路地铁商业带',
+                fclass: 'commercial',
+                code: '2100',
+                population: null,
+                area_sqm: 64000,
+              },
+            ],
+            rowCount: 2,
+          }
+        }
+
+        if (sql.includes('FROM landuse')) {
+          return {
+            rows: [
+              { land_type: 'residential', parcel_count: 7, total_area_sqm: 86000 },
+              { land_type: 'commercial', parcel_count: 4, total_area_sqm: 52000 },
+              { land_type: 'education', parcel_count: 2, total_area_sqm: 43000 },
+            ],
+            rowCount: 3,
+          }
+        }
+
         if (sql.includes("category_sub = '咖啡'")) {
           return {
             rows: [
@@ -422,6 +499,50 @@ export function buildRegressionApp(options: {
               },
             ],
             rowCount: 2,
+          }
+        }
+
+        if (sql.includes('FROM pois')) {
+          return {
+            rows: [
+              {
+                id: 31,
+                name: '湖北大学地铁站E口',
+                category_main: '交通设施服务',
+                category_sub: '地铁站',
+                longitude: 114.3308,
+                latitude: 30.5772,
+                distance_m: 120,
+              },
+              {
+                id: 32,
+                name: '武昌鱼馆',
+                category_main: '餐饮美食',
+                category_sub: '中餐厅',
+                longitude: 114.3310,
+                latitude: 30.5776,
+                distance_m: 180,
+              },
+              {
+                id: 33,
+                name: '校园便利店',
+                category_main: '购物服务',
+                category_sub: '便利店',
+                longitude: 114.3304,
+                latitude: 30.5768,
+                distance_m: 260,
+              },
+              {
+                id: 34,
+                name: '咖啡实验室',
+                category_main: '餐饮美食',
+                category_sub: '咖啡',
+                longitude: 114.3316,
+                latitude: 30.5779,
+                distance_m: 320,
+              },
+            ],
+            rowCount: 4,
           }
         }
 

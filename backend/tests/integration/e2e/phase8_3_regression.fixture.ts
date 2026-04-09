@@ -1,16 +1,18 @@
 import type { RegressionProviderMode } from '../helpers/chatRegressionHarness.js'
+import areaInsightGoldenCases from '../../fixtures/areaInsightGoldenCases.json'
 
 export interface Phase83RegressionFixture {
   id: string
   query: string
-  expectedQueryType: 'nearby_poi' | 'nearest_station' | 'similar_regions' | 'compare_places' | 'unsupported'
-  expectedEvidenceType: 'poi_list' | 'transport' | 'semantic_candidate' | 'comparison'
+  expectedQueryType: 'nearby_poi' | 'nearest_station' | 'similar_regions' | 'compare_places' | 'area_overview' | 'unsupported'
+  expectedEvidenceType: 'poi_list' | 'transport' | 'semantic_candidate' | 'comparison' | 'area_overview'
   expectedKeywords: string[]
   providerMode?: RegressionProviderMode
   expectedProviderReady?: boolean
+  requestOptions?: Record<string, unknown>
 }
 
-export const phase83RegressionFixtures: Phase83RegressionFixture[] = [
+const baseRegressionFixtures: Phase83RegressionFixture[] = [
   {
     id: 'q01_nearby_coffee_default',
     query: '武汉大学附近有哪些咖啡店？',
@@ -88,4 +90,9 @@ export const phase83RegressionFixtures: Phase83RegressionFixture[] = [
     expectedKeywords: ['武汉大学', 'luckin coffee'],
     providerMode: 'provider_throwing',
   },
+]
+
+export const phase83RegressionFixtures: Phase83RegressionFixture[] = [
+  ...baseRegressionFixtures,
+  ...(areaInsightGoldenCases as Phase83RegressionFixture[]),
 ]

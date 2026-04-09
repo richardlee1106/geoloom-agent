@@ -1,5 +1,10 @@
 import type { Ref } from 'vue'
 
+import {
+  appendAgentEventToMessage,
+  syncToolCallsToMessage
+} from '../../utils/agentRunTimeline'
+
 type PlainObject = Record<string, unknown>
 
 interface AssistantMessage extends PlainObject {
@@ -29,6 +34,9 @@ interface AssistantMessage extends PlainObject {
   pois?: unknown[]
   progress?: unknown
   schemaWarning?: PlainObject
+  agentEvents?: unknown[]
+  toolCalls?: unknown[]
+  toolCallsRecordedAt?: number
 }
 
 interface NormalizedRefinedResultEvidence {
@@ -37,6 +45,7 @@ interface NormalizedRefinedResultEvidence {
   vernacularRegions: unknown[]
   fuzzyRegions: unknown[]
   stats?: PlainObject | null
+  toolCalls: unknown[]
   intent?: PlainObject | null
 }
 
@@ -190,6 +199,7 @@ export function useAiStreamDispatcher({
   function dispatchRefinedResult(data: unknown, aiMessageIndex: number): void {
     const normalized = normalizeRefinedResultEvidence(data)
     const currentMsg = getMessage(aiMessageIndex)
+    const recordedAt = Date.now()
 
     if (currentMsg) {
       applySSEMetaToMessage(currentMsg, data)
@@ -202,6 +212,8 @@ export function useAiStreamDispatcher({
       if (Object.keys(modelTiming).length > 0) currentMsg.modelTiming = modelTiming
       applyPrefetchDebugToMessage(currentMsg, data)
       applyIntentMetaToMessage(currentMsg, normalized.intent)
+      syncToolCallsToMessage(currentMsg, normalized.toolCalls, recordedAt)
+      appendAgentEventToMessage(currentMsg, 'refined_result', data, { timestamp: recordedAt })
     }
 
     if (normalized.boundary) emit('ai-boundary', normalized.boundary)
@@ -221,6 +233,7 @@ export function useAiStreamDispatcher({
         const traceId = tracePayload.trace_id || tracePayload.traceId || tracePayload.request_id || tracePayload.requestId
         if (traceId) currentMsg.traceId = String(traceId)
         applySSEMetaToMessage(currentMsg, tracePayload)
+        appendAgentEventToMessage(currentMsg, 'trace', tracePayload)
       }
       return {}
     }
@@ -254,7 +267,11 @@ export function useAiStreamDispatcher({
         if (!currentMsg.reasoningContent) {
           currentMsg.reasoningContent = ''
         }
-        currentMsg.reasoningContent += String(reasoningPayload.content)
+        const nextChunk = String(reasoningPayload.content).trim()
+        if (nextChunk) {
+          currentMsg.reasoningContent += currentMsg.reasoningContent ? `\n\n${nextChunk}` : nextChunk
+          appendAgentEventToMessage(currentMsg, 'reasoning', reasoningPayload, { allowDuplicate: true })
+        }
       }
       return {}
     }
@@ -280,6 +297,7 @@ export function useAiStreamDispatcher({
         currentMsg.thinkingMessage = intentPreview.displayAnchor
           ? `已识别：${intentPreview.displayAnchor}${intentPreview.targetCategory ? ` · ${intentPreview.targetCategory}` : ''}`
           : (currentMsg.thinkingMessage || '已完成问题拆解')
+        appendAgentEventToMessage(currentMsg, 'intent_preview', currentMsg.intentPreview)
       }
       return {}
     }
@@ -300,6 +318,7 @@ export function useAiStreamDispatcher({
           currentMsg.queryType = 'irrelevant_input'
           currentMsg.intentMode = 'out_of_scope'
         }
+        appendAgentEventToMessage(currentMsg, 'stage', stagePayload.name ? stagePayload : { name: stageName })
       }
       return { stage: stageName || '' }
     }
@@ -309,6 +328,7 @@ export function useAiStreamDispatcher({
       if (currentMsg) {
         currentMsg.pois = asArray(data)
         currentMsg.intentMode = fallbackIntentMode
+        appendAgentEventToMessage(currentMsg, 'pois', data)
       }
       return {}
     }
@@ -323,6 +343,7 @@ export function useAiStreamDispatcher({
           currentMsg.previewBoundary = partialPayload.boundary
           currentMsg.previewSource = String(partialPayload.source || 'partial')
         }
+        appendAgentEventToMessage(currentMsg, 'partial', partialPayload)
       }
       if (partialPayload.boundary && typeof partialPayload.boundary === 'object' && !Array.isArray(partialPayload.boundary)) {
         emit('ai-boundary', {
@@ -338,6 +359,7 @@ export function useAiStreamDispatcher({
       if (currentMsg) {
         currentMsg.boundary = data
         applySSEMetaToMessage(currentMsg, data)
+        appendAgentEventToMessage(currentMsg, 'boundary', data)
       }
       emit('ai-boundary', data)
       return {}
@@ -347,18 +369,21 @@ export function useAiStreamDispatcher({
       const clusterPayload = asPlainObject(data)
       if (currentMsg) currentMsg.spatialClusters = clusterPayload
       if (currentMsg) applySSEMetaToMessage(currentMsg, clusterPayload)
+      if (currentMsg) appendAgentEventToMessage(currentMsg, 'spatial_clusters', clusterPayload)
       emit('ai-spatial-clusters', clusterPayload)
       return {}
     }
 
     if (type === 'vernacular_regions' && Array.isArray(data)) {
       if (currentMsg) currentMsg.vernacularRegions = asArray(data)
+      if (currentMsg) appendAgentEventToMessage(currentMsg, 'vernacular_regions', data)
       emit('ai-vernacular-regions', asArray(data))
       return {}
     }
 
     if (type === 'fuzzy_regions' && Array.isArray(data)) {
       if (currentMsg) currentMsg.fuzzyRegions = asArray(data)
+      if (currentMsg) appendAgentEventToMessage(currentMsg, 'fuzzy_regions', data)
       emit('ai-fuzzy-regions', asArray(data))
       return {}
     }
@@ -371,6 +396,7 @@ export function useAiStreamDispatcher({
       }
       if (currentMsg) applySSEMetaToMessage(currentMsg, statsPayload)
       if (currentMsg) applyPrefetchDebugToMessage(currentMsg, statsPayload)
+      if (currentMsg) appendAgentEventToMessage(currentMsg, 'stats', statsPayload)
       emit('ai-analysis-stats', statsPayload)
 
       const statsIntent = normalizeRefinedResultEvidence({
@@ -393,6 +419,7 @@ export function useAiStreamDispatcher({
       if (currentMsg) {
         currentMsg.progress = progressPayload.progress
         applySSEMetaToMessage(currentMsg, progressPayload)
+        appendAgentEventToMessage(currentMsg, 'progress', progressPayload)
       }
       return {}
     }
@@ -406,6 +433,7 @@ export function useAiStreamDispatcher({
           traceId: schemaErrorPayload.trace_id || schemaErrorPayload.traceId || null
         }
         applySSEMetaToMessage(currentMsg, schemaErrorPayload)
+        appendAgentEventToMessage(currentMsg, 'schema_error', schemaErrorPayload)
       }
       return {}
     }

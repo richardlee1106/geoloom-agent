@@ -7,6 +7,12 @@ export interface JsonSchema {
   required?: string[]
   items?: unknown
   additionalProperties?: boolean
+  oneOf?: JsonSchema[]
+  anyOf?: JsonSchema[]
+  enum?: unknown[]
+  const?: unknown
+  description?: string
+  [key: string]: unknown
 }
 
 export interface SkillActionDefinition {

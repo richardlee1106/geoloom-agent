@@ -22,6 +22,7 @@ import { createSpatialEncoderSkill } from './skills/spatial_encoder/SpatialEncod
 import { createSpatialVectorSkill } from './skills/spatial_vector/SpatialVectorSkill.js'
 import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceSkill.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
+import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
 
 const port = Number(process.env.PORT || '3210')
@@ -145,6 +146,10 @@ const app = createApp({
   version,
   checkDatabaseHealth: async () => pool.healthcheck(),
   getCategoryTree: async () => loadCategoryTreeFromDatabase((sql, params, timeoutMs) => pool.query(sql, params, timeoutMs)),
+  fetchSpatialFeatures: async (input) => fetchSpatialFeaturesFromDatabase(
+    input,
+    (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+  ),
   chat,
 })
 

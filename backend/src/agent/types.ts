@@ -33,6 +33,21 @@ export interface ConfidenceDecision {
   message?: string | null
 }
 
+export interface SpatialAnalysisRegion {
+  id?: string | number | null
+  name: string
+  areaWkt: string
+  lon?: number
+  lat?: number
+}
+
+export interface SpatialAnalysisConstraint {
+  scope: 'regions' | 'boundary' | 'viewport' | 'circle' | 'anchor_radius'
+  areaWkt?: string | null
+  selectedCategories: string[]
+  regions: SpatialAnalysisRegion[]
+}
+
 export interface AgentTurnState {
   requestId: string
   traceId: string
@@ -40,6 +55,7 @@ export interface AgentTurnState {
   toolCalls: ToolExecutionTrace[]
   anchors: Partial<Record<string, ResolvedAnchor>>
   evidenceView?: EvidenceView
+  spatialConstraint?: SpatialAnalysisConstraint
   sqlValidationAttempts: number
   sqlValidationPassed: number
 }

@@ -70,6 +70,41 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
   runDynamicGravityLayout(tags, width, height, userConfig)
 }
 
+function resolveRingSlot(index: number) {
+  let remaining = Math.max(0, index - 1)
+  let ring = 1
+
+  while (remaining >= ring * 6) {
+    remaining -= ring * 6
+    ring += 1
+  }
+
+  return {
+    ring,
+    slot: remaining,
+    slotCount: ring * 6
+  }
+}
+
+function getDistributedSeed(index: number, width: number, height: number) {
+  const centerX = width / 2
+  const centerY = height / 2
+
+  if (index <= 0) {
+    return { x: centerX, y: centerY }
+  }
+
+  const { ring, slot, slotCount } = resolveRingSlot(index)
+  const angle = (slot / Math.max(1, slotCount)) * Math.PI * 2 - Math.PI / 2
+  const radiusX = Math.min(width * 0.38, 42 + ring * 34)
+  const radiusY = Math.min(height * 0.34, 28 + ring * 24)
+
+  return {
+    x: centerX + Math.cos(angle) * radiusX,
+    y: centerY + Math.sin(angle) * radiusY
+  }
+}
+
 // 动态重心算法（基础布局）
 function runDynamicGravityLayout(
   tags: WorkerTagInput[],
@@ -87,8 +122,8 @@ function runDynamicGravityLayout(
   const config: WorkerConfig = {
     fontMin: 18,
     fontMax: 22,
-    padding: 2, // 最小间距
-    spiralStep: 5, // 紧凑布局的小步长
+    padding: 6,
+    spiralStep: 8,
     ...configOverrides
   }
 
@@ -171,8 +206,13 @@ function runDynamicGravityLayout(
 
     // 确定搜索起点
     // 第一个词放置在画布中心，后续词放置在当前已放置词的重心位置
-    const startX = index === 0 ? width / 2 : currentCentroid.x
-    const startY = index === 0 ? height / 2 : currentCentroid.y
+    const distributedSeed = getDistributedSeed(index, width, height)
+    const startX = index === 0
+      ? width / 2
+      : distributedSeed.x * 0.74 + currentCentroid.x * 0.26
+    const startY = index === 0
+      ? height / 2
+      : distributedSeed.y * 0.74 + currentCentroid.y * 0.26
 
     // 径向搜索（寻找最近的无碰撞位置）
     const position = findPositionRadial(tag, startX, startY, tree, config, width, height)
