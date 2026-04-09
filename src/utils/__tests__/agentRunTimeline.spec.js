@@ -8,6 +8,8 @@ describe('buildAgentRunSnapshot', () => {
       pipelineCompleted: true,
       isStreaming: false,
       isThinking: false,
+      runStartedAt: 1000,
+      runCompletedAt: 5200,
       agentEvents: [
         {
           id: 'evt-1',
@@ -46,6 +48,8 @@ describe('buildAgentRunSnapshot', () => {
     })
 
     expect(snapshot.summary.label).toBe('已完成分析')
+    expect(snapshot.summary.elapsedLabel).toBe('用时 4.2 s')
+    expect(snapshot.summary.detail).toContain('用时 4.2 s')
     expect(snapshot.summary.toolCount).toBe(1)
     expect(snapshot.summary.eventCount).toBe(4)
     expect(snapshot.timeline.map((item) => item.title)).toEqual([

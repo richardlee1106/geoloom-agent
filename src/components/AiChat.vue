@@ -12,6 +12,17 @@
           <strong>{{ item.value }}</strong>
         </span>
       </div>
+
+      <div class="agent-shell-actions">
+        <button
+          type="button"
+          class="agent-shell-btn"
+          :disabled="messages.length === 0"
+          @click="saveChatHistory"
+        >
+          下载记录
+        </button>
+      </div>
     </header>
 
     <div class="agent-scroll-area chat-messages" ref="messagesContainer">
@@ -715,12 +726,15 @@ async function sendMessage(directText = '') {
     activeStageKey: 'intent',
     stageSteps
   });
+  const assistantStartedAt = Date.now();
 
   aiMessageIndex = messages.value.length;
   const assistantMessage = {
     role: 'assistant',
     content: '',
-    timestamp: Date.now(),
+    timestamp: assistantStartedAt,
+    runStartedAt: assistantStartedAt,
+    runCompletedAt: null,
     isThinking: true,
     thinkingMessage: initialRunStatus.label,
     isReasoningExpanded: false,
@@ -918,6 +932,7 @@ async function sendMessage(directText = '') {
       messages.value[aiMessageIndex].isStreaming = finalState.isStreaming;
       messages.value[aiMessageIndex].isThinking = finalState.isThinking;
       messages.value[aiMessageIndex].thinkingMessage = finalState.thinkingMessage;
+      messages.value[aiMessageIndex].runCompletedAt = Date.now();
       if (finalState.finalizeAtAnswerStage) {
         messages.value[aiMessageIndex].pipelineStage = 'answer';
         updateMessagePipelineHighWater(messages.value[aiMessageIndex], 'answer');
@@ -1030,15 +1045,21 @@ function saveChatHistory() {
 
   const content = buildChatHistoryExportContent(messages.value, {
     poiCount: props.poiFeatures.length,
+    panelMetaItems: panelMetaChips.value,
     sanitizeAssistantText: sanitizeAssistantVisibleText
   });
-  
+
   // 写入 UTF-8 BOM，避免 Windows 文本编辑器打开时出现中文乱码。
-  const blob = new Blob(['\uFEFF', content], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob(['\uFEFF', content], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `TagCloud_Chat_${new Date().getTime()}.txt`;
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, '')
+    .replace('T', '_');
+  link.download = `GeoLoom_Session_${stamp}.md`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -3019,9 +3040,37 @@ defineExpose({
 }
 
 .agent-shell-header {
-  justify-content: flex-start;
+  justify-content: space-between;
   padding: 12px 14px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.agent-shell-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-shell-btn {
+  padding: 8px 12px;
+  border: 1px solid rgba(141, 199, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(141, 199, 255, 0.08);
+  color: #dfeeff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.agent-shell-btn:hover:not(:disabled) {
+  background: rgba(141, 199, 255, 0.14);
+  border-color: rgba(141, 199, 255, 0.36);
+}
+
+.agent-shell-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .agent-shell-meta {
@@ -3251,6 +3300,11 @@ defineExpose({
   .agent-shell-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .agent-shell-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 

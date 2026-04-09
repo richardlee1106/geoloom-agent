@@ -4,6 +4,7 @@
       <div class="agent-card-title">
         <span class="agent-name">GeoLoom Agent</span>
         <span class="agent-state" :class="`is-${snapshot.summary.tone}`">{{ snapshot.summary.label }}</span>
+        <span v-if="snapshot.summary.elapsedLabel" class="agent-elapsed">{{ snapshot.summary.elapsedLabel }}</span>
       </div>
       <span class="agent-time">{{ formattedTime }}</span>
     </header>
@@ -267,6 +268,11 @@ const processSummaryDetail = computed(() => {
 .agent-state.is-error {
   background: rgba(255, 174, 89, 0.14);
   color: #ffc882;
+}
+
+.agent-elapsed {
+  font-size: 12px;
+  color: rgba(196, 205, 223, 0.78);
 }
 
 .agent-time {

@@ -1091,7 +1091,7 @@ function onCircleComplete(circleGeom, isRefresh = false) {
   });
   centerLayerSource.addFeature(centerFeature);
 
-  showHighlights(insideRaw, { full: true });
+  clearHighlights();
   
   emit('polygon-completed', { 
     polygon: null,
@@ -1188,7 +1188,7 @@ function onCircleCompleteMulti(circleGeom, feature) {
     updateRegionPois(region.id, insideRaw);
     
 
-    showHighlights(insideRaw, { full: true });
+    clearHighlights();
     
 
     emit('polygon-completed', { 
@@ -1264,7 +1264,7 @@ function onPolygonCompleteMulti(polygonGeom, feature) {
     updateRegionPois(region.id, insideRaw);
     
 
-    showHighlights(insideRaw, { full: true });
+    clearHighlights();
     
 
     emit('polygon-completed', { 
@@ -1616,7 +1616,7 @@ function onPolygonComplete(polygonGeom, isRefresh = false) {
     centerLayerSource.addFeature(centerFeature);
   }
 
-  showHighlights(insideRaw, { full: true });
+  clearHighlights();
   
   emit('polygon-completed', { 
     polygon: ringCoords.map((c) => toLonLat(c)), 

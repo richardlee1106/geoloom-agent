@@ -37,6 +37,8 @@ interface AssistantMessage extends PlainObject {
   agentEvents?: unknown[]
   toolCalls?: unknown[]
   toolCallsRecordedAt?: number
+  runStartedAt?: number | null
+  runCompletedAt?: number | null
 }
 
 interface NormalizedRefinedResultEvidence {

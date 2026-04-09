@@ -1550,7 +1550,8 @@ function applySelectionResults(features, options = {}) {
   const {
     updateTagCloud = false,
     fitView = false,
-    keepMapHighlight = true
+    keepMapHighlight = false,
+    clearMapHighlight = !keepMapHighlight
   } = options;
 
   selectedFeatures.value = normalizedFeatures;
@@ -1561,6 +1562,8 @@ function applySelectionResults(features, options = {}) {
 
   if (keepMapHighlight && mapComponent.value) {
     mapComponent.value.showHighlights(normalizedFeatures, { fitView });
+  } else if (clearMapHighlight && mapComponent.value?.clearHighlights) {
+    mapComponent.value.clearHighlights();
   }
 
   return normalizedFeatures;
@@ -1570,7 +1573,8 @@ async function refreshManualSelectionSource(options = {}) {
   const {
     updateTagCloud = false,
     fitView = false,
-    keepMapHighlight = true,
+    keepMapHighlight = false,
+    clearMapHighlight = !keepMapHighlight,
     silent = true,
     limit = MAX_MANUAL_FETCH_LIMIT,
     allowViewportFallback = false
@@ -1587,7 +1591,8 @@ async function refreshManualSelectionSource(options = {}) {
     return applySelectionResults([], {
       updateTagCloud,
       fitView: false,
-      keepMapHighlight
+      keepMapHighlight,
+      clearMapHighlight
     });
   }
 
@@ -1597,13 +1602,23 @@ async function refreshManualSelectionSource(options = {}) {
 
     // 后端筛选结果仍进行一次前端严格裁剪，保证最终渲染 POI 100% 在约束内
     const strictFeatures = filterFeaturesClientSide(features, categoryLeaves);
-    return applySelectionResults(strictFeatures, { updateTagCloud, fitView, keepMapHighlight });
+    return applySelectionResults(strictFeatures, {
+      updateTagCloud,
+      fitView,
+      keepMapHighlight,
+      clearMapHighlight
+    });
   } catch (error) {
     if (requestToken !== manualFilterRequestToken) return [];
 
     console.error('[App] 刷新手动筛选数据失败，回退到前端过滤', error);
     const fallbackFeatures = filterFeaturesClientSide(allPoiFeatures.value, categoryLeaves);
-    applySelectionResults(fallbackFeatures, { updateTagCloud, fitView, keepMapHighlight });
+    applySelectionResults(fallbackFeatures, {
+      updateTagCloud,
+      fitView,
+      keepMapHighlight,
+      clearMapHighlight
+    });
 
     if (!silent) {
       ElNotification.warning({
@@ -1625,7 +1640,7 @@ async function handleCategoryChange(paths) {
   await refreshManualSelectionSource({
     updateTagCloud: false,
     fitView: false,
-    keepMapHighlight: true,
+    keepMapHighlight: false,
     silent: true
   });
 }
@@ -1789,7 +1804,7 @@ const handleRunAlgorithm = async (payload) => {
   const latestFeatures = await refreshManualSelectionSource({
     updateTagCloud: true,
     fitView: false,
-    keepMapHighlight: true,
+    keepMapHighlight: false,
     silent: false,
     limit: MAX_MANUAL_FETCH_LIMIT
   });
@@ -1840,7 +1855,7 @@ const handleDataLoaded = (payload) => {
       void refreshManualSelectionSource({
         updateTagCloud: false,
         fitView: false,
-        keepMapHighlight: true,
+        keepMapHighlight: false,
         silent: true
       });
     }
@@ -1865,7 +1880,7 @@ const handleDataRemoved = (categoryToRemove) => {
     void refreshManualSelectionSource({
       updateTagCloud: false,
       fitView: false,
-      keepMapHighlight: true,
+      keepMapHighlight: false,
       silent: true
     });
     ElNotification.info({ title: '已移除', message: `移除图层: ${categoryToRemove}`, offset: 80 });
@@ -1936,8 +1951,14 @@ const handleSearch = async (keyword) => {
   if (!keyword || !keyword.trim()) {
     // 恢复显示所有选中
     tagData.value = selectedFeatures.value;
+    const shouldKeepFilterStateOnly = hasManualSpatialSelection()
+      || getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
     if (mapComponent.value) {
-      mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
+      if (shouldKeepFilterStateOnly) {
+        mapComponent.value.clearHighlights?.();
+      } else {
+        mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
+      }
     }
     // 通知子组件无搜索结果
     if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
@@ -2034,10 +2055,16 @@ const handleSearch = async (keyword) => {
 const handleClearSearch = () => {
   // 恢复显示所有选中
   tagData.value = selectedFeatures.value;
+  const shouldKeepFilterStateOnly = hasManualSpatialSelection()
+    || getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
   // 通知子组件清除搜索结果
   if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   if (mapComponent.value) {
-    mapComponent.value.showHighlights(selectedFeatures.value, { fitView: true });
+    if (shouldKeepFilterStateOnly) {
+      mapComponent.value.clearHighlights?.();
+    } else {
+      mapComponent.value.showHighlights(selectedFeatures.value, { fitView: true });
+    }
   }
   ElNotification.info({ title: '提示', message: '已清除查询结果', offset: 80 });
 };
@@ -2510,7 +2537,7 @@ const handlePolygonCompleted = async (payload) => {
   const refreshed = await refreshManualSelectionSource({
     updateTagCloud: false,
     fitView: false,
-    keepMapHighlight: true,
+    keepMapHighlight: false,
     silent: true
   });
 
@@ -2538,7 +2565,7 @@ const handleRegionRemoved = async () => {
   await refreshManualSelectionSource({
     updateTagCloud: false,
     fitView: false,
-    keepMapHighlight: true,
+    keepMapHighlight: false,
     silent: true
   });
 };
@@ -2551,7 +2578,7 @@ const handleRegionsCleared = async () => {
   await refreshManualSelectionSource({
     updateTagCloud: false,
     fitView: false,
-    keepMapHighlight: true,
+    keepMapHighlight: false,
     silent: true
   });
 };

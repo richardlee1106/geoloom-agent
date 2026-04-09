@@ -23,6 +23,7 @@ export interface AgentRunSummary {
   detail: string
   eventCount: number
   toolCount: number
+  elapsedLabel?: string
 }
 
 export interface AgentRunSnapshot {
@@ -34,6 +35,8 @@ type AssistantMessageLike = PlainObject & {
   agentEvents?: unknown[]
   toolCalls?: unknown[]
   toolCallsRecordedAt?: unknown
+  runStartedAt?: unknown
+  runCompletedAt?: unknown
   isStreaming?: boolean
   isThinking?: boolean
   pipelineCompleted?: boolean
@@ -95,6 +98,19 @@ function formatTimeLabel(timestamp: number): string {
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+function formatElapsedLabel(startedAt: unknown, completedAt: unknown): string {
+  const start = toFiniteNumber(startedAt)
+  const end = toFiniteNumber(completedAt)
+  if (start === null || end === null || end <= start) return ''
+
+  const elapsedSeconds = (end - start) / 1000
+  const rounded = elapsedSeconds < 10
+    ? Math.round(elapsedSeconds * 10) / 10
+    : Math.round(elapsedSeconds)
+
+  return `用时 ${rounded.toFixed(Number.isInteger(rounded) ? 0 : 1)} s`
 }
 
 function createEventRecord({
@@ -525,6 +541,7 @@ function normalizeStoredEvent(item: unknown): AgentTimelineEvent | null {
 function buildSummary(message: AssistantMessageLike, timeline: AgentTimelineEvent[], toolCount: number): AgentRunSummary {
   const eventCount = timeline.length
   const hasSchemaWarning = Boolean(asArray(message.schemaWarning?.errors).length > 0)
+  const elapsedLabel = formatElapsedLabel(message.runStartedAt, message.runCompletedAt)
 
   if (message.error === true) {
     return {
@@ -533,16 +550,21 @@ function buildSummary(message: AssistantMessageLike, timeline: AgentTimelineEven
       detail: eventCount > 0 ? `已记录 ${eventCount} 条过程，最后一次请求失败。` : '请求在返回结果前终止了。',
       eventCount,
       toolCount,
+      elapsedLabel: elapsedLabel || undefined,
     }
   }
 
   if (message.pipelineCompleted === true) {
+    const detailSegments = [`已记录 ${eventCount} 条过程`]
+    if (toolCount > 0) detailSegments.push(`调用 ${toolCount} 个工具`)
+    if (elapsedLabel) detailSegments.push(elapsedLabel)
     return {
       tone: hasSchemaWarning ? 'warning' : 'success',
       label: hasSchemaWarning ? '结果待核验' : '已完成分析',
-      detail: `已记录 ${eventCount} 条过程${toolCount > 0 ? `，调用 ${toolCount} 个工具` : ''}。`,
+      detail: `${detailSegments.join('，')}。`,
       eventCount,
       toolCount,
+      elapsedLabel: elapsedLabel || undefined,
     }
   }
 

@@ -11,6 +11,8 @@ function createMessage() {
     pipelineCompleted: true,
     isStreaming: false,
     isThinking: false,
+    runStartedAt: 1000,
+    runCompletedAt: 5200,
     intentMeta: {
       intentMode: 'macro_overview',
       queryType: 'area_analysis',
@@ -75,5 +77,6 @@ describe('AgentMessageCard', () => {
     expect(wrapper.text()).toContain('已接收问题')
     expect(wrapper.text()).toContain('postgis.viewport_poi_scan')
     expect(wrapper.text()).toContain('已完成分析')
+    expect(wrapper.text()).toContain('用时 4.2 s')
   })
 })
