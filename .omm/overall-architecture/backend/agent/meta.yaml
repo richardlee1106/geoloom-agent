@@ -1,0 +1,9 @@
+created: 2026-04-09T04:43:14.605Z
+updated: 2026-04-09T04:43:14.606Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: agent
+children: []
+parentPath:
+  - backend

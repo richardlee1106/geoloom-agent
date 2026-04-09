@@ -1,0 +1,1 @@
+The ShortTermMemory TTL defaults to 24 hours. Session IDs are UUIDs generated per request. The MemoryManager exposes a unified snapshot API that merges short-term (recent turns) and long-term (summary) memory for use in the system prompt. Profile data is pre-loaded at startup and refreshed on demand.

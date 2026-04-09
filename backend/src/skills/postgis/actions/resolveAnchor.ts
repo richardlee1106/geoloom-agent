@@ -95,6 +95,22 @@ function buildCandidateDensityMap(candidates: AnchorCandidate[] = []) {
   return densityMap
 }
 
+function approximateDistanceM(left: AnchorCandidate, right: AnchorCandidate) {
+  const leftLon = Number(left.lon)
+  const leftLat = Number(left.lat)
+  const rightLon = Number(right.lon)
+  const rightLat = Number(right.lat)
+  if (![leftLon, leftLat, rightLon, rightLat].every(Number.isFinite)) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const rad = Math.PI / 180
+  const meanLat = ((leftLat + rightLat) / 2) * rad
+  const lonDelta = (rightLon - leftLon) * rad * 6371000 * Math.cos(meanLat)
+  const latDelta = (rightLat - leftLat) * rad * 6371000
+  return Math.sqrt((lonDelta ** 2) + (latDelta ** 2))
+}
+
 function buildVariants(placeName: string) {
   const direct = PLACE_ALIASES[placeName] || []
   return [...new Set([placeName, ...direct])]
@@ -148,7 +164,32 @@ function readMatchedSuffix(candidateName: string, variant: string) {
   return candidateName.slice(variant.length).trim()
 }
 
-function scoreCandidate(candidate: AnchorCandidate, variants: string[], placeName: string) {
+function scoreNearbyEntitySupport(candidate: AnchorCandidate, candidates: AnchorCandidate[], variant: string) {
+  const normalizedVariant = normalizeSearchText(variant)
+  if (!normalizedVariant) return 0
+
+  return candidates.reduce((sum, other) => {
+    if (other === candidate) return sum
+    const distanceM = approximateDistanceM(candidate, other)
+    if (!Number.isFinite(distanceM) || distanceM > 3000) return sum
+
+    const otherName = normalizeSearchText(other.name)
+    if (!otherName.startsWith(normalizedVariant) || otherName === normalizedVariant) {
+      return sum
+    }
+
+    const otherCategoryTokens = getCategoryTokens(other)
+    if (!hasCategoryMatch(otherCategoryTokens, EDUCATION_CATEGORY_RE)) {
+      return sum
+    }
+
+    if (distanceM <= 800) return sum + 1.2
+    if (distanceM <= 1500) return sum + 0.8
+    return sum + 0.35
+  }, 0)
+}
+
+function scoreCandidate(candidate: AnchorCandidate, variants: string[], placeName: string, candidates: AnchorCandidate[] = []) {
   const placeKind = inferPlaceKind(placeName)
   const categoryTokens = getCategoryTokens(candidate)
   const match = getBestVariantMatch(candidate.name, variants)
@@ -156,12 +197,16 @@ function scoreCandidate(candidate: AnchorCandidate, variants: string[], placeNam
   const isEducationCategory = hasCategoryMatch(categoryTokens, EDUCATION_CATEGORY_RE)
   const isTransportCategory = hasCategoryMatch(categoryTokens, TRANSPORT_CATEGORY_RE)
   const isCanonicalEducationEntity = isEducationCategory || EDUCATION_SAME_ENTITY_SUFFIX_RE.test(matchedSuffix)
+  const nearbyEducationSupport = placeKind === 'education' && match.score > 0
+    ? scoreNearbyEntitySupport(candidate, candidates, match.variant || placeName)
+    : 0
   let score = match.score - (match.lengthGap * 2)
 
   if (placeKind === 'education') {
     if (isEducationCategory) score += 1000
     if (categoryTokens.includes('中学') || categoryTokens.includes('高等院校')) score += 600
     if (EDUCATION_SAME_ENTITY_SUFFIX_RE.test(matchedSuffix)) score += 1100
+    if (nearbyEducationSupport > 0) score += nearbyEducationSupport * 420
     if (/(东门|西门|南门|北门|图书馆|教学楼|宿舍)/.test(candidate.name)) score -= 500
     if (match.exact && !isCanonicalEducationEntity) score -= 2200
     if (!isCanonicalEducationEntity && match.score > 0) score -= 600
@@ -221,7 +266,7 @@ export async function resolveAnchorAction(
   const ranked = candidates
     .map((candidate) => ({
       candidate,
-      score: scoreCandidate(candidate, variants, placeName) + (() => {
+      score: scoreCandidate(candidate, variants, placeName, candidates) + (() => {
         const lon = Number(candidate.lon)
         const lat = Number(candidate.lat)
         if (!Number.isFinite(lon) || !Number.isFinite(lat)) return 0

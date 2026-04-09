@@ -1,0 +1,9 @@
+created: 2026-04-09T04:43:18.528Z
+updated: 2026-04-09T04:43:18.529Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: chat
+children: []
+parentPath:
+  - backend

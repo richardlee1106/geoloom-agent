@@ -1,0 +1,217 @@
+{
+  "id": "2026-04-08-213723",
+  "generated_at": "2026-04-08T13:37:23.9213189Z",
+  "language": "zh",
+  "pages": [
+    {
+      "slug": "1-xiang-mu-gai-shu",
+      "title": "项目概述",
+      "file": "1-xiang-mu-gai-shu.md",
+      "section": "快速入门",
+      "level": "Beginner"
+    },
+    {
+      "slug": "2-kuai-su-qi-dong-zhi-nan",
+      "title": "快速启动指南",
+      "file": "2-kuai-su-qi-dong-zhi-nan.md",
+      "section": "快速入门",
+      "level": "Beginner"
+    },
+    {
+      "slug": "3-xi-tong-jia-gou-gai-lan",
+      "title": "系统架构概览",
+      "file": "3-xi-tong-jia-gou-gai-lan.md",
+      "section": "深度探索",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "4-geoloomagent-zhi-neng-ti-he-xin",
+      "title": "GeoLoomAgent 智能体核心",
+      "file": "4-geoloomagent-zhi-neng-ti-he-xin.md",
+      "section": "深度探索",
+      "group": "核心模块",
+      "level": "Advanced"
+    },
+    {
+      "slug": "5-han-shu-diao-yong-xun-huan-ji-zhi",
+      "title": "函数调用循环机制",
+      "file": "5-han-shu-diao-yong-xun-huan-ji-zhi.md",
+      "section": "深度探索",
+      "group": "核心模块",
+      "level": "Advanced"
+    },
+    {
+      "slug": "6-ji-neng-zhu-ce-yu-diao-du-xi-tong",
+      "title": "技能注册与调度系统",
+      "file": "6-ji-neng-zhu-ce-yu-diao-du-xi-tong.md",
+      "section": "深度探索",
+      "group": "核心模块",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "7-postgis-kong-jian-shu-ju-ku-ji-neng",
+      "title": "PostGIS 空间数据库技能",
+      "file": "7-postgis-kong-jian-shu-ju-ku-ji-neng.md",
+      "section": "深度探索",
+      "group": "技能系统",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "8-kong-jian-xiang-liang-jian-suo-ji-neng",
+      "title": "空间向量检索技能",
+      "file": "8-kong-jian-xiang-liang-jian-suo-ji-neng.md",
+      "section": "深度探索",
+      "group": "技能系统",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "9-kong-jian-bian-ma-qi-ji-neng",
+      "title": "空间编码器技能",
+      "file": "9-kong-jian-bian-ma-qi-ji-neng.md",
+      "section": "深度探索",
+      "group": "技能系统",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "10-lu-jing-ju-chi-ji-suan-ji-neng",
+      "title": "路径距离计算技能",
+      "file": "10-lu-jing-ju-chi-ji-suan-ji-neng.md",
+      "section": "深度探索",
+      "group": "技能系统",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "11-ji-yi-guan-li-qi-jia-gou",
+      "title": "记忆管理器架构",
+      "file": "11-ji-yi-guan-li-qi-jia-gou.md",
+      "section": "深度探索",
+      "group": "内存与记忆",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "12-hui-hua-yu-shang-xia-wen-guan-li",
+      "title": "会话与上下文管理",
+      "file": "12-hui-hua-yu-shang-xia-wen-guan-li.md",
+      "section": "深度探索",
+      "group": "内存与记忆",
+      "level": "Advanced"
+    },
+    {
+      "slug": "13-que-ding-xing-lu-you-jie-xi-qi",
+      "title": "确定性路由解析器",
+      "file": "13-que-ding-xing-lu-you-jie-xi-qi.md",
+      "section": "深度探索",
+      "group": "证据与响应",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "14-zheng-ju-shi-tu-gong-han",
+      "title": "证据视图工厂",
+      "file": "14-zheng-ju-shi-tu-gong-han.md",
+      "section": "深度探索",
+      "group": "证据与响应",
+      "level": "Advanced"
+    },
+    {
+      "slug": "15-sse-shi-jian-liu-xie-yi",
+      "title": "SSE 事件流协议",
+      "file": "15-sse-shi-jian-liu-xie-yi.md",
+      "section": "深度探索",
+      "group": "证据与响应",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "16-di-tu-rong-qi-zu-jian",
+      "title": "地图容器组件",
+      "file": "16-di-tu-rong-qi-zu-jian.md",
+      "section": "前端开发",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "17-ai-liao-tian-jie-mian-zu-jian",
+      "title": "AI 聊天界面组件",
+      "file": "17-ai-liao-tian-jie-mian-zu-jian.md",
+      "section": "前端开发",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "18-kong-jian-qing-qiu-gou-jian-qi",
+      "title": "空间请求构建器",
+      "file": "18-kong-jian-qing-qiu-gou-jian-qi.md",
+      "section": "前端开发",
+      "level": "Advanced"
+    },
+    {
+      "slug": "19-kong-jian-zheng-ju-qia-pian-xuan-ran",
+      "title": "空间证据卡片渲染",
+      "file": "19-kong-jian-zheng-ju-qia-pian-xuan-ran.md",
+      "section": "前端开发",
+      "level": "Advanced"
+    },
+    {
+      "slug": "20-di-li-shu-ju-chu-li-gong-zuo-xian-cheng",
+      "title": "地理数据处理工作线程",
+      "file": "20-di-li-shu-ju-chu-li-gong-zuo-xian-cheng.md",
+      "section": "前端开发",
+      "group": "Web Workers",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "21-zha-ge-shu-ju-ti-qu-qi",
+      "title": "栅格数据提取器",
+      "file": "21-zha-ge-shu-ju-ti-qu-qi.md",
+      "section": "前端开发",
+      "group": "Web Workers",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "22-yi-lai-fu-wu-jian-kang-jian-cha",
+      "title": "依赖服务健康检查",
+      "file": "22-yi-lai-fu-wu-jian-kang-jian-cha.md",
+      "section": "集成与部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "23-huan-jing-pei-zhi-guan-li",
+      "title": "环境配置管理",
+      "file": "23-huan-jing-pei-zhi-guan-li.md",
+      "section": "集成与部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "24-smoke-ce-shi-jiao-ben",
+      "title": "Smoke 测试脚本",
+      "file": "24-smoke-ce-shi-jiao-ben.md",
+      "section": "集成与部署",
+      "level": "Advanced"
+    },
+    {
+      "slug": "25-jian-qi-dong-bian-pai",
+      "title": "一键启动编排",
+      "file": "25-jian-qi-dong-bian-pai.md",
+      "section": "集成与部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "26-hou-duan-dan-yuan-ce-shi",
+      "title": "后端单元测试",
+      "file": "26-hou-duan-dan-yuan-ce-shi.md",
+      "section": "测试与质量保障",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "27-ji-cheng-ce-shi-ce-lue",
+      "title": "集成测试策略",
+      "file": "27-ji-cheng-ce-shi-ce-lue.md",
+      "section": "测试与质量保障",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "28-smoke-ce-shi-tao-jian",
+      "title": "Smoke 测试套件",
+      "file": "28-smoke-ce-shi-tao-jian.md",
+      "section": "测试与质量保障",
+      "level": "Advanced"
+    }
+  ]
+}

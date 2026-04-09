@@ -77,6 +77,28 @@ describe('buildToolSchemas', () => {
     })
   })
 
+  it('exposes manifest prompt guidance in tool descriptions so the LLM sees when a skill should be used', () => {
+    const tools = buildToolSchemas({
+      skills: [
+        createSkill('semantic_selector', ['select_area_evidence']),
+      ],
+      manifests: [
+        {
+          name: 'semantic_selector',
+          runtimeSkill: 'semantic_selector',
+          description: 'area insight 按需取证技能',
+          actions: ['select_area_evidence'],
+          capabilities: ['query_driven_selection'],
+          promptSnippet: '先拿 area insight，再按 query 主题选择必要证据，不要在脑中手动删样本。',
+          path: '/tmp/semantic_selector/SKILL.md',
+        },
+      ],
+    })
+
+    expect(tools[0]?.description).toContain('area insight 按需取证技能')
+    expect(tools[0]?.description).toContain('先拿 area insight，再按 query 主题选择必要证据')
+  })
+
   it('keeps each action payload schema visible to the LLM instead of widening payload to any object', () => {
     const tools = buildToolSchemas({
       skills: [

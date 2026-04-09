@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto'
 
 import type { LLMCompletionRequest, LLMAssistantMessage, LLMProvider, LLMResponse } from './types.js'
 
+export interface OpenAICompatibleProviderOptions {
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+  timeoutMs?: number | string
+}
+
 function toToolDefinitions(request: LLMCompletionRequest) {
   return request.tools.map((tool) => ({
     type: 'function',
@@ -53,26 +60,81 @@ function normalizeAssistantContent(content: unknown) {
   return null
 }
 
-function parseToolArguments(argumentsText: string | undefined) {
-  if (!argumentsText) return {}
-
+function tryParseJson(argumentsText: string) {
   try {
     return JSON.parse(argumentsText) as Record<string, unknown>
   } catch {
-    return {
-      raw_arguments: argumentsText,
+    return null
+  }
+}
+
+function buildArgumentCandidates(argumentsText: string) {
+  const normalized = String(argumentsText || '').trim()
+  if (!normalized) {
+    return []
+  }
+
+  const candidates = new Set<string>([normalized])
+  const withoutCodeFence = normalized
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
+  if (withoutCodeFence) {
+    candidates.add(withoutCodeFence)
+  }
+
+  const strippedEmptyPrefix = withoutCodeFence.replace(/^(?:\{\s*\}\s*)+/, '').trim()
+  if (strippedEmptyPrefix) {
+    candidates.add(strippedEmptyPrefix)
+  }
+
+  for (let index = 0; index < strippedEmptyPrefix.length; index += 1) {
+    const token = strippedEmptyPrefix[index]
+    if (token !== '{' && token !== '[') {
+      continue
     }
+
+    const fragment = strippedEmptyPrefix.slice(index).trim()
+    if (fragment) {
+      candidates.add(fragment)
+    }
+  }
+
+  return [...candidates]
+}
+
+function parseToolArguments(argumentsText: string | undefined) {
+  if (!argumentsText) return {}
+
+  for (const candidate of buildArgumentCandidates(argumentsText)) {
+    const parsed = tryParseJson(candidate)
+    if (parsed) {
+      return parsed
+    }
+  }
+
+  return {
+    raw_arguments: argumentsText,
   }
 }
 
 export class OpenAICompatibleProvider implements LLMProvider {
-  private readonly baseUrl = String(process.env.LLM_BASE_URL || '').trim()
-  private readonly apiKey = String(process.env.LLM_API_KEY || '').trim()
-  private readonly model = String(process.env.LLM_MODEL || '').trim()
-  private readonly timeoutMs = Number(process.env.LLM_TIMEOUT_MS || '12000')
+  private readonly baseUrl: string
+  private readonly apiKey: string
+  private readonly model: string
+  private readonly timeoutMs: number
+
+  constructor(options: OpenAICompatibleProviderOptions = {}) {
+    this.baseUrl = String(options.baseUrl ?? process.env.LLM_BASE_URL ?? '').trim()
+    this.apiKey = String(options.apiKey ?? process.env.LLM_API_KEY ?? '').trim()
+    this.model = String(options.model ?? process.env.LLM_MODEL ?? '').trim()
+    this.timeoutMs = Number(options.timeoutMs ?? process.env.LLM_TIMEOUT_MS ?? '12000')
+  }
 
   private get providerName() {
-    return /minimax/i.test(this.baseUrl) ? 'minimax-openai-compatible' : 'openai-compatible'
+    return /minimax/i.test(this.baseUrl) || /minimax/i.test(this.model)
+      ? 'minimax-openai-compatible'
+      : 'openai-compatible'
   }
 
   getStatus() {

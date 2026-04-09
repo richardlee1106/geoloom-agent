@@ -1,0 +1,1 @@
+Shows what each backend module depends on and what's shared. The GeoLoomAgent is the central hub — it depends on all other modules. Shared utilities (logger, resolveResourceUrl) are imported across all layers. The integration layer (postgisPool, pythonBridge, faissIndex, osmBridge) is shared by skills and the agent.

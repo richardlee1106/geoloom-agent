@@ -503,7 +503,55 @@ describe('EvidenceViewFactory', () => {
       },
     })
 
-    expect((view as Record<string, unknown>).areaSubject).toBeTruthy()
-    expect(JSON.stringify((view as Record<string, unknown>).areaSubject)).toMatch(/湖北大学/)
+    expect(view.areaSubject).toBeTruthy()
+    expect(JSON.stringify(view.areaSubject)).toMatch(/湖北大学/)
+  })
+
+  it('filters invalid AOI placeholder names so area subjects do not degrade into None-like labels', () => {
+    const view = factory.create({
+      intent: {
+        queryType: 'area_overview',
+        intentMode: 'agent_full_loop',
+        placeName: '当前区域',
+        anchorSource: 'map_view',
+        targetCategory: '区域洞察',
+        radiusM: 1200,
+        needsClarification: false,
+        clarificationHint: null,
+        rawQuery: '解读一下这片区域',
+      },
+      anchor: {
+        ...anchor,
+        place_name: '当前区域',
+        display_name: '当前区域',
+        resolved_place_name: '华中农业大学',
+      },
+      rows: [
+        {
+          id: 9301,
+          name: '校园便利店',
+          category_main: '购物服务',
+          category_sub: '便利店',
+          longitude: 114.365,
+          latitude: 30.483,
+          distance_m: 180,
+        },
+      ],
+      areaInsight: {
+        aoiContext: [
+          { id: 9401, name: 'None', fclass: 'residential', area_sqm: 120000 },
+          { id: 9402, name: '未命名 AOI', fclass: 'commercial', area_sqm: 86000 },
+        ],
+        landuseContext: [
+          { land_type: 'residential', parcel_count: 6, total_area_sqm: 86000 },
+          { land_type: 'commercial', parcel_count: 4, total_area_sqm: 52000 },
+        ],
+      },
+    })
+
+    expect(view.areaSubject?.anchorName).toBe('华中农业大学')
+    expect(view.areaSubject?.title).toMatch(/华中农业大学/)
+    expect(view.areaSubject?.title).not.toMatch(/None|未命名/)
+    expect(view.aoiContext).toHaveLength(0)
   })
 })

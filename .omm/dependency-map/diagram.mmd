@@ -1,0 +1,34 @@
+graph TD
+    SG["server.ts\nEntry point: wires all modules"]
+    GA["GeoLoomAgent\nDepends on: router, provider, memory, registry, evidenceFactory, renderer, promptBuilder"]
+    RR["DeterministicRouter\nNo dependencies"]
+    PR["LLM Providers\nrouter: config env, skill manifests"]
+    MM["MemoryManager\nshortTerm, longTerm, profiles"]
+    REG["SkillRegistry\nskills: postgis, spatial_encoder, spatial_vector, route_distance"]
+    EF["EvidenceViewFactory\nNo state dependencies"]
+    RD["Renderer\nNo state dependencies"]
+    APB["AlivePromptBuilder\nNo state dependencies"]
+    CG["ConfidenceGate\nNo state dependencies"]
+    CM["ConversationMemory\nNo state dependencies"]
+    SM["SessionManager\nmemory: shortTerm"]
+    MT["RuntimeMetrics\nNo state dependencies"]
+
+    SK_PG["PostGIS Skill\ndepends: catalog, sandbox, pool, searchCandidates"]
+    SK_SE["SpatialEncoder Skill\ndepends: bridge (Python)"]
+    SK_SV["SpatialVector Skill\ndepends: index (FAISS)"]
+    SK_RD["RouteDistance Skill\ndepends: bridge (OSM)"]
+
+    INT_PG["PostgisPool\ndepends: pg driver"]
+    INT_PY["PythonBridge\nRemoteFirstPythonBridge"]
+    INT_FA["FaissIndex\nRemoteFirstFaissIndex"]
+    INT_OS["OSMBridge\nRemoteFirstOSMBridge"]
+    INT_DEP["dependencyStatus\nNo state dependencies"]
+
+    SK_PG --> INT_PG
+    SK_SE --> INT_PY
+    SK_SV --> INT_FA
+    SK_RD --> INT_OS
+    GA --> RR & PR & MM & REG & EF & RD & APB & CG & CM & SM & MT
+    REG --> SK_PG & SK_SE & SK_SV & SK_RD
+    MM --> INT_PG
+    INT_DEP --> INT_PG & INT_PY & INT_FA & INT_OS

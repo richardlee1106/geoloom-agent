@@ -1,0 +1,19 @@
+graph LR
+    frontend["Frontend\nsrc/"]
+    backend["Backend\nbackend/src/"]
+    external["External Services\nPostGIS | Python Bridge | FAISS | OSM | LLM"]
+
+    frontend -->|"HTTP SSE / WebSocket"| backend
+    backend -->|"SQL query"| PostGIS["PostGIS\npg driver"]
+    backend -->|"HTTP/RPC"| Python["Python Bridge\nspatial encoder"]
+    backend -->|"HTTP/RPC"| Faiss["FAISS Index\nsemantic search"]
+    backend -->|"HTTP/RPC"| Osm["OSM Bridge\nroute distance"]
+    backend -->|"LLM API"| LLM["LLM Provider\nAnthropic / OpenAI"]
+
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef frontend fill:#cba6f7,stroke:#cba6f7,color:#1e1e2e
+
+    classDef external PostGIS,Python,Faiss,Osm,LLM
+    classDef entry frontend

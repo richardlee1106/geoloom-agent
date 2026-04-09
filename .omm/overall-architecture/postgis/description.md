@@ -1,0 +1,1 @@
+PostGIS database (PostgreSQL + PostGIS extension) hosted externally. Stores POI data (pois table with geom geometry column, category fields, name, etc.) plus AOI and land-use reference data. The backend connects via the pg driver with a configurable query timeout (default 5s). All writes are blocked by the SQLSandbox allowlist — only pre-approved SELECT patterns are allowed.

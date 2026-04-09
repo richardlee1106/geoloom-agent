@@ -34,9 +34,17 @@ export function buildToolSchemas(input: {
       : Object.keys(skill.actions)
     const actionSchemas = allowedActions.map((actionName) => buildActionSchema(skill, actionName))
 
+    const description = [
+      manifest?.description || skill.description,
+      manifest?.promptSnippet || '',
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join(' ')
+
     return {
       name: skill.name,
-      description: manifest?.description || skill.description,
+      description,
       inputSchema: {
         type: 'object',
         required: ['action', 'payload'],

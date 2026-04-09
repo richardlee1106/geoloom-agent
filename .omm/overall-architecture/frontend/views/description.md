@@ -1,0 +1,1 @@
+Top-level page views. MainLayout.vue is the root layout with sidebar, map, and chat panels. NarrativeMode.vue renders a narrative-style AI response view. V2AgentTraceMode.vue shows the detailed agent execution trace with stages, reasoning, and tool call logs.

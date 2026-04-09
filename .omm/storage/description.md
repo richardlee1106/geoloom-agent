@@ -1,0 +1,1 @@
+The system uses four storage systems: PostGIS (primary spatial data), Redis or in-memory (short-term session KV), filesystem JSON files (long-term memory and user profiles), and the SSE response stream (ephemeral output). No object store is used — all structured data stays in PostGIS or memory/disk.

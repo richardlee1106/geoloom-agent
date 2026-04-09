@@ -225,6 +225,63 @@ describe('resolveAnchorAction', () => {
     expect(result.data?.anchor.lat).toBeCloseTo(30.57687000005052)
   })
 
+  it('prefers the exact-match campus entity that is supported by nearby same-campus buildings', async () => {
+    const result = await resolveAnchorAction(
+      {
+        place_name: '华中农业大学',
+      },
+      {
+        searchCandidates: async () => [
+          {
+            id: 343092,
+            name: '华中农业大学',
+            lon: 114.30890599981205,
+            lat: 30.610352999990994,
+            category_main: '科教文化服务',
+            category_sub: '学校',
+          },
+          {
+            id: 317978,
+            name: '华中农业大学',
+            lon: 114.35676900008934,
+            lat: 30.474851999819975,
+            category_main: '科教文化服务',
+            category_sub: '学校',
+          },
+          {
+            id: 318110,
+            name: '华中农业大学主楼',
+            lon: 114.35847000029037,
+            lat: 30.47719399990325,
+            category_main: '科教文化服务',
+            category_sub: '学校',
+          },
+          {
+            id: 318139,
+            name: '华中农业大学硕彦厅',
+            lon: 114.35418499963805,
+            lat: 30.47497400005011,
+            category_main: '科教文化服务',
+            category_sub: '学校',
+          },
+          {
+            id: 318077,
+            name: '华中农业大学工学院',
+            lon: 114.35898399971188,
+            lat: 30.4733719999179,
+            category_main: '科教文化服务',
+            category_sub: '学校',
+          },
+        ],
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.data?.anchor.poi_id).toBe(317978)
+    expect(result.data?.anchor.lon).toBeCloseTo(114.35676900008934)
+    expect(result.data?.anchor.lat).toBeCloseTo(30.474851999819975)
+  })
+
   it('returns an unresolved anchor when no candidate matches', async () => {
     const result = await resolveAnchorAction(
       {

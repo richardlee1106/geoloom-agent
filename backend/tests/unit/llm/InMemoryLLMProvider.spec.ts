@@ -108,6 +108,51 @@ describe('InMemoryLLMProvider', () => {
     expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_landuse_context')
   })
 
+  it('treats 解读一下这片区域 as an area-analysis query in fallback tool planning mode', async () => {
+    const provider = new InMemoryLLMProvider()
+
+    const result = await provider.complete({
+      messages: [
+        {
+          role: 'user',
+          content: '解读一下这片区域',
+        },
+      ],
+      tools: [],
+    })
+
+    expect(result.finishReason).toBe('tool_calls')
+    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_category_histogram')
+    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_aoi_context')
+  })
+
+  it('strips area-analysis lead-ins before resolving explicit place anchors in fallback mode', async () => {
+    const provider = new InMemoryLLMProvider()
+
+    const result = await provider.complete({
+      messages: [
+        {
+          role: 'user',
+          content: '解读一下武汉大学周边的业态结构',
+        },
+      ],
+      tools: [],
+    })
+
+    expect(result.finishReason).toBe('tool_calls')
+    expect(result.toolCalls).toHaveLength(1)
+    expect(result.toolCalls[0]).toMatchObject({
+      name: 'postgis',
+      arguments: {
+        action: 'resolve_anchor',
+        payload: {
+          place_name: '武汉大学',
+          role: 'primary',
+        },
+      },
+    })
+  })
+
   it('classifies 解读一下这片区域 as area_overview in intent-classifier mode', async () => {
     const provider = new InMemoryLLMProvider()
 

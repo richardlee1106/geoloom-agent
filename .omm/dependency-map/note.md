@@ -1,0 +1,1 @@
+The GeoLoomAgent is instantiated once in server.ts and shared across all requests. Skills are registered once at startup and reused. The LLM provider is also a singleton. The PostgisPool is a singleton connection pool. This design means the system can handle concurrent requests efficiently without re-initializing resources per request.

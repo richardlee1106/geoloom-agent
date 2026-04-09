@@ -282,7 +282,8 @@ function inferAreaQuestionMode(view: EvidenceView) {
 
 function describeAreaSubject(view: EvidenceView) {
   const subjectTitle = String(view.areaSubject?.title || '').trim()
-  if (subjectTitle) {
+  const subjectConfidence = String(view.areaSubject?.confidence || '').trim()
+  if (subjectTitle && subjectConfidence === 'high') {
     return `当前范围更适合看作**${subjectTitle}**`
   }
 

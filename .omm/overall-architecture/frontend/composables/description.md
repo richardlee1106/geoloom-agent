@@ -1,0 +1,1 @@
+Vue 3 composables (composition API). ai/useAiStreamDispatcher handles SSE event parsing and UI state updates. ai/useIntentTemplateSelector resolves which rendering template to use for a given intent. ai/useSpatialRequestBuilder builds structured spatial query payloads sent to the backend. v2/ and map/ composables handle V2 trace mode and region state respectively.

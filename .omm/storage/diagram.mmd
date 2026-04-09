@@ -1,0 +1,25 @@
+graph LR
+    PG["PostGIS\npois | aoi | landuse\n(RDBMS)"]
+    REDIS["Redis\nShortTermMemory KV\n(session, requestId → state)"]
+    DISK_MEM["Disk: data/memory/\nLongTermMemory JSON\n(conversation summaries)"]
+    DISK_PROF["Disk: profiles/\nProfileManager JSON\n(user profiles)"]
+    SSE["SSE Stream\nEphemeral output to frontend"]
+
+    subgraph "Persistence Layer"
+        PG
+        REDIS
+        DISK_MEM
+        DISK_PROF
+    end
+
+    subgraph "Ephemeral"
+        SSE
+    end
+
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef ephemeral fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+
+    classDef store PG,REDIS,DISK_MEM,DISK_PROF
+    classDef ephemeral SSE
+    classDef external PG

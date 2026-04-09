@@ -84,6 +84,58 @@ describe('OpenAICompatibleProvider', () => {
     expect(result.finishReason).toBe('tool_calls')
   })
 
+  it('sanitizes malformed tool arguments returned by the MiniMax-compatible upstream', async () => {
+    vi.stubEnv('LLM_BASE_URL', 'http://219.143.144.35:8281/v1')
+    vi.stubEnv('LLM_API_KEY', 'sk-test')
+    vi.stubEnv('LLM_MODEL', 'MiniMax-M2.7-highspeed')
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            finish_reason: 'tool_calls',
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: 'tool_001',
+                  function: {
+                    name: 'postgis',
+                    arguments: '{}{"action":"resolve_anchor","payload":{"place_name":"武汉大学","role":"primary"}}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    }) as typeof fetch
+
+    const provider = new OpenAICompatibleProvider()
+    const result = await provider.complete({
+      messages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: '武汉大学附近有哪些咖啡店？' },
+      ],
+      tools: [],
+    })
+
+    expect(result.toolCalls).toEqual([
+      {
+        id: 'tool_001',
+        name: 'postgis',
+        arguments: {
+          action: 'resolve_anchor',
+          payload: {
+            place_name: '武汉大学',
+            role: 'primary',
+          },
+        },
+      },
+    ])
+  })
+
   it('honors request-level timeout overrides for slower agent orchestration calls', async () => {
     vi.stubEnv('LLM_BASE_URL', 'https://api.minimaxi.com/v1')
     vi.stubEnv('LLM_API_KEY', 'sk-test')

@@ -1,0 +1,1 @@
+PostGIS is the only stateful external dependency. If it goes down, the entire spatial query pipeline stops. Redis failure only affects session retrieval — sessions are re-created on each request. Disk-based memory is not replicated; in a multi-instance deployment, each instance has its own LongTermMemory and ProfileManager state. No data encryption at rest for disk files.

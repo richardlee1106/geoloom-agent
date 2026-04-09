@@ -1,0 +1,29 @@
+graph LR
+    server["Server Entry\nserver.ts"]
+    routes["Routes\nroutes/"]
+    agent["GeoLoomAgent\nagent/"]
+    skills["SkillRegistry\nskills/"]
+    llm["LLM Layer\nllm/"]
+    memory["Memory\nmemory/"]
+    evidence["Evidence\nevidence/"]
+    integration["Integrations\nintegration/"]
+    sandbox["SQLSandbox\nsandbox/"]
+    chat["Chat Runtime\nchat/"]
+
+    server --> routes
+    routes --> agent
+    agent --> chat
+    agent --> skills
+    agent --> llm
+    agent --> memory
+    agent --> evidence
+    skills --> integration
+    skills --> sandbox
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef core fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+    classDef support fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+
+    classDef core agent
+    classDef entry server,routes,chat
+    classDef support skills,llm,memory,evidence,integration,sandbox

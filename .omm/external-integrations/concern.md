@@ -1,0 +1,1 @@
+All external HTTP calls have configurable timeouts (Python bridge, FAISS, OSM: 5s default). PostGIS queries have a 5s statement timeout and 5s query timeout. SQL is sandboxed to SELECT-only via allowlist. LLM API keys are never logged or stored in memory longer than the request lifetime.

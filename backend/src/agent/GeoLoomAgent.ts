@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { Writable } from 'node:stream'
 
-import { DeterministicRouter } from '../chat/DeterministicRouter.js'
 import { SSEWriter } from '../chat/SSEWriter.js'
 import type {
   AreaInsightInput,
@@ -22,6 +21,10 @@ import type {
 import { EvidenceViewFactory } from '../evidence/EvidenceViewFactory.js'
 import { buildPoiProfileInputFromEvidence, buildRepresentativePoiProfile } from '../evidence/areaInsight/poiProfile.js'
 import { buildRegionSnapshotFromEvidence } from '../evidence/areaInsight/regionSnapshot.js'
+import {
+  IntentAwareAreaSemanticDenoiser,
+  type AreaSemanticDenoiser,
+} from '../evidence/areaInsight/semanticDenoiser.js'
 import { Renderer } from '../evidence/Renderer.js'
 import { InMemoryLLMProvider } from '../llm/InMemoryLLMProvider.js'
 import { createDefaultLLMProvider } from '../llm/createDefaultLLMProvider.js'
@@ -52,12 +55,32 @@ import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
 
 const SCHEMA_VERSION = 'v4.agent.v1'
 const DEFAULT_POI_COORD_SYS = 'gcj02'
-const DEFAULT_LLM_REQUEST_TIMEOUT_MS = resolveTimeoutMs(process.env.LLM_TIMEOUT_MS, 12000)
-const DEFAULT_LLM_QUERY_TIMEOUT_MS = resolveTimeoutMs(process.env.LLM_QUERY_TIMEOUT_MS, Math.max(DEFAULT_LLM_REQUEST_TIMEOUT_MS, 15000))
-const DEFAULT_LLM_ANALYSIS_TIMEOUT_MS = resolveTimeoutMs(process.env.LLM_ANALYSIS_TIMEOUT_MS, Math.max(DEFAULT_LLM_REQUEST_TIMEOUT_MS, 30000))
-const DEFAULT_LLM_SYNTHESIS_TIMEOUT_MS = resolveTimeoutMs(process.env.LLM_SYNTHESIS_TIMEOUT_MS, Math.max(DEFAULT_LLM_REQUEST_TIMEOUT_MS, 18000))
 const DEFAULT_LLM_QUERY_MAX_ROUNDS = 4
 const DEFAULT_LLM_ANALYSIS_MAX_ROUNDS = 6
+const STRUCTURED_CATEGORY_HINTS = [
+  {
+    key: 'coffee',
+    label: '咖啡',
+    aliases: ['咖啡', '咖啡店', '咖啡馆', 'coffee', 'cafe', 'café', 'coffee shop'],
+  },
+  {
+    key: 'food',
+    label: '餐饮',
+    aliases: ['餐饮', '吃饭', '小吃', '餐馆', '美食'],
+  },
+  {
+    key: 'supermarket',
+    label: '商超',
+    aliases: ['商超', '超市', '商场', '便利店'],
+  },
+  {
+    key: 'metro_station',
+    label: '地铁站',
+    aliases: ['地铁站', '地铁', '站点'],
+  },
+] as const
+const PRIMARY_TOOL_ROLE_ALIASES = new Set(['primary', 'anchor', 'main', 'origin', 'source'])
+const SECONDARY_TOOL_ROLE_ALIASES = new Set(['secondary', 'compare', 'comparison', 'target'])
 const AREA_INSIGHT_TEMPLATES = [
   'area_category_histogram',
   'area_ring_distribution',
@@ -108,6 +131,25 @@ function formatNumericLiteral(value: unknown, fallback = 0) {
 function resolveTimeoutMs(value: unknown, fallback: number) {
   const numeric = Number(value)
   return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback
+}
+
+function getDefaultLlmRequestTimeoutMs() {
+  return resolveTimeoutMs(process.env.LLM_TIMEOUT_MS, 12000)
+}
+
+function getDefaultLlmQueryTimeoutMs() {
+  const requestTimeoutMs = getDefaultLlmRequestTimeoutMs()
+  return resolveTimeoutMs(process.env.LLM_QUERY_TIMEOUT_MS, Math.max(requestTimeoutMs, 15000))
+}
+
+function getDefaultLlmAnalysisTimeoutMs() {
+  const requestTimeoutMs = getDefaultLlmRequestTimeoutMs()
+  return resolveTimeoutMs(process.env.LLM_ANALYSIS_TIMEOUT_MS, Math.max(requestTimeoutMs, 30000))
+}
+
+function getDefaultLlmSynthesisTimeoutMs() {
+  const requestTimeoutMs = getDefaultLlmRequestTimeoutMs()
+  return resolveTimeoutMs(process.env.LLM_SYNTHESIS_TIMEOUT_MS, Math.max(requestTimeoutMs, 18000))
 }
 
 function escapeSqlLiteral(value: string) {
@@ -204,6 +246,64 @@ function normalizeSelectedCategories(selectedCategories: unknown[] = []) {
     .filter(Boolean)
 }
 
+function inferCategoryFromSelections(selectedCategories: string[]) {
+  const probes = selectedCategories
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+
+  for (const hint of STRUCTURED_CATEGORY_HINTS) {
+    if (probes.some((probe) => hint.aliases.some((alias) => probe.includes(alias.toLowerCase())))) {
+      return {
+        categoryKey: hint.key,
+        targetCategory: hint.label,
+      }
+    }
+  }
+
+  const fallbackLabel = selectedCategories[selectedCategories.length - 1] || null
+  return {
+    categoryKey: null,
+    targetCategory: fallbackLabel,
+  }
+}
+
+function normalizeToolRole(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return 'primary'
+  if (PRIMARY_TOOL_ROLE_ALIASES.has(normalized)) return 'primary'
+  if (SECONDARY_TOOL_ROLE_ALIASES.has(normalized)) return 'secondary'
+  return normalized
+}
+
+function normalizeCategoryKey(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return ''
+
+  for (const hint of STRUCTURED_CATEGORY_HINTS) {
+    if (hint.key === normalized) {
+      return hint.key
+    }
+
+    if (hint.aliases.some((alias) => alias.toLowerCase() === normalized)) {
+      return hint.key
+    }
+  }
+
+  if (['restaurant', 'restaurants', 'dining'].includes(normalized)) {
+    return 'food'
+  }
+
+  if (['metro', 'subway', 'station'].includes(normalized)) {
+    return 'metro_station'
+  }
+
+  if (['grocery', 'convenience', 'convenience_store', 'mall'].includes(normalized)) {
+    return 'supermarket'
+  }
+
+  return normalized
+}
+
 function readRequestRegions(request: ChatRequestV4) {
   const topLevelRegions = Array.isArray(request.options?.regions) ? request.options?.regions : []
   if (topLevelRegions.length > 0) {
@@ -212,6 +312,15 @@ function readRequestRegions(request: ChatRequestV4) {
 
   const spatialContext = readSpatialContext(request)
   return Array.isArray(spatialContext?.regions) ? spatialContext.regions : []
+}
+
+function readRegionName(region: unknown) {
+  if (!region || typeof region !== 'object') {
+    return null
+  }
+
+  const name = String((region as Record<string, unknown>).name || (region as Record<string, unknown>).id || '').trim()
+  return name || null
 }
 
 function formatCoordinateFragment(value: number) {
@@ -495,6 +604,82 @@ function readMapViewAnchor(request: ChatRequestV4, role = 'primary'): ResolvedAn
   }
 }
 
+function extractLastUserText(messages: ChatRequestV4['messages'] = []) {
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((message) => String(message?.role || '').toLowerCase() === 'user')
+
+  if (!lastUserMessage) return ''
+
+  if (typeof lastUserMessage.content === 'string') {
+    return lastUserMessage.content.trim()
+  }
+
+  if (Array.isArray(lastUserMessage.content)) {
+    return lastUserMessage.content
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object' && 'text' in item) {
+          return String((item as { text?: unknown }).text || '')
+        }
+        return ''
+      })
+      .join(' ')
+      .trim()
+  }
+
+  if (
+    lastUserMessage.content
+    && typeof lastUserMessage.content === 'object'
+    && 'text' in (lastUserMessage.content as Record<string, unknown>)
+  ) {
+    return String((lastUserMessage.content as { text?: unknown }).text || '').trim()
+  }
+
+  return String(lastUserMessage.content || '').trim()
+}
+
+function defaultRadiusForQueryType(queryType: DeterministicIntent['queryType']) {
+  if (queryType === 'area_overview' || queryType === 'similar_regions' || queryType === 'compare_places') {
+    return 1200
+  }
+  return 800
+}
+
+function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string): DeterministicIntent {
+  const selectedCategories = normalizeSelectedCategories(request.options?.selectedCategories || [])
+  const { categoryKey, targetCategory } = inferCategoryFromSelections(selectedCategories)
+  const hasMapView = Boolean(readMapViewAnchor(request))
+  const hasUserLocation = Boolean(readUserLocation(request))
+  const selectedRegionNames = readRequestRegions(request)
+    .map((region) => readRegionName(region))
+    .filter((name): name is string => Boolean(name))
+
+  let clarificationHint = '这轮我没有稳定理解你的自然语言意图。请直接说明你想查附近点位、最近地铁站、区域解读、相似片区，还是双地点对比。'
+  if (hasMapView) {
+    clarificationHint = '这轮我没有稳定理解你的自然语言意图，不过当前地图范围已经拿到了。请重试，或更明确地说明你想做区域解读、附近查询、相似片区，还是双地点对比。'
+  } else if (hasUserLocation) {
+    clarificationHint = '这轮我没有稳定理解你的自然语言意图，不过当前位置已经拿到了。请重试，或更明确地说明你想查附近点位、最近地铁站，还是做区域解读。'
+  } else if (selectedRegionNames.length >= 2) {
+    clarificationHint = `这轮我没有稳定理解你的自然语言意图，不过你当前选中了 ${selectedRegionNames.slice(0, 2).join(' 和 ')}。请重试，或明确说明你是想比较它们、解读其中一个，还是查询周边点位。`
+  }
+
+  return {
+    queryType: 'unsupported',
+    intentMode: 'deterministic_visible_loop',
+    rawQuery,
+    placeName: null,
+    anchorSource: hasMapView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',
+    secondaryPlaceName: null,
+    targetCategory,
+    comparisonTarget: null,
+    categoryKey,
+    radiusM: defaultRadiusForQueryType('nearby_poi'),
+    needsClarification: true,
+    clarificationHint,
+  }
+}
+
 function buildUserLocationAnchor(userLocation: UserLocationContext, role = 'primary'): ResolvedAnchor {
   return {
     place_name: '当前位置',
@@ -577,6 +762,35 @@ function collectAreaInsightTemplateResults(toolCalls: ToolExecutionTrace[]) {
   }
 
   return latestByTemplate
+}
+
+function collectLatestAreaEvidenceSelection(toolCalls: ToolExecutionTrace[]) {
+  return [...toolCalls]
+    .reverse()
+    .find((trace) => trace.skill === 'semantic_selector' && trace.action === 'select_area_evidence' && trace.status === 'done')
+    ?.result as {
+      selected_rows?: Record<string, unknown>[]
+      selected_area_insight?: AreaInsightInput
+      semantic_evidence?: SemanticEvidenceStatus
+      diagnostics?: Record<string, unknown>
+    } | undefined
+}
+
+function hasAreaInsightPayload(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const areaInsight = value as AreaInsightInput
+  return [
+    areaInsight.categoryHistogram,
+    areaInsight.ringDistribution,
+    areaInsight.representativeSamples,
+    areaInsight.competitionDensity,
+    areaInsight.hotspotCells,
+    areaInsight.aoiContext,
+    areaInsight.landuseContext,
+  ].some((items) => Array.isArray(items) && items.length > 0)
 }
 
 function readSemanticEvidenceStatus(result: unknown): SemanticEvidenceStatus | null {
@@ -823,6 +1037,11 @@ function isSupportedAnchorSource(value: unknown): value is NonNullable<Determini
   return ['place', 'map_view', 'user_location'].includes(String(value || '').trim())
 }
 
+function readOptionalText(value: unknown) {
+  const text = String(value || '').trim()
+  return text || null
+}
+
 function intentModeFromQueryType(queryType: DeterministicIntent['queryType']): DeterministicIntent['intentMode'] {
   return queryType === 'nearby_poi' ? 'deterministic_visible_loop' : 'agent_full_loop'
 }
@@ -899,14 +1118,13 @@ export interface GeoLoomAgentOptions {
   conversationMemory?: ConversationMemory
   evidenceFactory?: EvidenceViewFactory
   renderer?: Renderer
-  router?: DeterministicRouter
   alivePromptBuilder?: AlivePromptBuilder
   confidenceGate?: ConfidenceGate
   metrics?: RuntimeMetrics
+  areaSemanticDenoiser?: AreaSemanticDenoiser
 }
 
 export class GeoLoomAgent {
-  private readonly router: DeterministicRouter
   private readonly provider: LLMProvider
   private readonly manifestLoader: SkillManifestLoader
   private readonly memory: MemoryManager
@@ -917,9 +1135,9 @@ export class GeoLoomAgent {
   private readonly alivePromptBuilder: AlivePromptBuilder
   private readonly confidenceGate: ConfidenceGate
   private readonly metrics: RuntimeMetrics
+  private readonly areaSemanticDenoiser: AreaSemanticDenoiser
 
   constructor(private readonly options: GeoLoomAgentOptions) {
-    this.router = options.router || new DeterministicRouter()
     this.provider = options.provider || createDefaultLLMProvider()
     this.manifestLoader = options.manifestLoader || new SkillManifestLoader({
       rootDir: resolveResourceUrl(import.meta.url, ['../../SKILLS/', '../../../SKILLS/']),
@@ -941,6 +1159,7 @@ export class GeoLoomAgent {
     this.alivePromptBuilder = options.alivePromptBuilder || new AlivePromptBuilder()
     this.confidenceGate = options.confidenceGate || new ConfidenceGate()
     this.metrics = options.metrics || new RuntimeMetrics()
+    this.areaSemanticDenoiser = options.areaSemanticDenoiser || new IntentAwareAreaSemanticDenoiser()
   }
 
   private buildSpatialConstraint(request: ChatRequestV4) {
@@ -992,7 +1211,7 @@ export class GeoLoomAgent {
     const startedAt = Date.now()
     const traceId = writer.traceId
     const requestId = String(request.options?.requestId || traceId)
-    const lastUserText = this.router.extractLastUserText(request.messages)
+    const lastUserText = extractLastUserText(request.messages)
     const session = await this.sessionManager.getOrCreate({
       requestId,
       sessionId: request.options?.sessionId,
@@ -1009,16 +1228,15 @@ export class GeoLoomAgent {
       logger,
     })
     const activeProvider = this.provider.isReady() ? this.provider : new InMemoryLLMProvider()
-    const routerIntent = this.router.route(request)
-    const intent = await this.reinterpretIntentWithLlmIfNeeded({
+    const fallbackIntent = buildStructuredFallbackIntent(request, lastUserText)
+    const intentResolution = await this.resolveIntent({
       request,
       rawQuery: lastUserText,
-      routerIntent,
+      fallbackIntent,
       providerReady: this.provider.isReady(),
     })
-    const intentInferredByLlm = intent.queryType !== routerIntent.queryType
-      || intent.anchorSource !== routerIntent.anchorSource
-      || intent.needsClarification !== routerIntent.needsClarification
+    const intent = intentResolution.intent
+    const intentInferredByLlm = intentResolution.source === 'llm'
     const requestUserLocation = readUserLocation(request)
     const requestMapViewAnchor = readMapViewAnchor(request)
     const spatialConstraint = this.buildSpatialConstraint(request)
@@ -1067,8 +1285,8 @@ export class GeoLoomAgent {
       needsClarification: intent.needsClarification,
       clarificationHint: intent.clarificationHint,
       parserModel: this.provider.isReady()
-        ? (intentInferredByLlm ? 'agent-intent-understanding' : 'agent-router')
-        : 'deterministic-router',
+        ? (intentInferredByLlm ? 'agent-intent-understanding' : 'structured-intent-fallback')
+        : 'structured-intent-fallback',
       parserProvider: this.provider.isReady() && intentInferredByLlm ? 'llm' : 'rule',
     })
 
@@ -1103,12 +1321,12 @@ export class GeoLoomAgent {
     })
     const toolLoopMaxRounds = this.resolveToolLoopMaxRounds(taskMode)
     const toolLoopTimeoutMs = taskMode === 'analysis'
-      ? DEFAULT_LLM_ANALYSIS_TIMEOUT_MS
-      : DEFAULT_LLM_QUERY_TIMEOUT_MS
+      ? getDefaultLlmAnalysisTimeoutMs()
+      : getDefaultLlmQueryTimeoutMs()
     const toolLoopUserMessage = this.buildToolLoopUserMessage({
       rawQuery: lastUserText,
       intent,
-      routerIntent,
+      intentSource: intentResolution.source,
     })
     const systemPrompt = this.alivePromptBuilder.build({
       sessionId: session.id,
@@ -1120,7 +1338,8 @@ export class GeoLoomAgent {
       skillSnippets: manifests.map((manifest) => manifest.promptSnippet),
       requestContext: {
         rawQuery: lastUserText,
-        routerHint: intent.queryType,
+        intentHint: intent.queryType,
+        intentSource: intentResolution.source,
         anchorHint: intent.anchorSource || null,
         spatialScopeHint: this.describeSpatialConstraint(state.spatialConstraint || null),
         taskModeHint: taskMode,
@@ -1134,6 +1353,7 @@ export class GeoLoomAgent {
     })
 
     let execution: Awaited<ReturnType<typeof runFunctionCallingLoop>>
+    let toolLoopUsedFallbackProvider = false
     try {
       execution = await runFunctionCallingLoop({
         provider: activeProvider,
@@ -1181,6 +1401,7 @@ export class GeoLoomAgent {
       await writer.reasoning({
         content: `主模型这一轮没有顺利完成工具编排，触发原因是：${errorMessage}。当前先退回可验证证据链，保证后续回答来自真实工具结果，而不是猜测。`,
       })
+      toolLoopUsedFallbackProvider = true
       execution = await runFunctionCallingLoop({
         provider: new InMemoryLLMProvider(),
         tools,
@@ -1244,9 +1465,10 @@ export class GeoLoomAgent {
     })
     state.evidenceView = evidenceView
 
+    const evidenceCount = this.resolveEvidenceCount(evidenceView)
     const decision = this.confidenceGate.evaluate({
       anchorResolved: intent.queryType === 'similar_regions' || hasCoordinates(primaryAnchor),
-      evidenceCount: evidenceView.items.length || evidenceView.pairs?.length || evidenceView.regions?.length || 0,
+      evidenceCount,
       hasConflict: false,
     })
 
@@ -1270,10 +1492,10 @@ export class GeoLoomAgent {
     }
 
     const rendered = this.renderAnswer(evidenceView)
-    const renderedEvidenceCount = rendered.pois.length
-      || evidenceView.pairs?.length
-      || evidenceView.regions?.length
-      || 0
+    const renderedEvidenceCount = Math.max(
+      rendered.pois.length || 0,
+      this.resolveEvidenceCount(evidenceView),
+    )
     const llmAnswer = String(execution.assistantMessage?.content || '').trim()
     const synthesizedAnswer = decision.status === 'allow'
       ? await this.synthesizeGroundedAnswer({
@@ -1288,7 +1510,7 @@ export class GeoLoomAgent {
     const groundedSynthesizedAnswer = synthesizedAnswer && this.isAnswerGrounded(synthesizedAnswer, evidenceView)
       ? synthesizedAnswer
       : null
-    const groundedLlmAnswer = this.isAnswerGrounded(llmAnswer, evidenceView)
+    const groundedLlmAnswer = intent.queryType !== 'area_overview' && this.isAnswerGrounded(llmAnswer, evidenceView)
       ? llmAnswer
       : ''
     const providerReady = this.provider.isReady()
@@ -1320,6 +1542,12 @@ export class GeoLoomAgent {
     } else {
       answer = decision.message || rendered.answer
       answerSource = decision.status === 'clarify' ? 'clarification' : 'deterministic_renderer'
+    }
+
+    if (toolLoopUsedFallbackProvider && answerSource === 'deterministic_renderer') {
+      answerSource = 'fallback_deterministic_renderer'
+    } else if (toolLoopUsedFallbackProvider && answerSource === 'insufficient_evidence') {
+      answerSource = 'fallback_insufficient_evidence'
     }
 
     if (decision.status === 'allow' && groundedSynthesizedAnswer) {
@@ -1392,7 +1620,7 @@ export class GeoLoomAgent {
     try {
       await this.memory.recordTurn(session.id, {
         traceId,
-        userQuery: this.router.extractLastUserText(request.messages),
+        userQuery: extractLastUserText(request.messages),
         answer,
         intent: {
           queryType: intent.queryType,
@@ -1474,69 +1702,149 @@ export class GeoLoomAgent {
     })
   }
 
-  private async reinterpretIntentWithLlmIfNeeded(input: {
+  private async resolveIntent(input: {
     request: ChatRequestV4
     rawQuery: string
-    routerIntent: DeterministicIntent
+    fallbackIntent: DeterministicIntent
     providerReady: boolean
-  }) {
+  }): Promise<{
+    intent: DeterministicIntent
+    source: 'llm' | 'fallback'
+  }> {
     if (!input.providerReady) {
-      return input.routerIntent
-    }
-
-    if (!(input.routerIntent.queryType === 'unsupported' || input.routerIntent.needsClarification)) {
-      return input.routerIntent
+      return {
+        intent: input.fallbackIntent,
+        source: 'fallback',
+      }
     }
 
     const hint = await this.inferIntentWithLlm({
       request: input.request,
       rawQuery: input.rawQuery,
-      routerIntent: input.routerIntent,
     })
+    const intent = this.buildIntentFromLlmHint({
+      request: input.request,
+      fallbackIntent: input.fallbackIntent,
+      hint,
+    })
+    if (!intent) {
+      return {
+        intent: input.fallbackIntent,
+        source: 'fallback',
+      }
+    }
+
+    return {
+      intent,
+      source: 'llm',
+    }
+  }
+
+  private async reinterpretIntentWithLlmIfNeeded(input: {
+    request: ChatRequestV4
+    rawQuery: string
+    fallbackIntent: DeterministicIntent
+    providerReady: boolean
+  }) {
+    const resolved = await this.resolveIntent(input)
+    return resolved.intent
+  }
+
+  private buildIntentFromLlmHint(input: {
+    request: ChatRequestV4
+    fallbackIntent: DeterministicIntent
+    hint: Awaited<ReturnType<GeoLoomAgent['inferIntentWithLlm']>>
+  }) {
+    const hint = input.hint
     if (!hint || hint.queryType === 'unsupported') {
-      return input.routerIntent
+      return null
     }
 
     const hasMapView = Boolean(readMapViewAnchor(input.request))
     const hasUserLocation = Boolean(readUserLocation(input.request))
+    const selectedRegions = readRequestRegions(input.request)
+    const selectedRegionNames = selectedRegions
+      .map((region) => readRegionName(region))
+      .filter((name): name is string => Boolean(name))
+    const { categoryKey: structuredCategoryKey, targetCategory: structuredTargetCategory } = inferCategoryFromSelections(
+      normalizeSelectedCategories(input.request.options?.selectedCategories || []),
+    )
+    const explicitPlaceName = readOptionalText(hint.placeName)
+    const explicitSecondaryPlaceName = readOptionalText(hint.secondaryPlaceName)
+    const lacksStructuredCompareTargets = hint.queryType === 'compare_places'
+      && !explicitSecondaryPlaceName
+      && selectedRegions.length < 2
+
+    if (lacksStructuredCompareTargets && hasMapView) {
+      return {
+        ...input.fallbackIntent,
+        queryType: 'area_overview',
+        intentMode: intentModeFromQueryType('area_overview'),
+        placeName: '当前区域',
+        secondaryPlaceName: null,
+        anchorSource: 'map_view',
+        targetCategory: '区域洞察',
+        comparisonTarget: null,
+        categoryKey: null,
+        needsClarification: false,
+        clarificationHint: null,
+      } satisfies DeterministicIntent
+    }
+
+    const fallbackAnchorSource: NonNullable<DeterministicIntent['anchorSource']> = hint.queryType === 'compare_places' && selectedRegionNames.length >= 2
+      ? 'map_view'
+      : explicitPlaceName
+        ? 'place'
+        : hasMapView && hint.queryType === 'area_overview'
+        ? 'map_view'
+        : hasUserLocation
+          ? 'user_location'
+          : (input.fallbackIntent.anchorSource || 'place')
     const anchorSource: NonNullable<DeterministicIntent['anchorSource']> = hint.anchorSource === 'map_view' && hasMapView
       ? 'map_view'
       : hint.anchorSource === 'user_location' && hasUserLocation
         ? 'user_location'
-        : hint.anchorSource === 'place'
+        : hint.anchorSource === 'place' && explicitPlaceName
           ? 'place'
-          : hasMapView
-            ? 'map_view'
-            : hasUserLocation
-              ? 'user_location'
-              : (input.routerIntent.anchorSource || 'place')
+          : fallbackAnchorSource
 
     const placeName = anchorSource === 'map_view'
-      ? '当前区域'
+      ? (hint.queryType === 'compare_places'
+          ? (explicitPlaceName || selectedRegionNames[0] || null)
+          : (selectedRegionNames[0] || '当前区域'))
       : anchorSource === 'user_location'
         ? null
-        : input.routerIntent.placeName
-
+        : explicitPlaceName
+    const secondaryPlaceName = hint.queryType === 'compare_places'
+      ? (anchorSource === 'map_view'
+          ? (explicitSecondaryPlaceName || selectedRegionNames[1] || null)
+          : explicitSecondaryPlaceName)
+      : null
     const needsClarification = anchorSource === 'map_view'
-      ? !hasMapView
+      ? ((hint.queryType === 'compare_places' && (!placeName || !secondaryPlaceName)) || !hasMapView)
       : anchorSource === 'user_location'
         ? !hasUserLocation
-        : (!placeName && Boolean(hint.needsClarification))
+        : hint.queryType === 'compare_places'
+          ? (!placeName || !secondaryPlaceName || Boolean(hint.needsClarification))
+          : (!placeName || Boolean(hint.needsClarification))
 
     return {
-      ...input.routerIntent,
+      ...input.fallbackIntent,
       queryType: hint.queryType,
       intentMode: intentModeFromQueryType(hint.queryType),
-      anchorSource,
       placeName,
+      secondaryPlaceName,
+      anchorSource,
       targetCategory: hint.queryType === 'area_overview'
         ? '区域洞察'
         : hint.queryType === 'nearest_station'
           ? '地铁站'
-          : input.routerIntent.targetCategory,
+          : readOptionalText(hint.targetCategory) || structuredTargetCategory || input.fallbackIntent.targetCategory,
+      comparisonTarget: readOptionalText(hint.comparisonTarget) || input.fallbackIntent.comparisonTarget,
       categoryKey: hint.queryType === 'nearest_station'
-        ? (input.routerIntent.categoryKey || 'metro_station')
-        : input.routerIntent.categoryKey,
+        ? (readOptionalText(hint.categoryKey) || 'metro_station')
+        : readOptionalText(hint.categoryKey) || structuredCategoryKey || input.fallbackIntent.categoryKey,
+      radiusM: defaultRadiusForQueryType(hint.queryType),
       needsClarification,
       clarificationHint: needsClarification
         ? (hint.clarificationHint || this.buildClarificationHintForQueryType(hint.queryType))
@@ -1547,14 +1855,22 @@ export class GeoLoomAgent {
   private async inferIntentWithLlm(input: {
     request: ChatRequestV4
     rawQuery: string
-    routerIntent: DeterministicIntent
   }): Promise<{
     queryType: DeterministicIntent['queryType']
     anchorSource?: NonNullable<DeterministicIntent['anchorSource']> | null
+    placeName?: string | null
+    secondaryPlaceName?: string | null
+    targetCategory?: string | null
+    comparisonTarget?: string | null
+    categoryKey?: string | null
     needsClarification?: boolean
     clarificationHint?: string | null
   } | null> {
     try {
+      const selectedCategories = normalizeSelectedCategories(input.request.options?.selectedCategories || [])
+      const selectedRegionNames = readRequestRegions(input.request)
+        .map((region) => readRegionName(region))
+        .filter((name): name is string => Boolean(name))
       const response = await this.provider.complete({
         messages: [
           {
@@ -1567,19 +1883,22 @@ export class GeoLoomAgent {
               '请先理解用户原问题，再判断应该进入哪条 GeoLoom 主链路。',
               '可选 queryType: nearby_poi | nearest_station | area_overview | similar_regions | compare_places | unsupported。',
               '可选 anchorSource: place | map_view | user_location | unknown。',
+              '如果 anchorSource=place，请尽量直接给出 placeName；如果是双地点比较，请补 secondaryPlaceName。',
+              '如果 queryType 涉及明确品类，也可以补 categoryKey / targetCategory。',
               '不要因为用户换一种说法就判 unsupported。',
+              'selectedCategories 和 selectedRegions 只是结构化上下文线索，不能替代对 user_query 的自然语言理解。',
               '如果用户是在让系统解读、分析、读懂、看看某片区域，而当前有地图范围上下文，这通常应判成 area_overview + map_view。',
               `user_query: ${input.rawQuery}`,
-              `router_hint: ${input.routerIntent.queryType}`,
               `has_spatial_view: ${Boolean(readMapViewAnchor(input.request))}`,
               `has_user_location: ${Boolean(readUserLocation(input.request))}`,
-              `has_regions: ${Array.isArray(input.request.options?.regions) && input.request.options?.regions.length > 0}`,
-              '返回 JSON，例如：{"queryType":"area_overview","anchorSource":"map_view","needsClarification":false,"clarificationHint":null}',
+              `selected_categories: ${JSON.stringify(selectedCategories)}`,
+              `selected_regions: ${JSON.stringify(selectedRegionNames)}`,
+              '返回 JSON，例如：{"queryType":"area_overview","anchorSource":"map_view","placeName":null,"secondaryPlaceName":null,"categoryKey":null,"targetCategory":"区域洞察","needsClarification":false,"clarificationHint":null}',
             ].join('\n'),
           },
         ],
         tools: [],
-        timeoutMs: DEFAULT_LLM_SYNTHESIS_TIMEOUT_MS,
+        timeoutMs: getDefaultLlmSynthesisTimeoutMs(),
       })
 
       const raw = String(response.assistantMessage.content || '').trim()
@@ -1596,6 +1915,11 @@ export class GeoLoomAgent {
       return {
         queryType: parsed.queryType,
         anchorSource: isSupportedAnchorSource(parsed.anchorSource) ? parsed.anchorSource : null,
+        placeName: readOptionalText(parsed.placeName),
+        secondaryPlaceName: readOptionalText(parsed.secondaryPlaceName),
+        targetCategory: readOptionalText(parsed.targetCategory),
+        comparisonTarget: readOptionalText(parsed.comparisonTarget),
+        categoryKey: readOptionalText(parsed.categoryKey),
         needsClarification: Boolean(parsed.needsClarification),
         clarificationHint: parsed.clarificationHint == null ? null : String(parsed.clarificationHint),
       }
@@ -1627,41 +1951,41 @@ export class GeoLoomAgent {
   private buildToolLoopUserMessage(input: {
     rawQuery: string
     intent: DeterministicIntent
-    routerIntent: DeterministicIntent
+    intentSource?: 'llm' | 'fallback'
   }) {
-    const intentChanged = input.intent.queryType !== input.routerIntent.queryType
-      || input.intent.anchorSource !== input.routerIntent.anchorSource
-      || input.intent.needsClarification !== input.routerIntent.needsClarification
-
-    if (!intentChanged) {
-      return input.rawQuery
-    }
+    const intentSource = input.intentSource || 'fallback'
+    const lines = [
+      `用户原问题：${input.rawQuery}`,
+      `当前意图来源：${intentSource}`,
+      `当前意图理解：${input.intent.queryType}`,
+      `当前锚点模式：${input.intent.anchorSource || 'unknown'}`,
+      input.intent.placeName ? `主锚点：${input.intent.placeName}` : '',
+      input.intent.secondaryPlaceName ? `次锚点：${input.intent.secondaryPlaceName}` : '',
+      input.intent.targetCategory ? `目标类别：${input.intent.targetCategory}` : '',
+      input.intent.categoryKey ? `category_key：${input.intent.categoryKey}` : '',
+    ]
 
     if (input.intent.queryType === 'area_overview') {
-      return [
-        `用户原问题：${input.rawQuery}`,
-        '补充理解：这是一个当前区域 / 片区解读类分析题，请按“读懂当前区域 / 区域洞察 / 业态配套分析”来规划证据链。',
+      lines.push(
         input.intent.anchorSource === 'map_view'
-          ? '补充锚点：优先把当前 map_view 当作分析区域。'
-          : '补充锚点：如果缺少当前区域范围，就先确认空间锚点。',
-      ].join('\n')
+          ? '编排要求：这是区域洞察题，优先把当前 map_view 当作分析范围，先拿结构证据，再补 AOI / landuse 语义，再组织结论。'
+          : '编排要求：这是区域洞察题，先确认空间锚点，再拿结构证据，补 AOI / landuse 语义后再组织结论。',
+      )
+      lines.push(
+        '如果多个工具彼此没有前后输入依赖，应在同一轮直接给出多个 tool calls 并行执行；只有后一工具必须读取前一工具结果时才拆成串行多轮。',
+        '如果 area insight 已经拿到，而问题只关注某个主题、某类设施或结构焦点，拿到 area insight 后优先调用 semantic_selector.select_area_evidence 做按需取证，不要在脑中手动删样本。',
+      )
+    } else if (input.intent.queryType === 'nearby_poi') {
+      lines.push('编排要求：这是附近查询题，先锁定锚点，再抓取附近真实候选，不要把查询题答成片区总结。')
+    } else if (input.intent.queryType === 'nearest_station') {
+      lines.push('编排要求：这是最近地铁站查询题，先锁定锚点，再回答最近站点与可用站口。')
+    } else if (input.intent.queryType === 'compare_places') {
+      lines.push('编排要求：这是双地点对比题，先确认两个锚点，再围绕同一维度取证并输出可比结论。')
+    } else if (input.intent.queryType === 'similar_regions') {
+      lines.push('编排要求：这是相似片区题，先明确参考片区，再补结构和语义证据后做相似性判断。')
     }
 
-    if (input.intent.queryType === 'nearby_poi') {
-      return [
-        `用户原问题：${input.rawQuery}`,
-        '补充理解：这是一个“某地附近有什么”的查询题，请先锁定锚点，再抓取附近真实候选。',
-      ].join('\n')
-    }
-
-    if (input.intent.queryType === 'nearest_station') {
-      return [
-        `用户原问题：${input.rawQuery}`,
-        '补充理解：这是一个“最近的地铁站”查询题，请先锁定锚点，再回答最近站点与站口。',
-      ].join('\n')
-    }
-
-    return input.rawQuery
+    return lines.filter(Boolean).join('\n')
   }
 
   private resolveToolLoopMaxRounds(taskMode: 'query' | 'analysis') {
@@ -1670,20 +1994,42 @@ export class GeoLoomAgent {
       : DEFAULT_LLM_QUERY_MAX_ROUNDS
   }
 
+  private resolveEvidenceCount(view: EvidenceView) {
+    const directCount = view.items.length || view.pairs?.length || view.regions?.length || 0
+    if (directCount > 0) {
+      return directCount
+    }
+
+    if (view.type !== 'area_overview') {
+      return 0
+    }
+
+    return [
+      view.areaSubject ? 1 : 0,
+      view.areaProfile?.dominantCategories?.length || 0,
+      view.hotspots?.length || 0,
+      view.regionFeatures?.length || 0,
+      view.semanticHints?.length || 0,
+      view.aoiContext?.length || 0,
+      view.landuseContext?.length || 0,
+    ].reduce((sum, value) => sum + value, 0)
+  }
+
   private async executeToolCall(
     call: ToolCallRequest,
     intent: DeterministicIntent,
     state: AgentTurnState,
     context: ReturnType<typeof createSkillExecutionContext>,
   ) {
+    const normalizedCall = this.normalizeToolCall(call)
     const startedAt = Date.now()
-    const skill = this.options.registry.get(call.name)
-    const payload = (call.arguments.payload || {}) as Record<string, unknown>
-    const action = String(call.arguments.action || '')
+    const skill = this.options.registry.get(normalizedCall.name)
+    const payload = this.hydrateToolPayload(normalizedCall, intent, state)
+    const action = String(normalizedCall.arguments.action || '')
     if (!skill) {
       const trace: ToolExecutionTrace = {
-        id: call.id,
-        skill: call.name,
+        id: normalizedCall.id,
+        skill: normalizedCall.name,
         action,
         status: 'error',
         error_kind: 'tool_result_error',
@@ -1701,7 +2047,7 @@ export class GeoLoomAgent {
     let result: Awaited<ReturnType<SkillDefinition['execute']>>
     try {
       if (
-        call.name === 'postgis'
+        normalizedCall.name === 'postgis'
         && action === 'resolve_anchor'
         && (intent.anchorSource === 'user_location' || intent.anchorSource === 'map_view')
         && String(payload.role || 'primary') === 'primary'
@@ -1719,7 +2065,7 @@ export class GeoLoomAgent {
             synthetic: true,
           },
         }
-      } else if (call.name === 'postgis' && action === 'execute_spatial_sql' && payload.template) {
+      } else if (normalizedCall.name === 'postgis' && action === 'execute_spatial_sql' && payload.template) {
         result = await this.executePostgisTemplate(skill, intent, state, payload, context)
       } else {
         result = await skill.execute(action, payload, context)
@@ -1730,14 +2076,14 @@ export class GeoLoomAgent {
         traceId: context.traceId,
         requestId: context.requestId,
         sessionId: context.sessionId,
-        skill: call.name,
+        skill: normalizedCall.name,
         action,
         error: message,
       })
 
       const trace: ToolExecutionTrace = {
-        id: call.id,
-        skill: call.name,
+        id: normalizedCall.id,
+        skill: normalizedCall.name,
         action,
         status: 'error',
         error_kind: 'execution_exception',
@@ -1751,7 +2097,7 @@ export class GeoLoomAgent {
     }
 
     const anchorResult = result.data as { anchor?: ResolvedAnchor, role?: string } | undefined
-    if (call.name === 'postgis' && action === 'resolve_anchor' && result.ok && anchorResult?.anchor) {
+    if (normalizedCall.name === 'postgis' && action === 'resolve_anchor' && result.ok && anchorResult?.anchor) {
       const anchor = anchorResult.anchor
       const role = anchor.role || String(payload.role || 'primary')
       state.anchors[role] = anchor
@@ -1759,8 +2105,8 @@ export class GeoLoomAgent {
     }
 
     const trace: ToolExecutionTrace = {
-      id: call.id,
-      skill: call.name,
+      id: normalizedCall.id,
+      skill: normalizedCall.name,
       action,
       status: result.ok ? 'done' : 'error',
       error_kind: result.ok ? null : 'tool_result_error',
@@ -1775,6 +2121,93 @@ export class GeoLoomAgent {
       content: result.data || result.error || {},
       trace,
     }
+  }
+
+  private normalizeToolCall(call: ToolCallRequest): ToolCallRequest {
+    const action = String(call.arguments.action || '').trim()
+    const rawPayload = (call.arguments.payload || {}) as Record<string, unknown>
+    let payload = rawPayload
+
+    if (call.name === 'postgis' && action === 'resolve_anchor') {
+      const placeName = trimText(
+        rawPayload.place_name
+        || rawPayload.placeName
+        || rawPayload.anchor_text
+        || rawPayload.anchor_name
+        || rawPayload.anchorName
+        || rawPayload.anchor
+        || rawPayload.place
+        || rawPayload.query
+        || rawPayload.name,
+      )
+      payload = {
+        ...rawPayload,
+        ...(placeName ? { place_name: placeName } : {}),
+        role: normalizeToolRole(rawPayload.role),
+      }
+    }
+
+    if (call.name === 'postgis' && action === 'execute_spatial_sql') {
+      const categoryKey = normalizeCategoryKey(rawPayload.category_key || rawPayload.categoryKey)
+      payload = {
+        ...payload,
+        ...(categoryKey ? {
+          categoryKey,
+          category_key: categoryKey,
+        } : {}),
+      }
+    }
+
+    return {
+      ...call,
+      arguments: {
+        ...call.arguments,
+        action,
+        payload,
+      },
+    }
+  }
+
+  private hydrateToolPayload(
+    call: ToolCallRequest,
+    intent: DeterministicIntent,
+    state: AgentTurnState,
+  ) {
+    const action = String(call.arguments.action || '').trim()
+    const rawPayload = (call.arguments.payload || {}) as Record<string, unknown>
+
+    if (call.name !== 'semantic_selector' || action !== 'select_area_evidence') {
+      return rawPayload
+    }
+
+    const areaInsightResults = collectAreaInsightTemplateResults(state.toolCalls)
+    const latestPostgisRows = [...state.toolCalls]
+      .reverse()
+      .find((trace) => trace.skill === 'postgis' && trace.action === 'execute_spatial_sql' && trace.status === 'done')
+      ?.result as { rows?: Record<string, unknown>[] } | undefined
+
+    const areaInsight: AreaInsightInput = hasAreaInsightPayload(rawPayload.area_insight)
+      ? rawPayload.area_insight as AreaInsightInput
+      : {
+          categoryHistogram: (areaInsightResults.get('area_category_histogram')?.rows as Record<string, unknown>[] | undefined) || [],
+          ringDistribution: (areaInsightResults.get('area_ring_distribution')?.rows as Record<string, unknown>[] | undefined) || [],
+          representativeSamples: (areaInsightResults.get('area_representative_sample')?.rows as Record<string, unknown>[] | undefined) || [],
+          competitionDensity: (areaInsightResults.get('area_competition_density')?.rows as Record<string, unknown>[] | undefined) || [],
+          hotspotCells: (areaInsightResults.get('area_h3_hotspots')?.rows as Record<string, unknown>[] | undefined) || [],
+          aoiContext: (areaInsightResults.get('area_aoi_context')?.rows as Record<string, unknown>[] | undefined) || [],
+          landuseContext: (areaInsightResults.get('area_landuse_context')?.rows as Record<string, unknown>[] | undefined) || [],
+        }
+
+    return {
+      ...rawPayload,
+      raw_query: trimText(rawPayload.raw_query || intent.rawQuery),
+      semantic_focus: trimText(rawPayload.semantic_focus || rawPayload.focus_query),
+      anchor_name: trimText(rawPayload.anchor_name || state.anchors.primary?.resolved_place_name || intent.placeName || ''),
+      area_insight: areaInsight,
+      fallback_rows: Array.isArray(rawPayload.fallback_rows)
+        ? rawPayload.fallback_rows
+        : (latestPostgisRows?.rows || []),
+    } satisfies Record<string, unknown>
   }
 
   private async executePostgisTemplate(
@@ -2264,21 +2697,46 @@ export class GeoLoomAgent {
     }
 
     if (intent.queryType === 'area_overview') {
-      const representativeRows = areaInsight.representativeSamples?.length
+      let effectiveAreaInsight = areaInsight
+      let representativeRows = areaInsight.representativeSamples?.length
         ? areaInsight.representativeSamples
         : (latestPostgisRows?.rows || [])
+      let selectionSemanticEvidence: SemanticEvidenceStatus | undefined
+      let selectionDiagnostics: Record<string, unknown> | undefined
+      const selectionResult = collectLatestAreaEvidenceSelection(state.toolCalls)
+
+      if (selectionResult) {
+        effectiveAreaInsight = selectionResult.selected_area_insight || areaInsight
+        const selectedRows = Array.isArray(selectionResult.selected_rows)
+          ? selectionResult.selected_rows
+          : []
+        const applied = Boolean((selectionResult.diagnostics as Record<string, unknown> | undefined)?.applied)
+        representativeRows = applied
+          ? selectedRows
+          : (selectedRows.length > 0 ? selectedRows : representativeRows)
+        selectionSemanticEvidence = selectionResult.semantic_evidence
+        selectionDiagnostics = selectionResult.diagnostics
+      }
+
       const view = this.evidenceFactory.create({
         intent,
         anchor: fallbackAnchor,
         rows: representativeRows,
         items: normalizePoiRows(representativeRows),
-        areaInsight,
+        areaInsight: effectiveAreaInsight,
       })
-      if (semanticEvidence) {
-        view.semanticEvidence = semanticEvidence
+      const mergedSemanticEvidence = mergeSemanticEvidenceStatuses([
+        semanticEvidence,
+        selectionSemanticEvidence,
+      ])
+      if (mergedSemanticEvidence) {
+        view.semanticEvidence = mergedSemanticEvidence
       }
       if (semanticHints.length > 0) {
         view.semanticHints = semanticHints
+      }
+      if (selectionDiagnostics) {
+        view.meta.semantic_selection = selectionDiagnostics
       }
       return view
     }
@@ -2515,6 +2973,7 @@ export class GeoLoomAgent {
       : new Map<string, Record<string, unknown>>()
     const allowAreaInsightGapFill = intent.queryType !== 'area_overview'
       || !input.providerReady
+      || !this.hasAlignedCorePostgisEvidence(intent, state)
       || hasAgentLedAreaInsightEvidence(state.toolCalls)
     if (!['nearby_poi', 'nearest_station', 'compare_places', 'area_overview'].includes(intent.queryType)) {
       return false
@@ -2806,83 +3265,68 @@ export class GeoLoomAgent {
 
   private buildAreaSynthesisEvidence(view: EvidenceView) {
     const lines: string[] = []
+    const subjectConfidence = String(view.areaSubject?.confidence || '').trim()
 
-    if (view.areaSubject?.title) {
+    if (view.areaSubject?.title && subjectConfidence === 'high') {
       lines.push(`区域主语: ${view.areaSubject.title}`)
     }
 
-    if (view.regionFeatureSummary) {
-      lines.push(`编码器特征摘要: ${view.regionFeatureSummary}`)
-    }
-
     const regionFeatureLabels = (view.regionFeatures || [])
-      .slice(0, 6)
+      .slice(0, 5)
       .map((item) => item.label)
       .filter(Boolean)
     if (regionFeatureLabels.length > 0) {
-      lines.push(`片区特征标签: ${regionFeatureLabels.join('；')}`)
+      lines.push(`片区特征: ${regionFeatureLabels.join('、')}`)
     }
 
     const dominant = (view.areaProfile?.dominantCategories || [])
-      .slice(0, 4)
+      .slice(0, 3)
       .map((bucket) => `${bucket.label}${bucket.share ? `(${Math.round(bucket.share * 100)}%)` : ''}`)
     if (dominant.length > 0) {
-      lines.push(`主导业态: ${dominant.join('；')}`)
+      lines.push(`主导业态: ${dominant.join('、')}`)
     }
 
     const hotspots = (view.hotspots || [])
       .slice(0, 3)
-      .map((item) => item.label)
+      .map((item) => `${item.label}${item.poiCount ? `(${item.poiCount})` : ''}`)
     if (hotspots.length > 0) {
-      lines.push(`热点: ${hotspots.join('；')}`)
+      lines.push(`热点: ${hotspots.join('、')}`)
     }
 
     const anomalies = (view.anomalySignals || [])
-      .slice(0, 3)
-      .map((item) => `${item.title} - ${item.detail}`)
+      .slice(0, 2)
+      .map((item) => item.title)
     if (anomalies.length > 0) {
-      lines.push(`异常: ${anomalies.join('；')}`)
+      lines.push(`风险: ${anomalies.join('、')}`)
     }
 
     const opportunities = (view.opportunitySignals || [])
-      .slice(0, 3)
-      .map((item) => `${item.title} - ${item.detail}`)
+      .slice(0, 2)
+      .map((item) => item.title)
     if (opportunities.length > 0) {
-      lines.push(`机会: ${opportunities.join('；')}`)
+      lines.push(`机会: ${opportunities.join('、')}`)
     }
 
     const samples = (view.representativeSamples || [])
-      .slice(0, 6)
+      .slice(0, 4)
       .map((item) => item.name)
       .filter(Boolean)
     if (samples.length > 0) {
       lines.push(`代表样本: ${samples.join('、')}`)
     }
 
-    const poiProfiles = (view.representativePoiProfiles || [])
-      .slice(0, 4)
-      .map((item) => `${item.name}:${item.featureTags.map((feature) => feature.label).slice(0, 2).join('、')}`)
-      .filter((item) => !item.endsWith(':'))
-    if (poiProfiles.length > 0) {
-      lines.push(`代表点角色: ${poiProfiles.join('；')}`)
-    }
-
     const aoi = (view.aoiContext || [])
-      .slice(0, 4)
-      .map((item) => `${item.name}${item.fclass ? `(${item.fclass})` : ''}`)
+      .slice(0, 3)
+      .map((item) => item.name)
     if (aoi.length > 0) {
       lines.push(`AOI 参考: ${aoi.join('、')}`)
     }
 
     const landuse = (view.landuseContext || [])
-      .slice(0, 4)
-      .map((item) => `${item.landType}:${Math.round(item.totalAreaSqm)}㎡/${item.parcelCount}宗`)
+      .slice(0, 3)
+      .map((item) => `${item.landType}${item.totalAreaSqm ? `(${Math.round(item.totalAreaSqm)}㎡)` : ''}`)
     if (landuse.length > 0) {
-      lines.push(`用地参考: ${landuse.join('；')}`)
-    }
-
-    if (view.confidence) {
-      lines.push(`置信度: ${view.confidence.level}(${view.confidence.score})，原因：${view.confidence.reasons.join('；')}`)
+      lines.push(`用地参考: ${landuse.join('、')}`)
     }
 
     return lines
@@ -2904,36 +3348,23 @@ export class GeoLoomAgent {
     if (evidenceLines.length === 0) return null
 
     const questionMode = String(input.evidenceView.meta.questionMode || 'summary').trim() || 'summary'
-    const answerStyle = questionMode === 'opportunity'
-      ? '用 Markdown 小节先给出区域主语，再回答更值得优先看的 1-2 个方向，并解释供给、需求线索与竞争关系。'
-      : questionMode === 'semantic'
-        ? '用 Markdown 小节先判断片区更像什么，再给结构证据与语义依据。'
-        : '用 Markdown 小节组织语言，至少包含区域主语、关键特征、热点与结构、机会与风险。'
+    const areaSubjectConfidence = String(input.evidenceView.areaSubject?.confidence || '').trim()
+    const explicitAreaSubject = areaSubjectConfidence === 'high'
+      ? String(input.evidenceView.areaSubject?.title || '').trim()
+      : ''
 
     const synthesisPrompt = [
-      '你是 GeoLoom V4 的最终回答撰写器。',
-      '必须只基于已验证的空间证据写答案，不允许脑补。',
-      '你的任务不是重复模板，而是针对用户原问题，把证据组织成自然、可靠、简洁但有洞察的中文回答。',
-      '',
-      `用户原问题：${input.rawQuery}`,
+      `问题：${input.rawQuery}`,
       `问题模式：${questionMode}`,
-      `分析范围：${scopeSummary}`,
-      '',
-      '已验证证据：',
+      `范围：${scopeSummary}`,
+      '只基于下面证据写最终回答，不要写进度更新，不要写下一步动作，不要复述取证过程。',
+      '必须输出 Markdown，包含：## 区域主语 / ## 关键特征 / ## 热点与结构 / ## 机会与风险。',
+      explicitAreaSubject
+        ? `必须直接写“${explicitAreaSubject}”，不要只写“当前区域”。`
+        : '必须明确写出区域主语，不要只写“当前区域”。如果 AOI / 用地信号是混合的，优先选择更宽、证据更充分的区域主语，不要被单个校园或楼盘名字带偏。',
+      '只保留有解释力的数字和样本，不要罗列无意义统计。',
+      '证据：',
       ...evidenceLines.map((line) => `- ${line}`),
-      '',
-      '机械兜底草稿（只供事实校对，不要照抄句式）：',
-      input.rendered.answer,
-      '',
-      '输出要求：',
-      `- ${answerStyle}`,
-      '- 输出必须是 Markdown，不要写成单段长文本。',
-      '- 优先用 `## 区域主语`、`## 关键特征`、`## 热点与结构`、`## 机会与风险` 这类小节来组织。',
-      '- 必须明确说出区域主语，不能只写“当前区域”。',
-      '- 可以保留关键数量，但只保留真正有解释力的数字，不要报“范围内多少个”这类无用统计。',
-      '- 避免固定起手式，例如“如果快速读这个片区，它更像……；主导业态仍是……”。',
-      '- 不要使用整段分号串联的模板腔，优先像分析师一样直接说人话。',
-      '- 如果证据不足，要明确说哪里不足，而不是硬下结论。',
     ].join('\n')
 
     try {
@@ -2949,6 +3380,7 @@ export class GeoLoomAgent {
           },
         ],
         tools: [],
+        timeoutMs: getDefaultLlmSynthesisTimeoutMs(),
       })
 
       const answer = String(response.assistantMessage.content || '').trim()
@@ -3029,6 +3461,53 @@ export class GeoLoomAgent {
       return false
     }
 
+    const ignoredKeywords = new Set(['当前区域', '当前片区', '这里', '此处'].map((value) => value.toLowerCase()))
+    const keywordSuffixes = ['片区', '区域', '商圈', '周边', '附近', '生活带', '商业带']
+    const collectKeywordVariants = (values: unknown[], anchorName?: unknown) => {
+      const variants = new Set<string>()
+      const normalizedAnchor = String(anchorName || '').trim().toLowerCase()
+
+      for (const value of values) {
+        const normalized = String(value || '').trim().toLowerCase()
+        if (!normalized || ignoredKeywords.has(normalized)) {
+          continue
+        }
+
+        variants.add(normalized)
+
+        if (normalizedAnchor && normalized.includes(normalizedAnchor)) {
+          const anchorless = normalized.replace(normalizedAnchor, '').trim()
+          if (anchorless.length >= 2 && !ignoredKeywords.has(anchorless)) {
+            variants.add(anchorless)
+          }
+        }
+
+        for (const suffix of keywordSuffixes) {
+          if (!normalized.endsWith(suffix) || normalized.length <= suffix.length + 1) {
+            continue
+          }
+          const trimmed = normalized.slice(0, -suffix.length).trim()
+          if (trimmed.length >= 2 && !ignoredKeywords.has(trimmed)) {
+            variants.add(trimmed)
+          }
+        }
+      }
+
+      return variants
+    }
+    const countKeywordHits = (keywords: Iterable<string>, minimum = 1) => {
+      let hits = 0
+      for (const keyword of keywords) {
+        if (!keyword || !normalizedAnswer.includes(keyword)) {
+          continue
+        }
+        hits += 1
+        if (hits >= minimum) {
+          return hits
+        }
+      }
+      return hits
+    }
     const keywords = new Set<string>()
     const pushKeyword = (value: unknown) => {
       const normalized = String(value || '').trim().toLowerCase()
@@ -3063,18 +3542,30 @@ export class GeoLoomAgent {
     }
 
     if (evidenceView.type === 'area_overview') {
-      const groundedSubjectKeywords = [
+      const groundedSubjectKeywords = collectKeywordVariants([
         evidenceView.areaSubject?.title,
         evidenceView.areaSubject?.anchorName,
+        evidenceView.areaSubject?.typeHint,
         ...(evidenceView.aoiContext || []).map((item) => item.name),
-        ...(evidenceView.representativeSamples || []).map((item) => item.name),
-      ]
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter((value) => value && !['当前区域', '当前片区', '这里', '此处'].includes(value))
+      ], evidenceView.areaSubject?.anchorName)
 
-      if (groundedSubjectKeywords.length > 0) {
-        return groundedSubjectKeywords.some((keyword) => normalizedAnswer.includes(keyword))
+      if (countKeywordHits(groundedSubjectKeywords, 1) > 0) {
+        return true
       }
+
+      const supportingEvidenceKeywords = collectKeywordVariants([
+        ...(evidenceView.representativeSamples || []).map((item) => item.name),
+        ...(evidenceView.regionFeatures || []).map((item) => item.label),
+        ...(evidenceView.hotspots || []).map((item) => item.label),
+        ...(evidenceView.areaProfile?.dominantCategories || []).map((item) => item.label),
+        ...(evidenceView.semanticHints || []).map((item) => item.label),
+      ], evidenceView.areaSubject?.anchorName)
+
+      if (countKeywordHits(supportingEvidenceKeywords, 2) >= 2) {
+        return true
+      }
+
+      return false
     }
 
     return [...keywords].some((keyword) => normalizedAnswer.includes(keyword))

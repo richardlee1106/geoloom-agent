@@ -172,7 +172,7 @@ describe('DeterministicRouter', () => {
     expect(intent.needsClarification).toBe(false)
   })
 
-  it('does not require the router to understand every area-overview phrasing before the LLM rescue path runs', () => {
+  it('routes 解读一下这片区域 to area_overview when viewport context is available', () => {
     const intent = router.route({
       messages: [{ role: 'user', content: '解读一下这片区域' }],
       options: {
@@ -183,9 +183,10 @@ describe('DeterministicRouter', () => {
       },
     })
 
-    expect(intent.queryType).toBe('unsupported')
-    expect(intent.needsClarification).toBe(true)
-    expect(intent.clarificationHint).toMatch(/当前 V4 已支持|当前区域洞察/)
+    expect(intent.queryType).toBe('area_overview')
+    expect(intent.anchorSource).toBe('map_view')
+    expect(intent.placeName).toBe('当前区域')
+    expect(intent.needsClarification).toBe(false)
   })
 
   it('treats current-area semantic classification prompts as area_overview instead of similar_regions', () => {
@@ -214,6 +215,18 @@ describe('DeterministicRouter', () => {
     expect(intent.queryType).toBe('area_overview')
     expect(intent.anchorSource).toBe('place')
     expect(intent.placeName).toBe('湖北大学')
+    expect(intent.needsClarification).toBe(false)
+  })
+
+  it('strips area-analysis lead-ins before extracting place anchors', () => {
+    const intent = router.route({
+      messages: [{ role: 'user', content: '解读一下武汉大学周边的业态结构' }],
+      options: {},
+    })
+
+    expect(intent.queryType).toBe('area_overview')
+    expect(intent.anchorSource).toBe('place')
+    expect(intent.placeName).toBe('武汉大学')
     expect(intent.needsClarification).toBe(false)
   })
 

@@ -1,0 +1,1 @@
+Four-tier memory system. ShortTermMemory (Redis-backed or in-memory) stores session KV with TTL. LongTermMemory persists JSON files to disk for cross-session state. ProfileManager loads user profile JSON files from the profiles/ directory. MemoryManager wires all tiers together and exposes a unified getSnapshot/recordTurn API consumed by the GeoLoomAgent.

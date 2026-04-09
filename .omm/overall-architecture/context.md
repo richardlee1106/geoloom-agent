@@ -1,0 +1,1 @@
+The platform targets urban planners, analysts, and researchers who query spatial data in Chinese. The frontend renders map visualizations (deck.gl + OpenLayers) and streams back AI-generated answers via SSE. The backend must stay stateless between requests (sessions are short-lived), while long-term memory persists profiles and conversation summaries to disk.

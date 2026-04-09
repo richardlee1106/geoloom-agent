@@ -1,0 +1,1 @@
+SQL sandbox security: raw SQL is validated by a catalog allowlist before execution against PostGIS. Python bridge and FAISS are remote-first — if the Python service is down, spatial encoding falls back gracefully. LLM provider is swappable (Anthropic, OpenAI, InMemory) so the system can run without external API keys.

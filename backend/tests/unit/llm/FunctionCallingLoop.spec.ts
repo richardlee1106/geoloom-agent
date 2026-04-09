@@ -159,4 +159,131 @@ describe('runFunctionCallingLoop', () => {
       timeoutMs: 30000,
     }))
   })
+
+  it('runs same-phase refinement tools in one parallel batch after evidence fetching completes', async () => {
+    const provider = {
+      isReady: () => true,
+      getStatus: () => ({
+        ready: true,
+        provider: 'mock-openai-compatible',
+        model: 'mock-model',
+      }),
+      complete: vi.fn()
+        .mockResolvedValueOnce({
+          assistantMessage: {
+            role: 'assistant',
+            content: null,
+            toolCalls: [
+              {
+                id: 'call_histogram',
+                name: 'postgis',
+                arguments: {
+                  action: 'execute_spatial_sql',
+                  payload: { template: 'area_category_histogram' },
+                },
+              },
+              {
+                id: 'call_samples',
+                name: 'postgis',
+                arguments: {
+                  action: 'execute_spatial_sql',
+                  payload: { template: 'area_representative_sample' },
+                },
+              },
+              {
+                id: 'call_selector',
+                name: 'semantic_selector',
+                arguments: {
+                  action: 'select_area_evidence',
+                  payload: { raw_query: '总结一下这片区域的业态结构' },
+                },
+              },
+              {
+                id: 'call_encoder',
+                name: 'spatial_encoder',
+                arguments: {
+                  action: 'encode_region_snapshot',
+                  payload: { region_snapshot: { dominantCategories: [] } },
+                },
+              },
+            ],
+          },
+          toolCalls: [
+            {
+              id: 'call_histogram',
+              name: 'postgis',
+              arguments: {
+                action: 'execute_spatial_sql',
+                payload: { template: 'area_category_histogram' },
+              },
+            },
+            {
+              id: 'call_samples',
+              name: 'postgis',
+              arguments: {
+                action: 'execute_spatial_sql',
+                payload: { template: 'area_representative_sample' },
+              },
+            },
+            {
+              id: 'call_selector',
+              name: 'semantic_selector',
+              arguments: {
+                action: 'select_area_evidence',
+                payload: { raw_query: '总结一下这片区域的业态结构' },
+              },
+            },
+            {
+              id: 'call_encoder',
+              name: 'spatial_encoder',
+              arguments: {
+                action: 'encode_region_snapshot',
+                payload: { region_snapshot: { dominantCategories: [] } },
+              },
+            },
+          ],
+          finishReason: 'tool_calls' as const,
+        })
+        .mockResolvedValueOnce({
+          assistantMessage: {
+            role: 'assistant',
+            content: '完成',
+            toolCalls: [],
+          },
+          toolCalls: [],
+          finishReason: 'stop' as const,
+        }),
+    }
+
+    const batches: string[][] = []
+    await runFunctionCallingLoop({
+      provider,
+      tools: [],
+      messages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: '总结一下这片区域的业态结构' },
+      ],
+      onToolCallBatch: async (calls) => {
+        batches.push(calls.map((call) => call.id))
+        return calls.map((call) => ({
+          content: JSON.stringify({ ok: true, id: call.id }),
+          trace: {
+            id: call.id,
+            skill: call.name,
+            action: String(call.arguments.action || ''),
+            status: 'done' as const,
+            payload: call.arguments.payload as Record<string, unknown>,
+          },
+        }))
+      },
+      onToolCall: async () => {
+        throw new Error('single-call executor should not run for batched calls')
+      },
+    })
+
+    expect(batches).toEqual([
+      ['call_histogram', 'call_samples'],
+      ['call_selector', 'call_encoder'],
+    ])
+  })
 })

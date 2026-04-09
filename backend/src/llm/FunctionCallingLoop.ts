@@ -8,6 +8,7 @@ export interface FunctionCallingLoopOptions<TResult> {
   maxRounds?: number
   requestTimeoutMs?: number
   onToolCall: (call: ToolCallRequest) => Promise<{ content: string, trace: ToolExecutionTrace }>
+  onToolCallBatch?: (calls: ToolCallRequest[]) => Promise<Array<{ content: string, trace: ToolExecutionTrace }>>
   onAssistantMessage?: (message: LLMAssistantMessage, meta: {
     round: number
     finishReason: 'tool_calls' | 'stop'
@@ -37,6 +38,67 @@ function normalizeResponse(response: unknown) {
     },
     toolCalls,
     finishReason: normalized.finishReason || (toolCalls.length > 0 ? 'tool_calls' as const : 'stop' as const),
+  }
+}
+
+function classifyExecutionPhase(call: ToolCallRequest) {
+  const action = String(call.arguments.action || '').trim()
+  if (call.name === 'postgis' && action === 'resolve_anchor') {
+    return 'resolve_anchor'
+  }
+  if (
+    (call.name === 'postgis' && action === 'execute_spatial_sql')
+    || call.name === 'route_distance'
+  ) {
+    return 'evidence_fetch'
+  }
+  if (
+    (call.name === 'semantic_selector' && action === 'select_area_evidence')
+    || call.name === 'spatial_encoder'
+    || call.name === 'spatial_vector'
+  ) {
+    return 'semantic_refinement'
+  }
+  return `${call.name}:${action || 'unknown'}:serial`
+}
+
+function buildToolCallBatches(calls: ToolCallRequest[], seenFingerprints: Set<string>) {
+  const batches: ToolCallRequest[][] = []
+  let currentBatch: ToolCallRequest[] = []
+  let currentWave: string | null = null
+  let hitDuplicate = false
+
+  for (const call of calls) {
+    const fingerprint = JSON.stringify({
+      name: call.name,
+      arguments: call.arguments,
+    })
+
+    if (seenFingerprints.has(fingerprint)) {
+      hitDuplicate = true
+      break
+    }
+    seenFingerprints.add(fingerprint)
+
+    const wave = classifyExecutionPhase(call)
+    if (currentBatch.length === 0 || currentWave === wave) {
+      currentBatch.push(call)
+      currentWave = wave
+      continue
+    }
+
+    batches.push(currentBatch)
+    currentBatch = [call]
+    currentWave = wave
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch)
+  }
+
+  return {
+    batches,
+    hitDuplicate,
   }
 }
 
@@ -76,28 +138,30 @@ export async function runFunctionCallingLoop<TResult = unknown>(
       toolCalls: response.assistantMessage.toolCalls,
     })
 
-    for (const call of response.toolCalls) {
-      const fingerprint = JSON.stringify({
-        name: call.name,
-        arguments: call.arguments,
-      })
+    const { batches, hitDuplicate } = buildToolCallBatches(response.toolCalls, seenFingerprints)
+    for (const batch of batches) {
+      const toolResults = options.onToolCallBatch && batch.length > 1
+        ? await options.onToolCallBatch(batch)
+        : await Promise.all(batch.map((call) => options.onToolCall(call)))
 
-      if (seenFingerprints.has(fingerprint)) {
-        return {
-          assistantMessage: response.assistantMessage,
-          traces,
-        }
+      for (let index = 0; index < batch.length; index += 1) {
+        const call = batch[index]
+        const toolResult = toolResults[index]
+        traces.push(toolResult.trace)
+        messages.push({
+          role: 'tool',
+          name: call.name,
+          toolCallId: call.id,
+          content: toolResult.content,
+        })
       }
-      seenFingerprints.add(fingerprint)
+    }
 
-      const toolResult = await options.onToolCall(call)
-      traces.push(toolResult.trace)
-      messages.push({
-        role: 'tool',
-        name: call.name,
-        toolCallId: call.id,
-        content: toolResult.content,
-      })
+    if (hitDuplicate) {
+      return {
+        assistantMessage: response.assistantMessage,
+        traces,
+      }
     }
   }
 

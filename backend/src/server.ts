@@ -21,6 +21,7 @@ import { createPostgisSkill } from './skills/postgis/PostGISSkill.js'
 import { createSpatialEncoderSkill } from './skills/spatial_encoder/SpatialEncoderSkill.js'
 import { createSpatialVectorSkill } from './skills/spatial_vector/SpatialVectorSkill.js'
 import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceSkill.js'
+import { createSemanticSelectorSkill } from './skills/semantic_selector/SemanticSelectorSkill.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
 import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
@@ -133,6 +134,7 @@ registry.register(
 registry.register(createSpatialEncoderSkill({ bridge: spatialEncoderBridge }))
 registry.register(createSpatialVectorSkill({ index: spatialVectorIndex }))
 registry.register(createRouteDistanceSkill({ bridge: routeBridge }))
+registry.register(createSemanticSelectorSkill({ bridge: spatialEncoderBridge }))
 
 const chat = new GeoLoomAgent({
   registry,

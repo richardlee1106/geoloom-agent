@@ -1,0 +1,13 @@
+created: 2026-04-09T04:42:11.911Z
+updated: 2026-04-09T04:42:18.263Z
+update_count: 2
+last_field: diagram
+kind: nested-class
+title: frontend
+children:
+  - components
+  - composables
+  - services
+  - views
+  - workers
+parentPath: []

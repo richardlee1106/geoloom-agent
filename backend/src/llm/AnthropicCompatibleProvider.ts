@@ -12,6 +12,17 @@ import type {
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01'
 const DEFAULT_MAX_TOKENS = 2048
 const MAX_SAFE_OUTPUT_TOKENS = 8192
+const MAX_TRANSIENT_RETRIES = 2
+const RETRY_BASE_DELAY_MS = 250
+
+export interface AnthropicCompatibleProviderOptions {
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+  timeoutMs?: number | string
+  apiVersion?: string
+  maxTokens?: number | string
+}
 
 interface ProviderMessage {
   role: 'user' | 'assistant'
@@ -68,6 +79,24 @@ function clampMaxTokens(value: unknown) {
   return Math.min(Math.max(Math.round(numeric), 256), MAX_SAFE_OUTPUT_TOKENS)
 }
 
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 409 || status === 429 || status >= 500
+}
+
+function isHardRateLimitError(status: number, errorText: string) {
+  if (status !== 429) return false
+
+  const normalized = String(errorText || '').trim().toLowerCase()
+  if (!normalized) return false
+
+  return normalized.includes('usage limit exceeded')
+    || normalized.includes('"type":"rate_limit_error"')
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function toAssistantBlocks(message: LLMMessage) {
   const blocks: Array<Record<string, unknown>> = []
 
@@ -95,19 +124,31 @@ function toAssistantBlocks(message: LLMMessage) {
 
 function toProviderMessages(request: LLMCompletionRequest) {
   const providerMessages: ProviderMessage[] = []
+  let pendingToolResults: Array<Record<string, unknown>> = []
+
+  const flushPendingToolResults = () => {
+    if (pendingToolResults.length === 0) return
+    providerMessages.push({
+      role: 'user',
+      content: pendingToolResults,
+    })
+    pendingToolResults = []
+  }
 
   for (const message of request.messages) {
     if (message.role === 'system') continue
 
     if (message.role === 'user') {
+      flushPendingToolResults()
       providerMessages.push({
         role: 'user',
-        content: message.content ? message.content : '',
+        content: message.content ? [asTextBlock(message.content)] : [],
       })
       continue
     }
 
     if (message.role === 'assistant') {
+      flushPendingToolResults()
       providerMessages.push({
         role: 'assistant',
         content: toAssistantBlocks(message),
@@ -115,17 +156,14 @@ function toProviderMessages(request: LLMCompletionRequest) {
       continue
     }
 
-    providerMessages.push({
-      role: 'user',
-      content: [
-        {
-          type: 'tool_result',
-          tool_use_id: message.toolCallId || randomUUID(),
-          content: message.content || '',
-        },
-      ],
+    pendingToolResults.push({
+      type: 'tool_result',
+      tool_use_id: message.toolCallId || randomUUID(),
+      content: message.content || '',
     })
   }
+
+  flushPendingToolResults()
 
   return providerMessages
 }
@@ -159,12 +197,21 @@ function extractToolCalls(blocks: LLMContentBlock[]) {
 }
 
 export class AnthropicCompatibleProvider implements LLMProvider {
-  private readonly baseUrl = String(process.env.LLM_BASE_URL || '').trim()
-  private readonly apiKey = String(process.env.LLM_API_KEY || '').trim()
-  private readonly model = String(process.env.LLM_MODEL || '').trim()
-  private readonly timeoutMs = Number(process.env.LLM_TIMEOUT_MS || '12000')
-  private readonly apiVersion = String(process.env.LLM_ANTHROPIC_VERSION || DEFAULT_ANTHROPIC_VERSION).trim()
-  private readonly maxTokens = clampMaxTokens(process.env.LLM_MAX_TOKENS || `${DEFAULT_MAX_TOKENS}`)
+  private readonly baseUrl: string
+  private readonly apiKey: string
+  private readonly model: string
+  private readonly timeoutMs: number
+  private readonly apiVersion: string
+  private readonly maxTokens: number
+
+  constructor(options: AnthropicCompatibleProviderOptions = {}) {
+    this.baseUrl = String(options.baseUrl ?? process.env.LLM_BASE_URL ?? '').trim()
+    this.apiKey = String(options.apiKey ?? process.env.LLM_API_KEY ?? '').trim()
+    this.model = String(options.model ?? process.env.LLM_MODEL ?? '').trim()
+    this.timeoutMs = Number(options.timeoutMs ?? process.env.LLM_TIMEOUT_MS ?? '12000')
+    this.apiVersion = String(options.apiVersion ?? process.env.LLM_ANTHROPIC_VERSION ?? DEFAULT_ANTHROPIC_VERSION).trim()
+    this.maxTokens = clampMaxTokens(options.maxTokens ?? process.env.LLM_MAX_TOKENS ?? `${DEFAULT_MAX_TOKENS}`)
+  }
 
   private get endpoint() {
     return normalizeMessagesEndpoint(this.baseUrl)
@@ -207,54 +254,63 @@ export class AnthropicCompatibleProvider implements LLMProvider {
     const requestTimeoutMs = Number.isFinite(Number(request.timeoutMs)) && Number(request.timeoutMs) > 0
       ? Number(request.timeoutMs)
       : this.timeoutMs
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
+    for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt += 1) {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
 
-    try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
-          'anthropic-version': this.apiVersion,
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: this.model,
-          max_tokens: this.maxTokens,
-          system: toSystemPrompt(request) || undefined,
-          messages: toProviderMessages(request),
-          tools: request.tools.length > 0 ? toToolDefinitions(request) : undefined,
-          tool_choice: request.tools.length > 0 ? { type: 'auto' } : undefined,
-        }),
-      })
+      try {
+        const response = await fetch(this.endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': this.apiVersion,
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: this.model,
+            max_tokens: this.maxTokens,
+            system: toSystemPrompt(request) || undefined,
+            messages: toProviderMessages(request),
+            tools: request.tools.length > 0 ? toToolDefinitions(request) : undefined,
+            tool_choice: request.tools.length > 0 ? { type: 'auto' } : undefined,
+          }),
+        })
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '')
-        throw new Error(`LLM request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '')
+          const shouldRetry = isRetryableStatus(response.status) && !isHardRateLimitError(response.status, errorText)
+          if (attempt < MAX_TRANSIENT_RETRIES && shouldRetry) {
+            await sleep(RETRY_BASE_DELAY_MS * (attempt + 1))
+            continue
+          }
+          throw new Error(`LLM request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+        }
+
+        const data = await response.json() as {
+          content?: LLMContentBlock[]
+          stop_reason?: string
+        }
+
+        const contentBlocks = Array.isArray(data.content) ? data.content : []
+        const toolCalls = extractToolCalls(contentBlocks)
+        const assistantMessage: LLMAssistantMessage = {
+          role: 'assistant',
+          content: normalizeAssistantContent(contentBlocks),
+          toolCalls,
+          contentBlocks,
+        }
+
+        return {
+          assistantMessage,
+          toolCalls,
+          finishReason: toolCalls.length > 0 || data.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+        }
+      } finally {
+        clearTimeout(timeout)
       }
-
-      const data = await response.json() as {
-        content?: LLMContentBlock[]
-        stop_reason?: string
-      }
-
-      const contentBlocks = Array.isArray(data.content) ? data.content : []
-      const toolCalls = extractToolCalls(contentBlocks)
-      const assistantMessage: LLMAssistantMessage = {
-        role: 'assistant',
-        content: normalizeAssistantContent(contentBlocks),
-        toolCalls,
-        contentBlocks,
-      }
-
-      return {
-        assistantMessage,
-        toolCalls,
-        finishReason: toolCalls.length > 0 || data.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
-      }
-    } finally {
-      clearTimeout(timeout)
     }
+
+    throw new Error('LLM request failed: exhausted retries')
   }
 }

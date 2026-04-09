@@ -1,0 +1,1 @@
+No data leaves the backend except as SSE payloads to the originating session. The LongTermMemory writes JSON files to disk; the ShortTermMemory can use Redis (configured via env). SQL results are never cached in memory longer than a single request — each request fetches fresh data. The Python bridge and FAISS index are remote-first with graceful degradation.

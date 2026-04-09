@@ -1,0 +1,17 @@
+graph LR
+    workers["Workers\nsrc/workers/"]
+    components["Components\nsrc/components/"]
+    composables["Composables\nsrc/composables/"]
+    views["Views\nsrc/views/"]
+    services["Services\nsrc/services/"]
+
+    workers --> composables
+    composables --> components
+    components --> views
+    services --> composables
+
+    classDef leaf fill:#cba6f7,stroke:#cba6f7,color:#1e1e2e
+    classDef group fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+
+    classDef leaf services
+    classDef group workers,components,composables,views

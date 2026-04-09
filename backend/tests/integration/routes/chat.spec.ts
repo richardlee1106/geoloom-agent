@@ -2109,4 +2109,49 @@ describe('POST /api/geo/chat', () => {
 
     await app.close()
   })
+
+  it('marks deterministic answers as fallback output when the main orchestration provider throws', async () => {
+    const provider = {
+      isReady: () => true,
+      getStatus: () => ({
+        ready: true,
+        provider: 'mock-throwing-provider',
+        model: 'mock-throwing-v1',
+        target: 'https://example.test/v1',
+      }),
+      complete: async () => {
+        throw new Error('upstream llm timeout')
+      },
+    } satisfies LLMProvider
+
+    const app = buildTestApp({ provider })
+    await app.ready()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/geo/chat',
+      payload: {
+        messages: [{ role: 'user', content: '武汉大学附近有哪些咖啡店？' }],
+        options: { requestId: 'req_chat_provider_throwing_001' },
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const events = parseSSE(response.body)
+    const refined = events.find((item) => item.event === 'refined_result')?.data
+    const reasoning = events
+      .filter((item) => item.event === 'reasoning')
+      .map((item) => String(item.data?.content || ''))
+      .join('\n')
+
+    expect(refined.answer).toMatch(/武汉大学/)
+    expect(refined.answer).toMatch(/luckin coffee/)
+    expect(refined.results.stats.query_type).toBe('nearby_poi')
+    expect(refined.results.stats.answer_source).toBe('fallback_deterministic_renderer')
+    expect(reasoning).toMatch(/upstream llm timeout/)
+    expect(events.at(-1)?.event).toBe('done')
+
+    await app.close()
+  })
 })

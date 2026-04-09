@@ -1,0 +1,34 @@
+graph LR
+    PG["PostGIS\npois | aoi | landuse tables"]
+    QUERY["SQL Query\nSELECT + ST_Distance + ST_Intersects"]
+    ROWS["POI Rows\nid, name, category, lon/lat, distance_m"]
+    AREA_TMPL["Area Templates\nH3 hotspots | rings | category histogram"]
+    REGION_SNAP["Region Snapshot\ncategory buckets, hotspots, AOI tags"]
+    VECTOR["Vector Embedding\n(pre-computed for POIs/regions)"]
+    FAISS_RESULT["FAISS Search Results\nsimilar regions / semantic POIs"]
+    ENC["Spatial Encoding\nfeature_tags + summaries"]
+    EVIDENCE_VIEW["EvidenceView\ntyped union of all results"]
+    ANSWER["Rendered Answer\nMarkdown text"]
+    SSE_PAYLOAD["SSE Payload\npois, stats, boundary, clusters, rendered_result"]
+    DISK["Disk /profiles\nLongTermMemory JSON files"]
+    REDIS["Redis / In-Memory\nShortTermMemory KV store"]
+
+    PG --> QUERY --> ROWS
+    ROWS --> AREA_TMPL --> REGION_SNAP
+    ROWS --> EVIDENCE_VIEW
+    VECTOR --> FAISS_RESULT --> EVIDENCE_VIEW
+    REGION_SNAP --> ENC --> EVIDENCE_VIEW
+    EVIDENCE_VIEW --> ANSWER
+    EVIDENCE_VIEW --> SSE_PAYLOAD
+    DISK -.->|"load/save"| EVIDENCE_VIEW
+    REDIS -.->|"session KV"| EVIDENCE_VIEW
+
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    classDef transform fill:#f9e2af,stroke:#f9e2af,color:#1e1e2e
+    classDef output fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+
+    classDef store DISK,REDIS
+    classDef external PG,VECTOR
+    classDef transform QUERY,AREA_TMPL,REGION_SNAP,FAISS_RESULT,ENC
+    classDef output EVIDENCE_VIEW,ANSWER,SSE_PAYLOAD

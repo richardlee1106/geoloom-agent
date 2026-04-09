@@ -159,7 +159,7 @@ function buildAoiContext(rows: Record<string, unknown>[] = []): AreaAoiContextIt
       population: Number.isFinite(Number(row.population)) ? Number(row.population) : null,
       areaSqm: Number.isFinite(Number(row.area_sqm || row.areaSqm)) ? Number(row.area_sqm || row.areaSqm) : null,
     }))
-    .filter((item) => Boolean(item.name))
+    .filter((item) => Boolean(item.name) && !isInvalidSubjectName(item.name))
     .slice(0, 5)
 }
 
@@ -188,22 +188,42 @@ function isGenericAreaName(name: string) {
   return ['当前区域', '当前片区', '这里', '此处', '当前位置'].includes(String(name || '').trim())
 }
 
+function isInvalidSubjectName(name: string) {
+  const normalized = String(name || '').trim().toLowerCase()
+  if (!normalized) return true
+  return [
+    'none',
+    'null',
+    'unknown',
+    'n/a',
+    'na',
+    '未命名',
+    '未命名 aoi',
+    '未命名地点',
+  ].includes(normalized)
+}
+
 function isCampusLikeText(text: string) {
   return /(大学|学院|学校|校园|校区)/u.test(String(text || '').trim())
 }
 
+function isExplicitAnchorSubjectText(text: string) {
+  return /(大学|学院|学校|校区)/u.test(String(text || '').trim())
+}
+
 function normalizeSubjectAnchorName(name: string) {
   const raw = String(name || '').trim()
-  if (!raw) return ''
+  if (!raw || isInvalidSubjectName(raw)) return ''
 
-  const explicitCampus = raw.match(/(.+?(大学|学院|学校|校园))/u)
+  const explicitCampus = raw.match(/(.+?(大学|学院|学校|校区))/u)
   if (explicitCampus?.[1]) {
     return explicitCampus[1].trim()
   }
 
-  return raw
+  const normalized = raw
     .replace(/(生活区|商业带|地铁商业带|生活带|片区|园区|校区|北区|南区|东区|西区)$/u, '')
     .trim()
+  return isInvalidSubjectName(normalized) ? '' : normalized
 }
 
 function readAreaSemanticFlags(input: {
@@ -264,7 +284,7 @@ function buildAreaSubject(input: {
   if (!anchorName) {
     const itemCandidate = input.representativeItems
       .map((item) => normalizeSubjectAnchorName(item.name))
-      .find((name) => isCampusLikeText(name) && !isGenericAreaName(name))
+      .find((name) => isExplicitAnchorSubjectText(name) && !isGenericAreaName(name))
     if (itemCandidate) {
       anchorName = itemCandidate
       reasons = [`代表样本命中 ${itemCandidate}`]

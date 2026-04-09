@@ -37,12 +37,43 @@ function inferCategoryKey(query: string) {
   return ''
 }
 
+function sanitizeAnchorLeadIn(anchor: string) {
+  return anchor
+    .replace(/^(?:请帮我看看|请帮我看下|请帮我看一下|请帮我|帮我看看|帮我看下|帮我看一下|帮我|请把|把|请快速|请直接|请|麻烦你|看看|看下|看一下|看一看|先看看|先看下|先看一下|解读一下|解读|分析一下|分析|总结一下|总结|梳理一下|梳理)\s*/u, '')
+    .trim()
+}
+
+function extractAnchorBeforeMarker(query: string, marker: RegExp) {
+  return sanitizeAnchorLeadIn(query.split(marker)[0]?.trim() || '')
+}
+
+function extractCompareAnchors(query: string) {
+  const patterns = [
+    /^(?:请把|把|请)?(?:比较|对比)\s*(.+?)(?:和|与|跟)(.+?)(?:附近|周边)?的/u,
+    /^(?:请把|把|请)?(.+?)(?:和|与|跟)(.+?)做(?:一下|个)?对比/u,
+  ]
+
+  for (const pattern of patterns) {
+    const match = query.match(pattern)
+    if (!match) continue
+    return {
+      primary: sanitizeAnchorLeadIn(match[1] || ''),
+      secondary: sanitizeAnchorLeadIn(match[2] || ''),
+    }
+  }
+
+  return {
+    primary: null,
+    secondary: null,
+  }
+}
+
 function isCurrentAreaQuery(query: string) {
-  return /这里|这附近|当前区域|当前片区|此处/.test(query)
+  return /这里|这附近|这片区域|这片区|这个区域|这个片区|这一片|当前区域|当前片区|此处/.test(query)
 }
 
 function isAreaSummaryQuery(query: string) {
-  return /读懂|总结|主导业态|活力热点|热点|异常点/.test(query)
+  return /解读|分析|读懂|总结|主导业态|活力热点|热点|异常点/.test(query)
 }
 
 function isStoreOpportunityQuery(query: string) {
@@ -61,11 +92,16 @@ function buildIntentClassifierJson(query: string) {
   const hasUserLocation = /has_user_location:\s*true/i.test(query)
   const rawQueryMatch = query.match(/user_query:\s*(.+)/)
   const rawQuery = String(rawQueryMatch?.[1] || query).trim()
+  const nearbyAnchor = /附近|周边/.test(rawQuery) ? extractAnchorBeforeMarker(rawQuery, /附近|周边/) : null
+  const nearestAnchor = /最近/.test(rawQuery) ? extractAnchorBeforeMarker(rawQuery, /最近/) : null
+  const compareAnchors = extractCompareAnchors(rawQuery)
 
   if (/相似|气质/.test(rawQuery)) {
     return {
       queryType: 'similar_regions',
       anchorSource: 'place',
+      placeName: nearbyAnchor,
+      secondaryPlaceName: null,
       needsClarification: !/武汉大学|湖北大学|光谷|大学|商圈/.test(rawQuery),
       clarificationHint: null,
     }
@@ -75,6 +111,8 @@ function buildIntentClassifierJson(query: string) {
     return {
       queryType: 'compare_places',
       anchorSource: hasSpatialView ? 'map_view' : 'place',
+      placeName: hasSpatialView ? null : compareAnchors.primary,
+      secondaryPlaceName: hasSpatialView ? null : compareAnchors.secondary,
       needsClarification: false,
       clarificationHint: null,
     }
@@ -84,6 +122,10 @@ function buildIntentClassifierJson(query: string) {
     return {
       queryType: 'nearest_station',
       anchorSource: hasUserLocation ? 'user_location' : 'place',
+      placeName: hasUserLocation ? null : nearestAnchor,
+      secondaryPlaceName: null,
+      categoryKey: 'metro_station',
+      targetCategory: '地铁站',
       needsClarification: false,
       clarificationHint: null,
     }
@@ -93,6 +135,9 @@ function buildIntentClassifierJson(query: string) {
     return {
       queryType: 'area_overview',
       anchorSource: hasSpatialView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',
+      placeName: hasSpatialView || hasUserLocation ? null : nearbyAnchor,
+      secondaryPlaceName: null,
+      targetCategory: '区域洞察',
       needsClarification: !hasSpatialView && !hasUserLocation && !/大学|商圈|步行街/.test(rawQuery),
       clarificationHint: null,
     }
@@ -102,6 +147,9 @@ function buildIntentClassifierJson(query: string) {
     return {
       queryType: 'nearby_poi',
       anchorSource: hasUserLocation ? 'user_location' : 'place',
+      placeName: hasUserLocation ? null : nearbyAnchor,
+      secondaryPlaceName: null,
+      categoryKey: inferCategoryKey(rawQuery) || null,
       needsClarification: false,
       clarificationHint: null,
     }
@@ -239,13 +287,13 @@ export class InMemoryLLMProvider implements LLMProvider {
       return this.createResponse({ finishReason: 'stop' })
     }
 
-    if (/业态|热点|异常点|供给|需求|竞争|开店|机会|读懂|配套|居住|商业|混合|片区类型|说明依据/.test(query)) {
+    if (isAreaSummaryQuery(query) || /业态|供给|需求|竞争|开店|机会|配套|居住|商业|混合|片区类型|说明依据/.test(query)) {
       const useCurrentArea = isCurrentAreaQuery(query)
       const areaCategoryKey = inferCategoryKey(query)
       const includeSemanticContext = needsAreaSemanticContext(query)
 
       if (!useCurrentArea && !hasAnchor) {
-        const anchor = query.split(/附近|周边/)[0]?.trim() || ''
+        const anchor = extractAnchorBeforeMarker(query, /附近|周边/)
         return this.createResponse({
           finishReason: 'tool_calls',
           toolCalls: [
@@ -301,7 +349,7 @@ export class InMemoryLLMProvider implements LLMProvider {
 
     if (/附近|周边/.test(query)) {
       if (!hasAnchor) {
-        const anchor = query.split(/附近|周边/)[0]?.trim() || ''
+        const anchor = extractAnchorBeforeMarker(query, /附近|周边/)
         return this.createResponse({
           finishReason: 'tool_calls',
           toolCalls: [
@@ -344,7 +392,7 @@ export class InMemoryLLMProvider implements LLMProvider {
 
     if (/最近/.test(query) && /地铁|站/.test(query)) {
       if (!hasAnchor) {
-        const anchor = query.split(/最近/)[0]?.trim() || ''
+        const anchor = extractAnchorBeforeMarker(query, /最近/)
         return this.createResponse({
           finishReason: 'tool_calls',
           toolCalls: [

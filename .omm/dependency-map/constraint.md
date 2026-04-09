@@ -1,0 +1,1 @@
+Circular dependencies are avoided: the agent never imports routes; integration adapters never import the agent. Skills only depend on integration adapters and the SQLSandbox, never on the agent or LLM layer. All cross-layer calls go downward (agent → skills → integration). The only shared upward dependency is the logger utility.

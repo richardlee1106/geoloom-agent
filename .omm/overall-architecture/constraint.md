@@ -1,0 +1,1 @@
+Backend runs on Node.js 18+ (ESM). Frontend requires Vite 8 beta with Vue 3.5. All backend→external service calls have configurable timeouts. PostGIS query timeout defaults to 5s. SQL is restricted to SELECT-only via sandbox allowlist.

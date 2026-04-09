@@ -1,0 +1,9 @@
+created: 2026-04-09T04:42:35.323Z
+updated: 2026-04-09T04:42:35.324Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: components
+children: []
+parentPath:
+  - frontend

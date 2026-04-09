@@ -1,0 +1,1 @@
+Shows how data moves through the system: from POI/AOI/land-use source tables in PostGIS, through the agent's evidence assembly, into typed evidence views, and out as SSE event payloads and rendered answer text. Also covers how session state and long-term memory are read/written.

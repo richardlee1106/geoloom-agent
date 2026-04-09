@@ -1,0 +1,29 @@
+created: 2026-04-09T04:44:43.430Z
+updated: 2026-04-09T04:47:15.045Z
+update_count: 6
+last_field: note
+git_commit: 2deaa01
+git_branch: main
+prev_diagram: >
+  graph LR
+      BE["GeoLoom Backend\nbackend/src/"]
+      PG["PostGIS\npois, aoi, landuse\npg driver"]
+      PY["Python Bridge\nencode_region | encode_poi | score | encode_query\nHTTP/REST"]
+      FAISS["FAISS Index\nsearch_similar_regions | search_semantic_pois\nHTTP/REST"]
+      OSM["OSM Bridge\nget_multi_destination_matrix\nHTTP/REST"]
+      ANTH["Anthropic API\nclaude-3-5 / claude-4\nHTTPS"]
+      OPENAI["OpenAI / Compatible\nGPT-4 / o3\nHTTPS"]
+
+      BE -->|"SQL SELECT (5s timeout)"| PG
+      BE -->|"HTTP POST|GET"| PY
+      BE -->|"HTTP POST|GET"| FAISS
+      BE -->|"HTTP POST"| OSM
+      BE -->|"HTTPS API"| ANTH
+      BE -->|"HTTPS API"| OPENAI
+
+      classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+      classDef backend fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+
+      classDef external PG,PY,FAISS,OSM,ANTH,OPENAI
+      classDef backend BE
+  MERMAAD

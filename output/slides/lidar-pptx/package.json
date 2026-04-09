@@ -1,0 +1,16 @@
+{
+  "name": "lidar-pptx",
+  "version": "1.0.0",
+  "description": "PptxGenJS rebuild for the lidar presentation deck.",
+  "main": "build_deck.js",
+  "scripts": {
+    "build": "node build_deck.js"
+  },
+  "keywords": [],
+  "author": "OpenAI Codex",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}

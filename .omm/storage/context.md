@@ -1,0 +1,1 @@
+PostGIS holds all POI (pois table), AOI (aoi table), and land-use (landuse table) data. Redis is optional — if REDIS_URL is not set, ShortTermMemory uses an in-memory Map. LongTermMemory and ProfileManager write to the backend/data/memory/ and backend/profiles/ directories respectively (resolved relative to the server binary location via resolveResourceUrl).

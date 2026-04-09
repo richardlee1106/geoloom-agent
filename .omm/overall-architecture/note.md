@@ -1,0 +1,1 @@
+The system was migrated from a monolithic architecture to a modular TypeScript backend. Frontend workers (geo, spiral, gravity, basic, dataLoader) run off the main thread using Comlink. The backend uses no ORM — raw pg driver for PostGIS for maximum control over spatial query performance.

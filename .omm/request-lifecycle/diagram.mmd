@@ -1,0 +1,40 @@
+graph LR
+    FE["Frontend\nPOST /api/geo/chat"]
+    FR["Fastify Routes\nroutes/"]
+    DR["DeterministicRouter\nDetermines intent & anchor"]
+    AGLL["AlivePromptBuilder\nBuilds system prompt"]
+    FCL["FunctionCallingLoop\nMax 4 rounds"]
+    POSTGIS["PostGIS Skill\nSQL template execution"]
+    PY["Python Bridge\nSpatial encoding"]
+    FAISS["FAISS Index\nSemantic search"]
+    OSM["OSM Bridge\nRoute distances"]
+    EVF["EvidenceViewFactory\nAssembles typed view"]
+    REND["Renderer\nGenerates answer text"]
+    SYNT["LLM Synthesis\nGrounded answer"]
+    SSE["SSEWriter\nStreams events to FE"]
+
+    FE --> FR
+    FR --> DR
+    DR --> AGLL
+    AGLL --> FCL
+    FCL -->|"postgis.execute_spatial_sql"| POSTGIS
+    FCL -->|"spatial_encoder.encode_*"| PY
+    FCL -->|"spatial_vector.search_*"| FAISS
+    POSTGIS -->|"nearest_station"| OSM
+    POSTGIS --> EVF
+    PY --> EVF
+    FAISS --> EVF
+    EVF --> REND
+    EVF --> SYNT
+    REND --> SSE
+    SYNT --> SSE
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef llm fill:#cba6f7,stroke:#cba6f7,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    classDef core fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+
+    classDef entry FE,FR
+    classDef core DR,AGLL,EVF,REND
+    classDef llm FCL,SYNT
+    classDef external POSTGIS,PY,FAISS,OSM

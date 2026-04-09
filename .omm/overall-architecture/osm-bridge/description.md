@@ -1,0 +1,1 @@
+OSM routing microservice (RemoteFirstOSMBridge) that computes walking/driving distances and durations between an origin and multiple destinations. Used by the route_distance skill to enrich nearest_station queries with real walking distances instead of straight-line approximations. Called via HTTP from the postgis skill after POI candidates are retrieved.

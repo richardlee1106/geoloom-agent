@@ -1,0 +1,17 @@
+created: 2026-04-09T04:42:47.914Z
+updated: 2026-04-09T04:42:48.482Z
+update_count: 2
+last_field: diagram
+kind: nested-class
+title: backend
+children:
+  - agent
+  - chat
+  - evidence
+  - integration
+  - llm
+  - memory
+  - routes
+  - sandbox
+  - skills
+parentPath: []

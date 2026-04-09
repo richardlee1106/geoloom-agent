@@ -1,0 +1,1 @@
+The DeterministicRouter runs before any LLM call, so unsupported query types are rejected immediately with a clarification hint — avoiding wasted LLM tokens. The agent also has a deterministic fallback path (ConfidenceGate + direct postgis template execution) that runs even when the LLM provider is unavailable, so the system remains partially functional in degraded mode.

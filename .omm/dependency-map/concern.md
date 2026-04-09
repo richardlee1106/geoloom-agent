@@ -1,0 +1,1 @@
+Skills are the highest-risk coupling point: each skill depends on an external service (PostGIS, Python, FAISS, OSM). If an external service degrades, only the affected skill fails — the agent can still execute other skills. The SQLSandbox is a critical security boundary; any change to the allowlist must be reviewed carefully to avoid SQL injection vectors.

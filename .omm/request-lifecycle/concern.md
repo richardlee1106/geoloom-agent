@@ -1,0 +1,1 @@
+The function-calling loop has a hard cap of 4 rounds. If skills fail mid-loop (e.g., Python bridge timeout), the error is caught and a fallback deterministic path kicks in using InMemoryLLMProvider. The confidence gate then evaluates whether the LLM-synthesized answer is grounded in evidence before serving it or falling back to the template-rendered answer.
