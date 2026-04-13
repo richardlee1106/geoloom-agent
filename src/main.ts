@@ -22,3 +22,9 @@ const app = createApp(App)
 app.use(router)
 
 app.mount('#app')
+
+// 移除首屏 loading 占位符
+const initialLoader = document.getElementById('initial-loader')
+if (initialLoader) {
+  initialLoader.remove()
+}

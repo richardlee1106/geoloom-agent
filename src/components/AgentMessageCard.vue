@@ -4,6 +4,10 @@
       <div class="agent-card-title">
         <span class="agent-name">GeoLoom Agent</span>
         <span class="agent-state" :class="`is-${snapshot.summary.tone}`">{{ snapshot.summary.label }}</span>
+        <span v-if="webSearchBadge" class="agent-web-badge" :class="`is-${webSearchBadge.tone}`">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          <span>{{ webSearchBadge.label }}</span>
+        </span>
         <span v-if="snapshot.summary.elapsedLabel" class="agent-elapsed">{{ snapshot.summary.elapsedLabel }}</span>
       </div>
       <span class="agent-time">{{ formattedTime }}</span>
@@ -65,6 +69,23 @@
       </div>
     </section>
 
+    <section v-if="debugCards.length > 0" class="agent-debug-grid">
+      <article
+        v-for="card in debugCards"
+        :key="card.key"
+        class="agent-debug-card"
+      >
+        <span class="agent-debug-card-title">{{ card.title }}</span>
+        <p
+          v-for="(line, lineIndex) in card.lines"
+          :key="`${card.key}-${lineIndex}`"
+          class="agent-debug-line"
+        >
+          {{ line }}
+        </p>
+      </article>
+    </section>
+
     <div
       v-if="hasAnswer"
       class="agent-answer"
@@ -121,6 +142,125 @@ const emit = defineEmits(['render-to-map', 'tag-click'])
 const isProcessExpanded = ref(false)
 const snapshot = computed(() => buildAgentRunSnapshot(props.message))
 
+function pickText(...candidates) {
+  for (const candidate of candidates) {
+    const text = String(candidate || '').trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function truncateText(value, maxLength = 48) {
+  const text = pickText(value)
+  if (!text || text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+function formatIntentSource(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'embedding') return 'Embedding'
+  if (normalized === 'llm') return 'LLM'
+  if (normalized === 'rule' || normalized === 'fallback') return '规则'
+  return pickText(value)
+}
+
+function formatQueryType(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'nearby_poi') return '附近检索'
+  if (normalized === 'nearest_station') return '最近地铁站'
+  if (normalized === 'area_overview') return '区域解读'
+  if (normalized === 'similar_regions') return '相似片区'
+  if (normalized === 'compare_places') return '双地点比较'
+  return pickText(value)
+}
+
+function formatWebSource(value) {
+  if (value === 'tavily') return 'Tavily'
+  if (value === 'multi_search') return '多引擎'
+  return pickText(value)
+}
+
+const debugCards = computed(() => {
+  const msg = props.message
+  if (!msg || typeof msg !== 'object') return []
+
+  const cards = []
+  const intent = msg.intentPreview && typeof msg.intentPreview === 'object' ? msg.intentPreview : null
+  if (intent) {
+    const lines = []
+    const queryTypeLabel = formatQueryType(intent.queryType)
+    if (queryTypeLabel) {
+      lines.push(`类型：${queryTypeLabel}`)
+    }
+    const sourceLabel = formatIntentSource(intent.intentSource || intent.parserProvider)
+    const sourceConfidence = Number(intent.sourceConfidence ?? intent.confidence)
+    const sourceLatencyMs = Number(intent.sourceLatencyMs)
+    if (sourceLabel) {
+      const sourceParts = [`来源：${sourceLabel}`]
+      if (Number.isFinite(sourceConfidence) && sourceConfidence > 0) {
+        sourceParts.push(`${Math.round((sourceConfidence <= 1 ? sourceConfidence : sourceConfidence / 100) * 100)}%`)
+      }
+      if (Number.isFinite(sourceLatencyMs) && sourceLatencyMs > 0) {
+        sourceParts.push(`${Math.round(sourceLatencyMs)}ms`)
+      }
+      lines.push(sourceParts.join(' · '))
+    }
+    const anchorLabel = pickText(intent.displayAnchor, intent.placeName)
+    if (anchorLabel) {
+      lines.push(`锚点：${anchorLabel}`)
+    }
+    const categoryLabel = intent.categoryResolved === true && pickText(intent.categoryMain)
+      ? `${intent.categoryMain}${intent.categorySub && intent.categorySub !== intent.categoryMain ? `·${intent.categorySub}` : ''}`
+      : pickText(intent.targetCategory)
+    if (categoryLabel) {
+      lines.push(`类别：${categoryLabel}`)
+    }
+    lines.push(`联网：${intent.needsWebSearch === true ? '需要' : '非必需'}`)
+    cards.push({ key: 'intent', title: 'NL 理解', lines: lines.slice(0, 5) })
+  }
+
+  const webResultCount = Number(msg.webSearchResultCount) || 0
+  const webPagesRead = Number(msg.webSearchPagesRead) || 0
+  const webSources = Array.isArray(msg.webSearchSources) ? msg.webSearchSources : []
+  const webResults = Array.isArray(msg.webSearchResults) ? msg.webSearchResults : []
+  const webAnswerPreview = pickText(msg.webSearchAnswerPreview)
+  if (webResultCount > 0 || webPagesRead > 0 || webResults.length > 0 || webAnswerPreview || webSources.length > 0) {
+    const lines = []
+    const sourceLabel = webSources.map(formatWebSource).filter(Boolean).join(' + ')
+    lines.push(`命中：${webResultCount || webPagesRead || 0} 条${sourceLabel ? ` · ${sourceLabel}` : ''}`)
+    webResults.slice(0, 3).forEach((item) => {
+      const title = truncateText(item && typeof item === 'object' ? item.title : '', 34)
+      if (title) {
+        lines.push(`结果：${title}`)
+      }
+    })
+    if (webAnswerPreview) {
+      lines.push(`摘要：${truncateText(webAnswerPreview, 40)}`)
+    }
+    cards.push({ key: 'web', title: '联网搜索', lines: lines.slice(0, 5) })
+  }
+
+  const alignment = msg.entityAlignment && typeof msg.entityAlignment === 'object' ? msg.entityAlignment : null
+  if (alignment) {
+    const lines = []
+    const dualVerified = Number(alignment.dual_verified) || 0
+    const localOnly = Number(alignment.local_only) || 0
+    const webOnly = Number(alignment.web_only) || 0
+    lines.push(`双重验证：${dualVerified} · 仅本地：${localOnly} · 仅联网：${webOnly}`)
+    const sampleMatches = Array.isArray(alignment.sample_matches) ? alignment.sample_matches : []
+    sampleMatches.slice(0, 3).forEach((item) => {
+      if (!item || typeof item !== 'object') return
+      const label = truncateText(pickText(item.name, item.local_name, item.web_title), 32)
+      if (!label) return
+      const verification = pickText(item.verification)
+      lines.push(`样本：${label}${verification ? ` · ${verification}` : ''}`)
+    })
+    cards.push({ key: 'alignment', title: '实体对齐', lines: lines.slice(0, 4) })
+  }
+
+  return cards
+})
+
 watch(
   () => props.message?.isProcessExpanded,
   (nextValue) => {
@@ -163,6 +303,35 @@ watch(
 )
 
 const hasAnswer = computed(() => Boolean(String(props.messageHtml || '').trim()))
+const webSearchBadge = computed(() => {
+  const msg = props.message
+  if (!msg) return null
+  const resultCount = Number(msg.webSearchResultCount) || 0
+  const pagesRead = Number(msg.webSearchPagesRead) || 0
+  const sources = Array.isArray(msg.webSearchSources) ? msg.webSearchSources : []
+  const isSearching = msg.isStreaming && msg.thinkingMessage && /搜索|联网|网页/.test(String(msg.thinkingMessage || ''))
+
+  if (resultCount > 0 || pagesRead > 0) {
+    const sourceLabels = sources.map(s => {
+      if (s === 'tavily') return 'Tavily'
+      if (s === 'multi_search') return '多引擎'
+      return s
+    }).join('+')
+    return {
+      tone: 'success',
+      label: `${resultCount > 0 ? `命中 ${resultCount} 条结果` : `已阅读 ${pagesRead} 个网页`}${sourceLabels ? ` · ${sourceLabels}` : ''}`,
+    }
+  }
+
+  if (isSearching) {
+    return {
+      tone: 'running',
+      label: '联网搜索中...',
+    }
+  }
+
+  return null
+})
 const reasoningPreview = computed(() => {
   const content = String(props.message?.reasoningContent || '').trim()
   if (!content) return ''
@@ -275,6 +444,28 @@ const processSummaryDetail = computed(() => {
   color: rgba(196, 205, 223, 0.78);
 }
 
+.agent-web-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.agent-web-badge.is-running {
+  background: rgba(79, 151, 255, 0.14);
+  color: #8dc7ff;
+}
+
+.agent-web-badge.is-success {
+  background: rgba(73, 201, 176, 0.12);
+  color: #70e5cc;
+}
+
 .agent-time {
   font-size: 12px;
   color: rgba(182, 189, 203, 0.74);
@@ -302,6 +493,38 @@ const processSummaryDetail = computed(() => {
 
 .pending-answer {
   color: rgba(189, 198, 215, 0.82);
+}
+
+.agent-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.agent-debug-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.agent-debug-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(142, 212, 255, 0.86);
+}
+
+.agent-debug-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(205, 213, 227, 0.82);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-process {

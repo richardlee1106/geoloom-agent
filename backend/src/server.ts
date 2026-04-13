@@ -8,6 +8,7 @@ import { GeoLoomAgent } from './agent/GeoLoomAgent.js'
 import { RemoteFirstFaissIndex } from './integration/faissIndex.js'
 import { RemoteFirstOSMBridge } from './integration/osmBridge.js'
 import { PostgisPool } from './integration/postgisPool.js'
+import { JinaBridge } from './integration/jinaBridge.js'
 import { RemoteFirstPythonBridge } from './integration/pythonBridge.js'
 import { LongTermMemory } from './memory/LongTermMemory.js'
 import { MemoryManager } from './memory/MemoryManager.js'
@@ -22,7 +23,13 @@ import { createSpatialEncoderSkill } from './skills/spatial_encoder/SpatialEncod
 import { createSpatialVectorSkill } from './skills/spatial_vector/SpatialVectorSkill.js'
 import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceSkill.js'
 import { createSemanticSelectorSkill } from './skills/semantic_selector/SemanticSelectorSkill.js'
+import { createMultiSearchEngineSkill } from './skills/multi_search_engine/MultiSearchEngineSkill.js'
+import { createTavilySearchSkill } from './skills/tavily_search/TavilySearchSkill.js'
+import { createEntityAlignmentSkill } from './skills/entity_alignment/EntityAlignmentSkill.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
+import { CategoryEmbeddingIndex } from './catalog/categoryEmbeddingIndex.js'
+import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
+import { EmbeddingIntentClassifier } from './catalog/embeddingIntentClassifier.js'
 import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
 
@@ -102,14 +109,11 @@ registry.register(
       ]
       const result = await pool.query(
         `
-          SELECT id, name, category_main, category_sub, longitude AS lon, latitude AS lat
+          SELECT id, name, category_main, category_sub, longitude AS lon, latitude AS lat,
+            CASE WHEN ${exactClauses} THEN 0 WHEN ${prefixClauses} THEN 1 ELSE 2 END AS match_rank
           FROM pois
           WHERE (${exactClauses}) OR (${fuzzyClauses})
-          ORDER BY CASE
-            WHEN ${exactClauses} THEN 0
-            WHEN ${prefixClauses} THEN 1
-            ELSE 2
-          END ASC,
+          ORDER BY match_rank ASC,
           ${categoryPriority} ASC,
           LENGTH(name) ASC
           LIMIT ${candidateLimit}
@@ -135,12 +139,82 @@ registry.register(createSpatialEncoderSkill({ bridge: spatialEncoderBridge }))
 registry.register(createSpatialVectorSkill({ index: spatialVectorIndex }))
 registry.register(createRouteDistanceSkill({ bridge: routeBridge }))
 registry.register(createSemanticSelectorSkill({ bridge: spatialEncoderBridge }))
+registry.register(createMultiSearchEngineSkill({
+  timeoutMs: Number(process.env.MULTI_SEARCH_TIMEOUT_MS || '10000'),
+  maxEngines: Number(process.env.MULTI_SEARCH_MAX_ENGINES || '3'),
+}))
+if (process.env.TAVILY_API_KEY) {
+  registry.register(createTavilySearchSkill({
+    apiKey: process.env.TAVILY_API_KEY,
+    timeoutMs: Number(process.env.TAVILY_TIMEOUT_MS || '15000'),
+  }))
+}
+const jinaBridge = new JinaBridge()
+registry.register(createEntityAlignmentSkill({
+  bridge: jinaBridge,
+  query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+}))
+
+// 品类 Embedding 索引：启动时从 PostGIS 加载品类并预计算 embedding
+const categoryIndex = new CategoryEmbeddingIndex()
+categoryIndex.build(
+  (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+  jinaBridge,
+).catch((err) => {
+  console.warn(`[CategoryEmbeddingIndex] 索引构建失败: ${err instanceof Error ? err.message : String(err)}`)
+})
+
+// 启动时验证 pgvector 扩展 + POI embedding 覆盖率
+;(async () => {
+  try {
+    // 检查 pgvector 扩展
+    const extResult = await pool.query("SELECT extname FROM pg_extension WHERE extname = 'vector'")
+    if (extResult.rows.length === 0) {
+      console.warn('[Embedding] pgvector 扩展未安装，POI 语义排序不可用')
+      return
+    }
+    // 检查 embedding 列
+    const colResult = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'pois' AND column_name = 'embedding'")
+    if (colResult.rows.length === 0) {
+      console.warn('[Embedding] pois.embedding 列不存在，POI 语义排序不可用')
+      return
+    }
+    // 统计覆盖率
+    const totalResult = await pool.query('SELECT COUNT(*) as total FROM pois')
+    const embResult = await pool.query('SELECT COUNT(*) as has_emb FROM pois WHERE embedding IS NOT NULL')
+    const total = Number(totalResult.rows[0].total)
+    const hasEmb = Number(embResult.rows[0].has_emb)
+    const pct = total > 0 ? (hasEmb / total * 100).toFixed(1) : '0.0'
+    console.log(`[Embedding] pgvector ✓ | POI embedding 覆盖率: ${hasEmb}/${total} (${pct}%)`)
+    if (hasEmb === 0) {
+      console.log('[Embedding] 提示：首次查询时会按需计算 POI embedding 并缓存，无需全量预计算')
+    }
+  } catch (err) {
+    console.warn(`[Embedding] 验证失败: ${err instanceof Error ? err.message : String(err)}`)
+  }
+})()
+
+// POI Embedding 缓存 + 语义重排序
+const poiEmbeddingCache = new PoiEmbeddingCache({
+  bridge: jinaBridge,
+  query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+})
+
+// Embedding-First 意图分类器：替代 LLM 意图识别
+const intentClassifier = new EmbeddingIntentClassifier(jinaBridge)
+intentClassifier.build().catch((err) => {
+  console.warn(`[EmbeddingIntentClassifier] 构建失败: ${err instanceof Error ? err.message : String(err)}`)
+})
 
 const chat = new GeoLoomAgent({
   registry,
   version,
   memory,
   sessionManager,
+  categoryIndex,
+  bridge: jinaBridge,
+  poiEmbeddingCache,
+  intentClassifier,
 })
 
 const app = createApp({

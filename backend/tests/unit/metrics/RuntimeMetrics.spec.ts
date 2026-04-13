@@ -44,6 +44,17 @@ describe('RuntimeMetrics', () => {
         ungrounded: 1,
       },
       evidence_grounded_answer_rate: 0.667,
+      phase_latency: {
+        intent_p50_ms: 0,
+        intent_p95_ms: 0,
+        evidence_p50_ms: 0,
+        evidence_p95_ms: 0,
+        synthesis_p50_ms: 0,
+        synthesis_p95_ms: 0,
+      },
+      llm_rounds: { avg: 0, max: 0 },
+      tool_calls: { avg: 0, max: 0 },
+      unnecessary_analysis_rate: 0,
     })
   })
 

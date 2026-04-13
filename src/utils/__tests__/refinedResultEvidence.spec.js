@@ -59,12 +59,42 @@ describe('normalizeRefinedResultEvidence', () => {
     expect(normalized.intent).toEqual({
       queryType: 'poi_search',
       intentMode: 'local_search',
+      parserProvider: null,
+      parserModel: null,
+      categoryMain: null,
+      categorySub: null,
       queryPlan: {
         query_type: 'poi_search',
         intent_mode: 'local_search',
         anchor: '湖北大学',
         categories: ['咖啡厅']
       }
+    })
+  })
+
+  it('reads parser and category fields from results.intent', () => {
+    const input = {
+      results: {
+        intent: {
+          queryType: 'nearby_poi',
+          intentMode: 'local_search',
+          parserProvider: 'embedding',
+          parserModel: 'embedding-intent-classifier',
+          categoryMain: '餐饮美食',
+          categorySub: '餐饮美食'
+        }
+      }
+    }
+
+    const normalized = normalizeRefinedResultEvidence(input)
+    expect(normalized.intent).toEqual({
+      queryType: 'nearby_poi',
+      intentMode: 'local_search',
+      parserProvider: 'embedding',
+      parserModel: 'embedding-intent-classifier',
+      categoryMain: '餐饮美食',
+      categorySub: '餐饮美食',
+      queryPlan: null
     })
   })
 })

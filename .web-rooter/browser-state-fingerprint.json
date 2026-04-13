@@ -1,0 +1,24 @@
+{
+  "engines": {
+    "search-fallback": {
+      "fingerprint": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1920,
+          "height": 1080
+        },
+        "timezone": "Asia/Shanghai",
+        "locale": "zh-CN,zh;q=0.9,en;q=0.8"
+      },
+      "proxy": null,
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "timezone": "Asia/Shanghai",
+      "locale": "zh-CN,zh;q=0.9,en;q=0.8",
+      "last_used": "2026-04-13T18:10:11.733516"
+    }
+  }
+}

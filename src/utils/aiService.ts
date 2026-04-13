@@ -104,10 +104,12 @@ const IS_V4_MODE = BACKEND_VERSION === 'v4';
 const API_BASE = IS_V4_MODE ? `${AI_API_BASE_URL}/api/geo` : `${AI_API_BASE_URL}/api/ai`;
 
 const META_EVENT_TYPES = new Set([
+  'trace', 'job', 'intent_preview',
   'thinking', 'reasoning',
+  'web_search', 'entity_alignment',
   'pois', 'stage', 'boundary', 'spatial_clusters',
   'vernacular_regions', 'fuzzy_regions', 'stats', 'progress',
-  'partial', 'refined_result', 'schema_error', 'error'
+  'partial', 'refined_result', 'done', 'schema_error', 'error'
 ])
 
 // V3 模式日志（仅在开发环境）

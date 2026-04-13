@@ -14,6 +14,7 @@ backend/.env.*
 backend/.tmp-tests/
 backend/data/memory/*
 !backend/data/memory/.gitkeep
+!backend/data/memory/category-embedding-cache.json
 
 *.log
 *.tmp

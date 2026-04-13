@@ -1,5 +1,5 @@
 import type { SkillExecutionResult } from '../../types.js'
-import type { SQLSandbox } from '../../../sandbox/SQLSandbox.js'
+import type { SQLSandbox, ExecutorResult } from '../../../sandbox/SQLSandbox.js'
 import type { QueryResultLike } from '../../../integration/postgisPool.js'
 
 export async function executeSpatialSQLAction(
@@ -18,7 +18,10 @@ export async function executeSpatialSQLAction(
   try {
     const execution = await deps.sandbox.execute({
       sql: payload.sql,
-      executor: async ({ sql, timeoutMs }) => deps.query(sql, [], timeoutMs),
+      executor: async ({ sql, timeoutMs }) => {
+        const result = await deps.query(sql, [], timeoutMs)
+        return result as unknown as ExecutorResult
+      },
     })
 
     return {

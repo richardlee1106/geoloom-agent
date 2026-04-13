@@ -34,6 +34,12 @@ interface AssistantMessage extends PlainObject {
   pois?: unknown[]
   progress?: unknown
   schemaWarning?: PlainObject
+  webSearchPagesRead?: number
+  webSearchSources?: string[]
+  webSearchResultCount?: number
+  webSearchResults?: unknown[]
+  webSearchAnswerPreview?: string | null
+  entityAlignment?: PlainObject | null
   agentEvents?: unknown[]
   toolCalls?: unknown[]
   toolCallsRecordedAt?: number
@@ -182,6 +188,24 @@ export function useAiStreamDispatcher({
       message.intentMode = resolvedMode
     }
 
+    message.intentPreview = {
+      ...(asPlainObject(message.intentPreview) || {}),
+      queryType: mergedIntent.queryType ?? asPlainObject(message.intentPreview).queryType ?? null,
+      displayAnchor: mergedIntent.placeName ?? asPlainObject(message.intentPreview).displayAnchor ?? null,
+      placeName: mergedIntent.placeName ?? asPlainObject(message.intentPreview).placeName ?? null,
+      targetCategory: mergedIntent.targetCategory ?? asPlainObject(message.intentPreview).targetCategory ?? null,
+      parserModel: mergedIntent.parserModel ?? asPlainObject(message.intentPreview).parserModel ?? null,
+      parserProvider: mergedIntent.parserProvider ?? asPlainObject(message.intentPreview).parserProvider ?? null,
+      needsWebSearch: toBooleanOrNull(mergedIntent.needsWebSearch) === true,
+      intentSource: mergedIntent.intentSource ?? asPlainObject(message.intentPreview).intentSource ?? mergedIntent.parserProvider ?? null,
+      sourceConfidence: Number.isFinite(Number(mergedIntent.sourceConfidence)) ? Number(mergedIntent.sourceConfidence) : asPlainObject(message.intentPreview).sourceConfidence ?? null,
+      sourceLatencyMs: Number.isFinite(Number(mergedIntent.sourceLatencyMs)) ? Number(mergedIntent.sourceLatencyMs) : asPlainObject(message.intentPreview).sourceLatencyMs ?? null,
+      categoryMain: mergedIntent.categoryMain ?? asPlainObject(message.intentPreview).categoryMain ?? null,
+      categorySub: mergedIntent.categorySub ?? asPlainObject(message.intentPreview).categorySub ?? null,
+      categoryResolved: Boolean(mergedIntent.categoryMain ?? asPlainObject(message.intentPreview).categoryMain),
+      categoryScore: Number.isFinite(Number(mergedIntent.categoryScore)) ? Number(mergedIntent.categoryScore) : asPlainObject(message.intentPreview).categoryScore ?? null,
+    }
+
     return mergedIntent
   }
 
@@ -283,6 +307,10 @@ export function useAiStreamDispatcher({
       if (currentMsg) {
         applySSEMetaToMessage(currentMsg, previewPayload)
         currentMsg.intentPreview = {
+          queryType: previewPayload.queryType ?? null,
+          anchorSource: previewPayload.anchorSource ?? null,
+          placeName: previewPayload.placeName ?? previewPayload.displayAnchor ?? null,
+          secondaryPlaceName: previewPayload.secondaryPlaceName ?? null,
           rawAnchor: previewPayload.rawAnchor ?? null,
           normalizedAnchor: previewPayload.normalizedAnchor ?? null,
           displayAnchor: previewPayload.displayAnchor ?? previewPayload.place_name ?? null,
@@ -293,12 +321,24 @@ export function useAiStreamDispatcher({
           clarificationHint: String(previewPayload.clarificationHint || ''),
           isAbbreviation: previewPayload.isAbbreviation === true,
           parserModel: previewPayload.parserModel || previewPayload.parser_model || null,
-          parserProvider: previewPayload.parserProvider || previewPayload.parser_provider || null
+          parserProvider: previewPayload.parserProvider || previewPayload.parser_provider || null,
+          needsWebSearch: previewPayload.needsWebSearch === true,
+          intentSource: previewPayload.intentSource ?? previewPayload.parserProvider ?? previewPayload.parser_provider ?? null,
+          sourceConfidence: Number.isFinite(Number(previewPayload.sourceConfidence)) ? Number(previewPayload.sourceConfidence) : null,
+          sourceLatencyMs: Number.isFinite(Number(previewPayload.sourceLatencyMs)) ? Number(previewPayload.sourceLatencyMs) : null,
+          categoryMain: previewPayload.categoryMain ?? null,
+          categorySub: previewPayload.categorySub ?? null,
+          categoryResolved: previewPayload.categoryResolved === true,
+          categoryScore: Number.isFinite(Number(previewPayload.categoryScore)) ? Number(previewPayload.categoryScore) : null,
         }
         const intentPreview = asPlainObject(currentMsg.intentPreview)
+        const categoryLabel = intentPreview.categoryResolved && intentPreview.categoryMain
+          ? `${intentPreview.categoryMain}${intentPreview.categorySub && intentPreview.categorySub !== intentPreview.categoryMain ? `·${intentPreview.categorySub}` : ''}`
+          : intentPreview.targetCategory
+        const webTail = intentPreview.needsWebSearch === true ? ' · 联网辅助' : ''
         currentMsg.thinkingMessage = intentPreview.displayAnchor
-          ? `已识别：${intentPreview.displayAnchor}${intentPreview.targetCategory ? ` · ${intentPreview.targetCategory}` : ''}`
-          : (currentMsg.thinkingMessage || '已完成问题拆解')
+          ? `已识别：${intentPreview.displayAnchor}${categoryLabel ? ` · ${categoryLabel}` : ''}${webTail}`
+          : (currentMsg.thinkingMessage || `已识别问题类型：${String(intentPreview.queryType || '未定')}`)
         appendAgentEventToMessage(currentMsg, 'intent_preview', currentMsg.intentPreview)
       }
       return {}
@@ -422,6 +462,68 @@ export function useAiStreamDispatcher({
         currentMsg.progress = progressPayload.progress
         applySSEMetaToMessage(currentMsg, progressPayload)
         appendAgentEventToMessage(currentMsg, 'progress', progressPayload)
+      }
+      return {}
+    }
+
+    // 处理联网搜索状态事件
+    if (type === 'web_search' && data && typeof data === 'object') {
+      const webSearchPayload = asPlainObject(data)
+      if (currentMsg) {
+        applySSEMetaToMessage(currentMsg, webSearchPayload)
+        const pagesRead = Number(webSearchPayload.pages_read) || 0
+        if (pagesRead > 0) {
+          const existing = Number(currentMsg.webSearchPagesRead) || 0
+          currentMsg.webSearchPagesRead = Math.max(existing, pagesRead)
+        }
+        const resultCount = Number(webSearchPayload.result_count) || 0
+        const sampleResults = asArray(webSearchPayload.sample_results)
+        if (resultCount > 0 || sampleResults.length > 0) {
+          currentMsg.webSearchResultCount = resultCount > 0 ? resultCount : sampleResults.length
+        }
+        if (sampleResults.length > 0) {
+          currentMsg.webSearchResults = sampleResults.slice(0, 5)
+        }
+        const answerPreview = String(webSearchPayload.answer_preview || '').trim()
+        if (answerPreview) {
+          currentMsg.webSearchAnswerPreview = answerPreview
+        }
+        const source = String(webSearchPayload.source || '').trim()
+        if (source) {
+          const sources = Array.isArray(currentMsg.webSearchSources)
+            ? currentMsg.webSearchSources
+            : []
+          if (!sources.includes(source)) {
+            currentMsg.webSearchSources = [...sources, source]
+          }
+        }
+        const status = String(webSearchPayload.status || '').trim().toLowerCase()
+        if (status === 'start') {
+          const query = String(webSearchPayload.query || '').trim()
+          currentMsg.thinkingMessage = query ? `正在搜索「${query}」` : '正在联网搜索'
+        } else if (status === 'done' || status === 'success') {
+          const total = Number(currentMsg.webSearchResultCount) || Number(currentMsg.webSearchPagesRead) || pagesRead
+          currentMsg.thinkingMessage = total > 0
+            ? `联网命中 ${total} 条结果`
+            : '联网搜索未命中有效结果'
+        }
+        appendAgentEventToMessage(currentMsg, 'web_search', webSearchPayload)
+      }
+      return {}
+    }
+
+    if (type === 'entity_alignment' && data && typeof data === 'object') {
+      const alignmentPayload = asPlainObject(data)
+      if (currentMsg) {
+        applySSEMetaToMessage(currentMsg, alignmentPayload)
+        currentMsg.entityAlignment = alignmentPayload
+        const dualVerified = Number(alignmentPayload.dual_verified) || 0
+        const localOnly = Number(alignmentPayload.local_only) || 0
+        const webOnly = Number(alignmentPayload.web_only) || 0
+        currentMsg.thinkingMessage = dualVerified > 0
+          ? `实体对齐完成：双重验证 ${dualVerified} 个`
+          : `实体对齐完成：仅本地 ${localOnly} · 仅联网 ${webOnly}`
+        appendAgentEventToMessage(currentMsg, 'entity_alignment', alignmentPayload)
       }
       return {}
     }

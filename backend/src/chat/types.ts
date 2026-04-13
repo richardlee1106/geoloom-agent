@@ -40,6 +40,14 @@ export type AnchorSource =
   | 'map_view'
   | 'user_location'
 
+export type ToolIntentMode =
+  | 'candidate_lookup'
+  | 'candidate_reputation'
+  | 'nearest_transit'
+  | 'area_insight'
+  | 'place_comparison'
+  | 'similar_region_search'
+
 export interface DeterministicIntent {
   queryType: QueryType
   intentMode: IntentMode
@@ -50,9 +58,36 @@ export interface DeterministicIntent {
   targetCategory: string | null
   comparisonTarget?: string | null
   categoryKey?: string | null
+  /** embedding 语义匹配解析出的 category_main（如"住宿服务"），直接用于 SQL WHERE */
+  categoryMain?: string | null
+  /** embedding 语义匹配解析出的 category_sub（如"宾馆酒店"），直接用于 SQL WHERE */
+  categorySub?: string | null
   radiusM: number
   needsClarification: boolean
   clarificationHint: string | null
+  /** LLM 意图识别时判断是否需要联网搜索（评价/排名/实时/价格/趋势类需搜索） */
+  needsWebSearch?: boolean
+  /** 工具编排层的任务类型，避免把 NL 直接原句透传给下游工具 */
+  toolIntent?: ToolIntentMode | null
+  /** 联网检索的语义焦点，如“酒店 评分 推荐” */
+  searchIntentHint?: string | null
+  /** 品类匹配阶段计算的 query embedding（复用给语义重排序，避免重复 API 调用） */
+  queryVec?: number[]
+  /** 当前地图 viewport 的尺度信息，供代表锚点优先级与联网 query 改写复用 */
+  viewportContext?: ViewportContextMeta
+}
+
+export type ViewportScale = 'small' | 'medium' | 'large' | 'unknown'
+
+export interface ViewportContextMeta {
+  diagonalM?: number | null
+  scale?: ViewportScale
+  bounds?: {
+    swLon: number
+    swLat: number
+    neLon: number
+    neLat: number
+  } | null
 }
 
 export interface UserLocationContext {
@@ -257,7 +292,7 @@ export interface PoiFeatureTag {
   key: string
   label: string
   score: number
-  detail?: string | null
+  detail: string | null
 }
 
 export interface RepresentativePoiProfile {

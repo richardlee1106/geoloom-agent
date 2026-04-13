@@ -34,7 +34,7 @@ export interface ConfidenceDecision {
 }
 
 export interface SpatialAnalysisRegion {
-  id?: string | number | null
+  id: string | number | null
   name: string
   areaWkt: string
   lon?: number

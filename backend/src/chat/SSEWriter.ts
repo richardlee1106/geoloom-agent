@@ -66,6 +66,19 @@ export class SSEWriter {
     return this.write('stats', payload)
   }
 
+  /** 联网搜索状态事件：搜索开始/进行中/完成 */
+  webSearch(payload: Record<string, unknown>) {
+    return this.write('web_search', payload)
+  }
+
+  entityAlignment(payload: Record<string, unknown>) {
+    return this.write('entity_alignment', payload)
+  }
+
+  message(content: string) {
+    return this.write('message', { content })
+  }
+
   refinedResult(payload: Record<string, unknown>) {
     return this.write('refined_result', payload)
   }

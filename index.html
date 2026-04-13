@@ -7,7 +7,36 @@
     <title>GeoLoom-RAG | 地理认知探索</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- 首屏加载占位符 -->
+      <div id="initial-loader" style="
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #0a0a0a;
+        color: #fff;
+        font-family: system-ui, -apple-system, sans-serif;
+        z-index: 9999;
+      ">
+        <div style="
+          width: 48px;
+          height: 48px;
+          border: 3px solid rgba(129, 140, 248, 0.2);
+          border-top-color: #818cf8;
+          border-radius: 50%;
+          animation: initial-spin 1s linear infinite;
+        "></div>
+        <p style="margin-top: 16px; font-size: 14px; opacity: 0.8;">GeoLoom 加载中...</p>
+      </div>
+      <style>
+        @keyframes initial-spin {
+          to { transform: rotate(360deg); }
+        }
+      </style>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

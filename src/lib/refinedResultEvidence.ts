@@ -4,6 +4,10 @@ export interface IntentMeta {
   queryType: string | null
   intentMode: string | null
   queryPlan: PlainObject | null
+  parserProvider: string | null
+  parserModel: string | null
+  categoryMain: string | null
+  categorySub: string | null
 }
 
 export interface NormalizedRefinedResultEvidence {
@@ -52,8 +56,10 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
   const intentMetaCandidate = pickObject(
     results.intentMeta,
     results.intent_meta,
+    results.intent,
     root.intentMeta,
-    root.intent_meta
+    root.intent_meta,
+    root.intent
   )
 
   const queryPlan = pickObject(
@@ -109,14 +115,54 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
     rootStats?.intentMode
   ).toLowerCase()
 
-  if (!queryPlan && !queryType && !intentMode) {
+  const parserProvider = pickString(
+    intentMetaCandidate?.parserProvider,
+    intentMetaCandidate?.parser_provider,
+    results.parserProvider,
+    results.parser_provider,
+    root.parserProvider,
+    root.parser_provider
+  )
+
+  const parserModel = pickString(
+    intentMetaCandidate?.parserModel,
+    intentMetaCandidate?.parser_model,
+    results.parserModel,
+    results.parser_model,
+    root.parserModel,
+    root.parser_model
+  )
+
+  const categoryMain = pickString(
+    intentMetaCandidate?.categoryMain,
+    intentMetaCandidate?.category_main,
+    results.categoryMain,
+    results.category_main,
+    root.categoryMain,
+    root.category_main
+  )
+
+  const categorySub = pickString(
+    intentMetaCandidate?.categorySub,
+    intentMetaCandidate?.category_sub,
+    results.categorySub,
+    results.category_sub,
+    root.categorySub,
+    root.category_sub
+  )
+
+  if (!queryPlan && !queryType && !intentMode && !parserProvider && !parserModel && !categoryMain && !categorySub) {
     return null
   }
 
   return {
     queryType: queryType || null,
     intentMode: intentMode || null,
-    queryPlan: queryPlan || null
+    queryPlan: queryPlan || null,
+    parserProvider: parserProvider || null,
+    parserModel: parserModel || null,
+    categoryMain: categoryMain || null,
+    categorySub: categorySub || null
   }
 }
 

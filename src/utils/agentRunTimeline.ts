@@ -146,17 +146,116 @@ function createEventRecord({
   }
 }
 
-function buildIntentPreviewDetail(payload: PlainObject): string {
+function formatParserProvider(value: unknown): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'embedding') return 'Embedding'
+  if (normalized === 'llm') return 'LLM'
+  if (normalized === 'rule' || normalized === 'fallback') return '规则'
+  return ''
+}
+
+function formatQueryType(value: unknown): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'nearby_poi') return '附近检索'
+  if (normalized === 'nearest_station') return '最近地铁站'
+  if (normalized === 'area_overview') return '区域解读'
+  if (normalized === 'similar_regions') return '相似片区'
+  if (normalized === 'compare_places') return '双地点比较'
+  return pickString(value)
+}
+
+function formatVerification(value: unknown): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'dual_verified') return '双重验证'
+  if (normalized === 'local_only') return '仅本地'
+  if (normalized === 'web_only') return '仅联网'
+  return pickString(value)
+}
+
+function formatAnswerSource(value: unknown): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'llm_synthesized') return 'LLM 润色回答'
+  if (normalized === 'llm_direct') return 'LLM 原生回答'
+  if (normalized === 'deterministic_renderer' || normalized === 'fallback_deterministic_renderer') return '结构化证据回答'
+  if (normalized === 'insufficient_evidence' || normalized === 'fallback_insufficient_evidence') return '证据不足提示'
+  if (normalized === 'clarification') return '澄清追问'
+  return ''
+}
+
+function summarizeText(value: unknown, maxLength = 60): string {
+  const text = pickString(value)
+  if (!text || text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+function buildEntityAlignmentDetail(payload: PlainObject): string {
+  const dualVerified = toFiniteNumber(payload.dual_verified) ?? 0
+  const localOnly = toFiniteNumber(payload.local_only) ?? 0
+  const webOnly = toFiniteNumber(payload.web_only) ?? 0
+  const sampleMatches = asArray<PlainObject>(payload.sample_matches)
+    .slice(0, 3)
+    .map((item) => {
+      const name = pickString(item.name, item.local_name, item.web_title)
+      if (!name) return ''
+      const verification = formatVerification(item.verification)
+      const webTitle = summarizeText(item.web_title, 28)
+      const titleTail = webTitle && webTitle !== name ? ` ↔ ${webTitle}` : ''
+      return `${name}${verification ? `(${verification})` : ''}${titleTail}`
+    })
+    .filter(Boolean)
+
   const parts = [
+    `双重验证 ${dualVerified} 个`,
+    `仅本地 ${localOnly} 个`,
+    `仅联网 ${webOnly} 个`,
+  ]
+
+  if (sampleMatches.length > 0) {
+    parts.push(`样本：${sampleMatches.join('；')}`)
+  }
+
+  const message = pickString(payload.message)
+  if (message) {
+    parts.push(message)
+  }
+
+  return parts.join(' · ')
+}
+
+function buildIntentPreviewDetail(payload: PlainObject): string {
+  const queryTypeLabel = formatQueryType(payload.queryType)
+  const categoryMain = pickString(payload.categoryMain)
+  const categorySub = pickString(payload.categorySub)
+  const categoryResolved = payload.categoryResolved === true
+  const categoryLabel = categoryResolved && categoryMain
+    ? (categorySub && categorySub !== categoryMain ? `${categoryMain}·${categorySub}` : categoryMain)
+    : pickString(payload.targetCategory, payload.poi_sub_type)
+  const parserProvider = formatParserProvider(payload.intentSource ?? payload.parserProvider ?? payload.parser_provider)
+
+  const parts = [
+    queryTypeLabel,
     pickString(payload.displayAnchor, payload.place_name),
-    pickString(payload.targetCategory, payload.poi_sub_type),
+    categoryLabel,
+    parserProvider ? `来源 ${parserProvider}` : '',
+    payload.needsWebSearch === true ? '需联网' : '',
     pickString(payload.spatialRelation),
   ].filter(Boolean)
 
-  const confidence = toFiniteNumber(payload.confidence)
+  const confidence = toFiniteNumber(payload.sourceConfidence ?? payload.confidence)
   if (confidence !== null) {
     const normalized = confidence <= 1 ? confidence : confidence / 100
     parts.push(`置信 ${Math.round(normalized * 100)}%`)
+  }
+
+  const categoryScore = toFiniteNumber(payload.categoryScore)
+  if (categoryScore !== null) {
+    const normalized = categoryScore <= 1 ? categoryScore : categoryScore / 100
+    parts.push(`品类 ${Math.round(normalized * 100)}%`)
+  }
+
+  const latencyMs = toFiniteNumber(payload.sourceLatencyMs)
+  if (latencyMs !== null && latencyMs > 0) {
+    parts.push(`判定 ${Math.round(latencyMs)} ms`)
   }
 
   const clarificationHint = pickString(payload.clarificationHint)
@@ -184,16 +283,27 @@ function buildStatsDetail(payload: PlainObject): string {
 function buildRefinedResultDetail(payload: PlainObject): string {
   const root = asPlainObject(payload)
   const results = asPlainObject(root.results)
+  const rootStats = asPlainObject(root.stats)
+  const resultStats = asPlainObject(results.stats)
   const toolCalls = asArray(root.tool_calls).length
     || asArray(root.toolCalls).length
     || asArray(results.tool_calls).length
     || asArray(results.toolCalls).length
+  const answerSource = pickString(
+    root.answer_source,
+    results.answer_source,
+    resultStats.answer_source,
+    rootStats.answer_source
+  )
+  const sourceLabel = formatAnswerSource(answerSource)
 
   if (toolCalls > 0) {
-    return `已整合 ${toolCalls} 次工具调用与结构化证据`
+    return sourceLabel
+      ? `${sourceLabel} · 已整合 ${toolCalls} 次工具调用与结构化证据`
+      : `已整合 ${toolCalls} 次工具调用与结构化证据`
   }
 
-  return '已生成最终回答与结构化证据'
+  return sourceLabel ? `${sourceLabel} · 已生成最终回答与结构化证据` : '已生成最终回答与结构化证据'
 }
 
 export function buildAgentEventRecord(type: string, payload: unknown = {}, timestamp = Date.now()): AgentTimelineEvent | null {
@@ -384,6 +494,85 @@ export function buildAgentEventRecord(type: string, payload: unknown = {}, times
       state: 'success',
       title: '汇总证据并生成回答',
       detail: buildRefinedResultDetail(data),
+      timestamp,
+      meta: data,
+    })
+  }
+
+  if (safeType === 'web_search') {
+    const status = String(data.status || '').trim().toLowerCase()
+    const source = String(data.source || '').trim().toLowerCase()
+    const pagesRead = toFiniteNumber(data.pages_read)
+    const resultCount = toFiniteNumber(data.result_count)
+    const sampleTitles = asArray<PlainObject>(data.sample_results)
+      .slice(0, 3)
+      .map((item) => summarizeText(item.title, 28))
+      .filter(Boolean)
+    const answerPreview = summarizeText(data.answer_preview, 48)
+    const query = pickString(data.query)
+
+    if (status === 'start') {
+      return createEventRecord({
+        type: safeType,
+        kind: 'tool',
+        state: 'running',
+        title: '联网搜索',
+        detail: query ? `正在搜索「${query}」` : '正在联网搜索相关信息',
+        timestamp,
+        meta: data,
+      })
+    }
+
+    if (status === 'done' || status === 'complete' || status === 'success') {
+      const sourceLabel = source === 'tavily' ? 'Tavily' : source === 'xiaohongshu' ? '小红书' : source === 'multi_search' ? '多引擎' : source
+      const pagesDetail = pagesRead !== null && pagesRead > 0 ? `，已阅读 ${pagesRead} 个网页` : ''
+      const sampleDetail = sampleTitles.length > 0 ? `：${sampleTitles.join('；')}` : ''
+      const countDetail = resultCount !== null
+        ? (resultCount > 0 ? `命中 ${resultCount} 条结果` : '未命中有效结果')
+        : '获取搜索结果'
+      const previewDetail = answerPreview ? ` · 摘要：${answerPreview}` : ''
+      return createEventRecord({
+        type: safeType,
+        kind: 'tool',
+        state: 'success',
+        title: '联网搜索完成',
+        detail: `通过${sourceLabel}${countDetail}${pagesDetail}${sampleDetail}${previewDetail}`,
+        timestamp,
+        meta: data,
+      })
+    }
+
+    if (status === 'error' || status === 'failed') {
+      return createEventRecord({
+        type: safeType,
+        kind: 'tool',
+        state: 'warning',
+        title: '联网搜索失败',
+        detail: pickString(data.message) || '搜索源未返回结果，将跳过联网证据',
+        timestamp,
+        meta: data,
+      })
+    }
+
+    // 通用 web_search 事件
+    return createEventRecord({
+      type: safeType,
+      kind: 'tool',
+      state: 'running',
+      title: '联网搜索',
+      detail: pickString(data.message) || `搜索状态：${status}`,
+      timestamp,
+      meta: data,
+    })
+  }
+
+  if (safeType === 'entity_alignment') {
+    return createEventRecord({
+      type: safeType,
+      kind: 'artifact',
+      state: (toFiniteNumber(data.dual_verified) ?? 0) > 0 ? 'success' : 'warning',
+      title: '实体对齐完成',
+      detail: buildEntityAlignmentDetail(data),
       timestamp,
       meta: data,
     })

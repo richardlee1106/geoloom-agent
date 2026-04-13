@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { Writable } from 'node:stream'
 
 import { SSEWriter } from '../chat/SSEWriter.js'
@@ -16,6 +17,7 @@ import type {
   RepresentativePoiProfile,
   RenderedAnswer,
   ResolvedAnchor,
+  ToolIntentMode,
   ToolExecutionTrace,
 } from '../chat/types.js'
 import { EvidenceViewFactory } from '../evidence/EvidenceViewFactory.js'
@@ -37,14 +39,25 @@ import { createLogger } from '../utils/logger.js'
 import { AlivePromptBuilder } from './AlivePromptBuilder.js'
 import { ConfidenceGate } from './ConfidenceGate.js'
 import { ConversationMemory } from './ConversationMemory.js'
-import type { AgentTurnState, SpatialAnalysisConstraint, SpatialAnalysisRegion } from './types.js'
+import type { AgentTurnState, MemorySnapshot, SpatialAnalysisConstraint, SpatialAnalysisRegion } from './types.js'
 import { SessionManager } from './SessionManager.js'
 import { SkillManifestLoader } from '../skills/SkillManifestLoader.js'
+import { loadCategoryTreeFromDatabase } from '../catalog/categoryCatalog.js'
+import { CategoryEmbeddingIndex } from '../catalog/categoryEmbeddingIndex.js'
+import { PoiEmbeddingCache } from '../catalog/poiEmbeddingCache.js'
+import { EmbeddingIntentClassifier, type EmbeddingIntentResult } from '../catalog/embeddingIntentClassifier.js'
+import type { EmbedRerankBridge } from '../integration/jinaBridge.js'
 import { MemoryManager } from '../memory/MemoryManager.js'
 import { ShortTermMemory } from '../memory/ShortTermMemory.js'
 import { LongTermMemory } from '../memory/LongTermMemory.js'
 import { ProfileManager } from '../memory/ProfileManager.js'
 import { RuntimeMetrics } from '../metrics/RuntimeMetrics.js'
+import { detectUnnecessaryAnalysis } from '../metrics/UnnecessaryAnalysisDetector.js'
+import { NLContractCompiler } from '../contract/NLContractCompiler.js'
+import type { NLContract } from '../contract/types.js'
+import { RequirementResolver } from '../evidence/RequirementResolver.js'
+import { DeterministicEvidenceRuntime } from '../evidence/DeterministicEvidenceRuntime.js'
+import { IntentAlignmentGuard } from './IntentAlignmentGuard.js'
 import type { SkillRegistry } from '../skills/SkillRegistry.js'
 import {
   mergeSemanticEvidenceStatuses,
@@ -56,7 +69,7 @@ import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
 const SCHEMA_VERSION = 'v4.agent.v1'
 const DEFAULT_POI_COORD_SYS = 'gcj02'
 const DEFAULT_LLM_QUERY_MAX_ROUNDS = 4
-const DEFAULT_LLM_ANALYSIS_MAX_ROUNDS = 6
+const DEFAULT_LLM_ANALYSIS_MAX_ROUNDS = 2
 const STRUCTURED_CATEGORY_HINTS = [
   {
     key: 'coffee',
@@ -67,6 +80,11 @@ const STRUCTURED_CATEGORY_HINTS = [
     key: 'food',
     label: '餐饮',
     aliases: ['餐饮', '吃饭', '小吃', '餐馆', '美食'],
+  },
+  {
+    key: 'hotel',
+    label: '酒店',
+    aliases: ['酒店', '宾馆', '旅店', '住宿', '旅馆', 'hotel', 'inn', 'hostel'],
   },
   {
     key: 'supermarket',
@@ -81,26 +99,6 @@ const STRUCTURED_CATEGORY_HINTS = [
 ] as const
 const PRIMARY_TOOL_ROLE_ALIASES = new Set(['primary', 'anchor', 'main', 'origin', 'source'])
 const SECONDARY_TOOL_ROLE_ALIASES = new Set(['secondary', 'compare', 'comparison', 'target'])
-const AREA_INSIGHT_TEMPLATES = [
-  'area_category_histogram',
-  'area_ring_distribution',
-  'area_representative_sample',
-  'area_competition_density',
-  'area_h3_hotspots',
-  'area_aoi_context',
-  'area_landuse_context',
-] as const
-const AREA_INSIGHT_CORE_TEMPLATES = [
-  'area_category_histogram',
-  'area_ring_distribution',
-  'area_representative_sample',
-  'area_competition_density',
-  'area_h3_hotspots',
-] as const
-const AREA_INSIGHT_SEMANTIC_TEMPLATES = [
-  'area_aoi_context',
-  'area_landuse_context',
-] as const
 const POSTGIS_TEMPLATE_DIR = resolveResourceUrl(import.meta.url, [
   '../skills/postgis/templates/',
   '../../src/skills/postgis/templates/',
@@ -109,9 +107,11 @@ const POSTGIS_TEMPLATE_FILE_MAP: Record<string, string> = {
   area_category_histogram: 'areaCategoryHistogram.sql',
   area_ring_distribution: 'areaRingDistribution.sql',
   area_representative_sample: 'areaRepresentativeSample.sql',
+  area_representative_sample_large_viewport: 'areaRepresentativeSampleViewport.sql',
   area_competition_density: 'areaCompetitionDensity.sql',
   area_h3_hotspots: 'areaH3Hotspots.sql',
   area_aoi_context: 'areaAoiContext.sql',
+  area_aoi_context_large_viewport: 'areaAoiContextViewport.sql',
   area_landuse_context: 'areaLanduseContext.sql',
 }
 const POSTGIS_TEMPLATE_CACHE = new Map<string, string>()
@@ -511,9 +511,9 @@ function buildSpatialConstraintFromRequest(request: ChatRequestV4): SpatialAnaly
         areaWkt,
         lon: center?.lon,
         lat: center?.lat,
-      } satisfies SpatialAnalysisRegion
+      } as SpatialAnalysisRegion
     })
-    .filter((region): region is SpatialAnalysisRegion => Boolean(region))
+    .filter(Boolean) as SpatialAnalysisRegion[]
 
   if (regions.length > 0) {
     return {
@@ -604,6 +604,64 @@ function readMapViewAnchor(request: ChatRequestV4, role = 'primary'): ResolvedAn
   }
 }
 
+function toRadians(value: number) {
+  return (value * Math.PI) / 180
+}
+
+function haversineDistanceMeters(
+  startLat: number,
+  startLon: number,
+  endLat: number,
+  endLon: number,
+) {
+  const earthRadiusM = 6371000
+  const dLat = toRadians(endLat - startLat)
+  const dLon = toRadians(endLon - startLon)
+  const lat1 = toRadians(startLat)
+  const lat2 = toRadians(endLat)
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
+  return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function deriveViewportContext(request: ChatRequestV4): DeterministicIntent['viewportContext'] {
+  const spatialContext = readSpatialContext(request)
+  const viewport = Array.isArray(spatialContext?.viewport) ? spatialContext.viewport : []
+  if (viewport.length < 4) {
+    return undefined
+  }
+
+  const swLon = Number(viewport[0])
+  const swLat = Number(viewport[1])
+  const neLon = Number(viewport[2])
+  const neLat = Number(viewport[3])
+  if (![swLon, swLat, neLon, neLat].every((value) => Number.isFinite(value))) {
+    return { diagonalM: null, scale: 'unknown' }
+  }
+
+  const minLon = Math.min(swLon, neLon)
+  const minLat = Math.min(swLat, neLat)
+  const maxLon = Math.max(swLon, neLon)
+  const maxLat = Math.max(swLat, neLat)
+  const diagonalM = haversineDistanceMeters(swLat, swLon, neLat, neLon)
+  const scale = diagonalM >= 5000
+    ? 'large'
+    : diagonalM >= 2500
+      ? 'medium'
+      : 'small'
+
+  return {
+    diagonalM: Number(diagonalM.toFixed(0)),
+    scale,
+    bounds: {
+      swLon: minLon,
+      swLat: minLat,
+      neLon: maxLon,
+      neLat: maxLat,
+    },
+  }
+}
+
 function extractLastUserText(messages: ChatRequestV4['messages'] = []) {
   const lastUserMessage = [...messages]
     .reverse()
@@ -664,6 +722,9 @@ function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string)
     clarificationHint = `这轮我没有稳定理解你的自然语言意图，不过你当前选中了 ${selectedRegionNames.slice(0, 2).join(' 和 ')}。请重试，或明确说明你是想比较它们、解读其中一个，还是查询周边点位。`
   }
 
+  const needsWebSearch = shouldSearchWeb(rawQuery)
+  const toolIntent = defaultToolIntentForQueryType('nearby_poi', needsWebSearch)
+
   return {
     queryType: 'unsupported',
     intentMode: 'deterministic_visible_loop',
@@ -677,6 +738,14 @@ function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string)
     radiusM: defaultRadiusForQueryType('nearby_poi'),
     needsClarification: true,
     clarificationHint,
+    needsWebSearch,
+    toolIntent,
+    searchIntentHint: buildDefaultSearchIntentHint({
+      queryType: 'nearby_poi',
+      toolIntent,
+      targetCategory,
+      needsWebSearch,
+    }),
   }
 }
 
@@ -726,14 +795,6 @@ function comparisonPairToAnchor(pair: ComparisonPair | undefined, role: string):
   }
 }
 
-function readCategoryValue(row: Record<string, unknown> = {}, keys: string[]) {
-  for (const key of keys) {
-    const value = String(row[key] || '').trim()
-    if (value) return value
-  }
-  return ''
-}
-
 function readTemplateName(trace: ToolExecutionTrace) {
   const result = trace.result as { meta?: Record<string, unknown> } | undefined
   const metaTemplate = String(result?.meta?.template || '').trim()
@@ -754,7 +815,7 @@ function collectAreaInsightTemplateResults(toolCalls: ToolExecutionTrace[]) {
     }
 
     const template = readTemplateName(trace)
-    if (!template || !AREA_INSIGHT_TEMPLATES.includes(template as typeof AREA_INSIGHT_TEMPLATES[number])) {
+    if (!template || !POSTGIS_TEMPLATE_FILE_MAP[template]) {
       continue
     }
 
@@ -774,6 +835,21 @@ function collectLatestAreaEvidenceSelection(toolCalls: ToolExecutionTrace[]) {
       semantic_evidence?: SemanticEvidenceStatus
       diagnostics?: Record<string, unknown>
     } | undefined
+}
+
+function collectLatestLookupRows(
+  toolCalls: ToolExecutionTrace[],
+  templateName: 'nearby_poi' | 'nearest_station',
+) {
+  return [...toolCalls]
+    .reverse()
+    .find((trace) => {
+      if (trace.skill !== 'postgis' || trace.action !== 'execute_spatial_sql' || trace.status !== 'done') {
+        return false
+      }
+      return readTemplateName(trace) === templateName
+    })
+    ?.result as { rows?: Record<string, unknown>[] } | undefined
 }
 
 function hasAreaInsightPayload(value: unknown) {
@@ -913,9 +989,9 @@ function readRegionFeatureEncoding(result: unknown) {
         label,
         score,
         detail: feature.detail == null ? null : String(feature.detail),
-      } satisfies RegionFeatureTag
+      } as RegionFeatureTag
     })
-    .filter((item): item is RegionFeatureTag => Boolean(item))
+    .filter(Boolean) as RegionFeatureTag[]
 
   const summary = String(record.feature_summary || record.featureSummary || record.summary || '').trim()
   if (!summary && featureTags.length === 0) {
@@ -993,6 +1069,111 @@ function hasAgentLedAreaInsightEvidence(toolCalls: ToolExecutionTrace[]) {
   })
 }
 
+function formatIntentQueryType(queryType: DeterministicIntent['queryType']) {
+  if (queryType === 'nearby_poi') return '附近检索'
+  if (queryType === 'nearest_station') return '最近地铁站'
+  if (queryType === 'area_overview') return '区域解读'
+  if (queryType === 'similar_regions') return '相似片区'
+  if (queryType === 'compare_places') return '双地点比较'
+  return queryType
+}
+
+function splitStreamableText(text: string, chunkSize = 28) {
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+  if (!normalized) return []
+
+  const chunks: string[] = []
+
+  let buffer = ''
+  const pushBuffer = () => {
+    if (!buffer) return
+    chunks.push(buffer)
+    buffer = ''
+  }
+
+  for (const char of normalized) {
+    buffer += char
+    const isBoundary = /[。！？\n]/u.test(char)
+    if (buffer.length >= chunkSize || isBoundary) {
+      pushBuffer()
+    }
+  }
+
+  pushBuffer()
+
+  return chunks
+}
+
+function unwrapToolResult(result: unknown) {
+  if (!result || typeof result !== 'object') {
+    return {} as Record<string, unknown>
+  }
+  const record = result as Record<string, unknown>
+  if (record.data && typeof record.data === 'object') {
+    return record.data as Record<string, unknown>
+  }
+  return record
+}
+
+function extractWebSearchItems(result: unknown, source: string) {
+  const inner = unwrapToolResult(result)
+  if (Array.isArray(inner.merged)) {
+    return inner.merged.slice(0, 5).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        title: String(record.title || '').trim(),
+        snippet: String(record.snippet || '').trim(),
+        url: String(record.url || '').trim(),
+        source,
+      }
+    }).filter((item) => item.title || item.url)
+  }
+
+  if (Array.isArray(inner.results)) {
+    return inner.results.slice(0, 5).map((item) => {
+      const record = item as Record<string, unknown>
+      return {
+        title: String(record.title || '').trim(),
+        snippet: String(record.content || record.snippet || '').trim(),
+        url: String(record.url || '').trim(),
+        source,
+      }
+    }).filter((item) => item.title || item.url)
+  }
+
+  return [] as Array<{ title: string, snippet: string, url: string, source: string }>
+}
+
+function extractWebAnswerPreview(result: unknown) {
+  const inner = unwrapToolResult(result)
+  return String(inner.answer || inner.summary || '').trim()
+}
+
+function collectWebSearchObservations(toolCalls: ToolExecutionTrace[]) {
+  const latestBySource = new Map<string, {
+    source: string
+    query: string
+    items: Array<{ title: string, snippet: string, url: string, source: string }>
+    answerPreview: string
+  }>()
+
+  for (const trace of toolCalls) {
+    if (trace.status !== 'done') continue
+    if (trace.skill !== 'multi_search_engine' && trace.skill !== 'tavily_search') continue
+    const source = trace.skill === 'tavily_search' ? 'tavily' : 'multi_search'
+    latestBySource.set(source, {
+      source,
+      query: String((trace.payload as Record<string, unknown>)?.query || '').trim(),
+      items: extractWebSearchItems(trace.result, source),
+      answerPreview: extractWebAnswerPreview(trace.result),
+    })
+  }
+
+  return [...latestBySource.values()]
+}
+
 function classifyTaskMode(input: {
   intent: DeterministicIntent
   rawQuery: string
@@ -1042,9 +1223,294 @@ function readOptionalText(value: unknown) {
   return text || null
 }
 
+function shouldSearchWeb(rawQuery: string) {
+  return /怎么样|好不好|体验|评价|推荐|口碑|排名|评分|高分|好评|差评|最推荐|最好|最佳|高评分|高评价|还在|营业|开门|关门|今天|最近|新开|最新|现在|目前|人均|价格|多少钱|房价|租金|消费|便宜|贵|性价比/u.test(rawQuery)
+}
+
+function shouldPreferLlmIntentPlanner(input: {
+  request: ChatRequestV4
+  followUpHint?: RecentFollowUpIntentHint | null
+  embeddingResult: EmbeddingIntentResult
+}) {
+  if (input.embeddingResult.queryType === 'unsupported') {
+    return true
+  }
+
+  const hasSpatialView = Boolean(readMapViewAnchor(input.request))
+  if (hasSpatialView) {
+    return true
+  }
+
+  return Boolean(input.followUpHint) && input.embeddingResult.confidence < 0.85
+}
+
+function looksLikeMarkdownAnswer(text: string) {
+  const normalized = String(text || '').trim()
+  if (!normalized) return false
+  return /(^|\n)#{2,3}\s/u.test(normalized)
+    || /(^|\n)-\s/u.test(normalized)
+    || /(^|\n)\d+\.\s/u.test(normalized)
+    || /(^|\n)\|.+\|/u.test(normalized)
+}
+
+function buildViewportTileConfig(viewportContext?: DeterministicIntent['viewportContext']) {
+  if (!viewportContext || viewportContext.scale !== 'large' || !viewportContext.bounds) {
+    return null
+  }
+
+  const { swLon, swLat, neLon, neLat } = viewportContext.bounds
+  const lonSpan = Math.max(Math.abs(neLon - swLon), 0.0001)
+  const latSpan = Math.max(Math.abs(neLat - swLat), 0.0001)
+  const diagonalM = Number(viewportContext.diagonalM || 0)
+  const tileCols = diagonalM >= 10000 ? 3 : 2
+  const tileRows = diagonalM >= 10000 ? 3 : 2
+
+  return {
+    minLon: Math.min(swLon, neLon),
+    minLat: Math.min(swLat, neLat),
+    tileWidth: lonSpan / tileCols,
+    tileHeight: latSpan / tileRows,
+    tileCols,
+    tileRows,
+  }
+}
+
+function inferStructuredCategoryKeyFromText(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return null
+
+  for (const hint of STRUCTURED_CATEGORY_HINTS) {
+    if (
+      normalized.includes(hint.key.toLowerCase())
+      || normalized.includes(hint.label.toLowerCase())
+      || hint.aliases.some((alias) => normalized.includes(alias.toLowerCase()))
+    ) {
+      return hint.key
+    }
+  }
+
+  return null
+}
+
+function isEllipticalFollowUpQuery(rawQuery: string) {
+  const normalized = String(rawQuery || '')
+    .replace(/[？?！!。．.,，、\s]/g, '')
+    .trim()
+
+  if (!normalized || normalized.length > 12) {
+    return false
+  }
+
+  return /^(这|那)(这|那)?(里|儿|边|附近|个地方|片区|一片)?(呢|怎么样|如何|咋样|有吗|有没有)?$/u.test(normalized)
+}
+
+function buildContextualFollowUpQuery(input: {
+  rawQuery: string
+  memorySnapshot: MemorySnapshot
+}) {
+  if (!isEllipticalFollowUpQuery(input.rawQuery)) {
+    return input.rawQuery
+  }
+
+  const previousTurns = [...input.memorySnapshot.recentTurns]
+    .reverse()
+    .map((turn) => String(turn.userQuery || '').trim())
+    .filter(Boolean)
+  const previousUserQuery = previousTurns.find((query) => !isEllipticalFollowUpQuery(query))
+    || previousTurns[0]
+
+  if (!previousUserQuery) {
+    return input.rawQuery
+  }
+
+  return `${previousUserQuery}。补充追问：${input.rawQuery}`
+}
+
+function readRecentIntentForFollowUp(snapshot: MemorySnapshot) {
+  for (const turn of [...snapshot.recentTurns].reverse()) {
+    const record = turn.intent
+    if (!record || typeof record !== 'object') {
+      continue
+    }
+
+    const queryType = isSupportedQueryType((record as Record<string, unknown>).queryType)
+      ? (record as Record<string, unknown>).queryType as DeterministicIntent['queryType']
+      : null
+    if (!queryType || queryType === 'unsupported' || queryType === 'compare_places') {
+      continue
+    }
+
+    const targetCategory = readOptionalText((record as Record<string, unknown>).targetCategory)
+    const categoryKey = readOptionalText((record as Record<string, unknown>).categoryKey)
+      || inferStructuredCategoryKeyFromText((record as Record<string, unknown>).targetCategory)
+      || inferStructuredCategoryKeyFromText(turn.userQuery)
+    const categoryMain = readOptionalText((record as Record<string, unknown>).categoryMain)
+    const categorySub = readOptionalText((record as Record<string, unknown>).categorySub)
+    const rawNeedsWebSearch = (record as Record<string, unknown>).needsWebSearch
+    const toolIntent = normalizeToolIntentMode((record as Record<string, unknown>).toolIntent)
+    const searchIntentHint = readOptionalText((record as Record<string, unknown>).searchIntentHint)
+
+    return {
+      queryType,
+      targetCategory,
+      categoryKey,
+      categoryMain,
+      categorySub,
+      needsWebSearch: typeof rawNeedsWebSearch === 'boolean'
+        ? rawNeedsWebSearch
+        : shouldSearchWeb(turn.userQuery),
+      toolIntent,
+      searchIntentHint,
+    }
+  }
+
+  return null
+}
+
+function inheritIntentForEllipticalFollowUp(input: {
+  request: ChatRequestV4
+  rawQuery: string
+  fallbackIntent: DeterministicIntent
+  memorySnapshot: MemorySnapshot
+}) {
+  if (!isEllipticalFollowUpQuery(input.rawQuery)) {
+    return input.fallbackIntent
+  }
+
+  const recentIntent = readRecentIntentForFollowUp(input.memorySnapshot)
+  if (!recentIntent) {
+    return input.fallbackIntent
+  }
+
+  const hasMapView = Boolean(readMapViewAnchor(input.request))
+  const hasUserLocation = Boolean(readUserLocation(input.request))
+  const selectedRegionNames = readRequestRegions(input.request)
+    .map((region) => readRegionName(region))
+    .filter((name): name is string => Boolean(name))
+  const anchorSource: NonNullable<DeterministicIntent['anchorSource']> = hasMapView
+    ? 'map_view'
+    : hasUserLocation
+      ? 'user_location'
+      : (input.fallbackIntent.anchorSource || 'place')
+  const placeName = anchorSource === 'map_view'
+    ? (selectedRegionNames[0] || '当前区域')
+    : anchorSource === 'user_location'
+      ? null
+      : input.fallbackIntent.placeName
+  const needsClarification = anchorSource === 'place'
+    ? input.fallbackIntent.needsClarification
+    : false
+  const needsWebSearch = recentIntent.needsWebSearch ?? input.fallbackIntent.needsWebSearch
+  const toolIntent = recentIntent.toolIntent
+    || defaultToolIntentForQueryType(input.fallbackIntent.queryType, Boolean(needsWebSearch))
+
+  return {
+    ...input.fallbackIntent,
+    placeName,
+    anchorSource,
+    targetCategory: recentIntent.targetCategory || input.fallbackIntent.targetCategory,
+    categoryKey: recentIntent.categoryKey || input.fallbackIntent.categoryKey,
+    categoryMain: recentIntent.categoryMain || input.fallbackIntent.categoryMain,
+    categorySub: recentIntent.categorySub || input.fallbackIntent.categorySub,
+    needsClarification,
+    clarificationHint: needsClarification ? input.fallbackIntent.clarificationHint : null,
+    needsWebSearch,
+    toolIntent,
+    searchIntentHint: recentIntent.searchIntentHint || input.fallbackIntent.searchIntentHint || buildDefaultSearchIntentHint({
+      queryType: input.fallbackIntent.queryType,
+      toolIntent,
+      targetCategory: recentIntent.targetCategory || input.fallbackIntent.targetCategory,
+      categoryMain: recentIntent.categoryMain || input.fallbackIntent.categoryMain,
+      categorySub: recentIntent.categorySub || input.fallbackIntent.categorySub,
+      needsWebSearch: Boolean(needsWebSearch),
+    }),
+  } satisfies DeterministicIntent
+}
+
+function normalizeTopicHint(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized || null
+}
+
 function intentModeFromQueryType(queryType: DeterministicIntent['queryType']): DeterministicIntent['intentMode'] {
   return queryType === 'nearby_poi' ? 'deterministic_visible_loop' : 'agent_full_loop'
 }
+
+function defaultToolIntentForQueryType(queryType: DeterministicIntent['queryType'], needsWebSearch = false): ToolIntentMode | null {
+  if (queryType === 'nearby_poi') {
+    return needsWebSearch ? 'candidate_reputation' : 'candidate_lookup'
+  }
+  if (queryType === 'nearest_station') {
+    return 'nearest_transit'
+  }
+  if (queryType === 'area_overview') {
+    return 'area_insight'
+  }
+  if (queryType === 'compare_places') {
+    return 'place_comparison'
+  }
+  if (queryType === 'similar_regions') {
+    return 'similar_region_search'
+  }
+  return null
+}
+
+function normalizeToolIntentMode(value: unknown): ToolIntentMode | null {
+  const normalized = String(value || '').trim()
+  if (
+    normalized === 'candidate_lookup'
+    || normalized === 'candidate_reputation'
+    || normalized === 'nearest_transit'
+    || normalized === 'area_insight'
+    || normalized === 'place_comparison'
+    || normalized === 'similar_region_search'
+  ) {
+    return normalized
+  }
+  return null
+}
+
+function buildDefaultSearchIntentHint(input: {
+  queryType: DeterministicIntent['queryType']
+  toolIntent?: ToolIntentMode | null
+  targetCategory?: string | null
+  categoryMain?: string | null
+  categorySub?: string | null
+  needsWebSearch?: boolean
+}) {
+  if (!input.needsWebSearch) {
+    return null
+  }
+
+  const categoryLabel = [
+    input.targetCategory,
+    input.categorySub,
+    input.categoryMain,
+  ]
+    .map((value) => String(value || '').trim())
+    .find(Boolean)
+
+  if (input.toolIntent === 'candidate_reputation') {
+    return [categoryLabel || '地点', '评分', '推荐']
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  if (input.toolIntent === 'area_insight') {
+    return [categoryLabel || '片区', '口碑', '评价']
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  if (input.queryType === 'nearest_station') {
+    return '地铁站 出口 换乘'
+  }
+
+  return categoryLabel ? `${categoryLabel} 推荐` : null
+}
+
+type RecentFollowUpIntentHint = NonNullable<ReturnType<typeof readRecentIntentForFollowUp>>
 
 function extractAssistantReasoningSnippet(message: LLMAssistantMessage | null | undefined) {
   if (!message) return ''
@@ -1122,6 +1588,14 @@ export interface GeoLoomAgentOptions {
   confidenceGate?: ConfidenceGate
   metrics?: RuntimeMetrics
   areaSemanticDenoiser?: AreaSemanticDenoiser
+  /** 品类 Embedding 索引（启动时预计算，查询时语义匹配） */
+  categoryIndex?: CategoryEmbeddingIndex
+  /** EmbedRerankBridge 实例（JinaBridge），供品类 embedding 解析使用 */
+  bridge?: EmbedRerankBridge
+  /** POI Embedding 缓存 + 语义重排序 */
+  poiEmbeddingCache?: PoiEmbeddingCache
+  /** Embedding-First 意图分类器（替代 LLM 意图识别） */
+  intentClassifier?: EmbeddingIntentClassifier
 }
 
 export class GeoLoomAgent {
@@ -1136,6 +1610,10 @@ export class GeoLoomAgent {
   private readonly confidenceGate: ConfidenceGate
   private readonly metrics: RuntimeMetrics
   private readonly areaSemanticDenoiser: AreaSemanticDenoiser
+  private readonly categoryIndex: CategoryEmbeddingIndex | undefined
+  private readonly bridge: EmbedRerankBridge | undefined
+  private readonly poiEmbeddingCache: PoiEmbeddingCache | undefined
+  private readonly intentClassifier: EmbeddingIntentClassifier | undefined
 
   constructor(private readonly options: GeoLoomAgentOptions) {
     this.provider = options.provider || createDefaultLLMProvider()
@@ -1160,6 +1638,10 @@ export class GeoLoomAgent {
     this.confidenceGate = options.confidenceGate || new ConfidenceGate()
     this.metrics = options.metrics || new RuntimeMetrics()
     this.areaSemanticDenoiser = options.areaSemanticDenoiser || new IntentAwareAreaSemanticDenoiser()
+    this.categoryIndex = options.categoryIndex
+    this.bridge = options.bridge
+    this.poiEmbeddingCache = options.poiEmbeddingCache
+    this.intentClassifier = options.intentClassifier
   }
 
   private buildSpatialConstraint(request: ChatRequestV4) {
@@ -1227,15 +1709,117 @@ export class GeoLoomAgent {
       sessionId: session.id,
       logger,
     })
+    const memorySnapshot = await this.memory.getSnapshot(session.id)
+    const conversationSnapshot = this.conversationMemory.summarize(memorySnapshot)
+    const recentFollowUpIntentHint = isEllipticalFollowUpQuery(lastUserText)
+      ? readRecentIntentForFollowUp(memorySnapshot)
+      : null
+    const contextualUserText = buildContextualFollowUpQuery({
+      rawQuery: lastUserText,
+      memorySnapshot,
+    })
     const activeProvider = this.provider.isReady() ? this.provider : new InMemoryLLMProvider()
-    const fallbackIntent = buildStructuredFallbackIntent(request, lastUserText)
-    const intentResolution = await this.resolveIntent({
+    const fallbackIntent = inheritIntentForEllipticalFollowUp({
       request,
       rawQuery: lastUserText,
+      fallbackIntent: buildStructuredFallbackIntent(request, contextualUserText),
+      memorySnapshot,
+    })
+    // 阶段 3：Clarification Guard — 检查空间上下文充分性
+    const guard = new IntentAlignmentGuard()
+    const guardResult = guard.evaluate({
+      rawQuery: lastUserText,
+      hasViewport: Boolean(readMapViewAnchor(request)),
+      hasBoundary: Boolean(readSpatialContext(request)?.boundary),
+      hasDrawnRegion: readRequestRegions(request).length > 0,
+      hasUserLocation: Boolean(readUserLocation(request)),
+      hasExplicitRadius: Number.isFinite(Number(readSpatialContext(request)?.radius)),
+    })
+
+    if (guardResult.needsClarification) {
+      const clarificationIntent: DeterministicIntent = {
+        ...fallbackIntent,
+        needsClarification: true,
+        clarificationHint: guardResult.reason,
+      }
+      await this.finishWithoutEvidence({
+        writer, answer: guardResult.reason!, intent: clarificationIntent,
+        parserModel: 'structured-intent-fallback',
+        parserProvider: 'rule',
+        state: {
+          requestId, traceId, sessionId: session.id,
+          toolCalls: [], anchors: {},
+          spatialConstraint: undefined,
+          sqlValidationAttempts: 0, sqlValidationPassed: 0,
+        },
+        startedAt, providerReady: this.provider.isReady(),
+      })
+      return
+    }
+    // 阶段 0：意图理解计时开始
+    const intentStartedAt = Date.now()
+    const intentResolution = await this.resolveIntent({
+      request,
+      rawQuery: contextualUserText,
       fallbackIntent,
+      followUpHint: recentFollowUpIntentHint,
       providerReady: this.provider.isReady(),
     })
+    const intentMs = Date.now() - intentStartedAt
     const intent = intentResolution.intent
+    intent.viewportContext = deriveViewportContext(request) || intent.viewportContext
+    const parserModel = intentResolution.source === 'embedding'
+      ? 'embedding-intent-classifier'
+      : (intentResolution.source === 'llm' ? 'agent-intent-understanding' : 'structured-intent-fallback')
+    const parserProvider = intentResolution.source === 'embedding'
+      ? 'embedding'
+      : (intentResolution.source === 'llm' ? 'llm' : 'rule')
+    let categoryMatchScore: number | null = null
+
+    const shouldKeepFollowUpCategory = isEllipticalFollowUpQuery(lastUserText)
+      && Boolean(intent.categoryKey || intent.categoryMain || intent.categorySub)
+
+    if (this.categoryIndex?.isReady && this.bridge && intent.queryType !== 'area_overview' && !shouldKeepFollowUpCategory) {
+      const categoryMatch = await this.categoryIndex.resolve(intent.rawQuery, this.bridge)
+      categoryMatchScore = categoryMatch.score
+      if (categoryMatch.matched) {
+        intent.categoryMain = categoryMatch.categoryMain
+        intent.categorySub = categoryMatch.categorySub
+        if (!intent.targetCategory || intent.targetCategory === intent.categoryKey) {
+          intent.targetCategory = categoryMatch.categorySub !== categoryMatch.categoryMain
+            ? `${categoryMatch.categoryMain}·${categoryMatch.categorySub}`
+            : categoryMatch.categoryMain
+        }
+      }
+      // 保存 queryVec 供语义重排序复用（避免重复 embed API 调用）
+      if (categoryMatch.queryVec) {
+        intent.queryVec = categoryMatch.queryVec
+      }
+    }
+    intent.toolIntent = intent.toolIntent || defaultToolIntentForQueryType(intent.queryType, Boolean(intent.needsWebSearch))
+    intent.searchIntentHint = intent.searchIntentHint || buildDefaultSearchIntentHint({
+      queryType: intent.queryType,
+      toolIntent: intent.toolIntent,
+      targetCategory: intent.targetCategory,
+      categoryMain: intent.categoryMain,
+      categorySub: intent.categorySub,
+      needsWebSearch: Boolean(intent.needsWebSearch),
+    })
+
+    // 阶段 5：编译 NL-Contract + 解析证据需求（已从 shadow 升级为 active）
+    const contractCompiler = new NLContractCompiler()
+    const contract = contractCompiler.compileFromIntent(intent, contextualUserText)
+    const requirementResolver = new RequirementResolver()
+    const requirements = requirementResolver.resolve({ contract, intent })
+    logger.info('nl_contract', {
+      question: contextualUserText,
+      scope: contract.meta.scope,
+      depth: contract.meta.depth,
+      meta: contract.meta,
+      actualQueryType: intent.queryType,
+      recommendedTrack: requirements.recommendedTrack,
+      requiredAtoms: requirements.requiredAtoms,
+    })
     const intentInferredByLlm = intentResolution.source === 'llm'
     const requestUserLocation = readUserLocation(request)
     const requestMapViewAnchor = readMapViewAnchor(request)
@@ -1277,17 +1861,36 @@ export class GeoLoomAgent {
       message: '正在识别问题类型与锚点...',
     })
     await writer.intentPreview({
+      queryType: intent.queryType,
+      anchorSource: intent.anchorSource || null,
+      placeName: intent.placeName,
+      secondaryPlaceName: intent.secondaryPlaceName || null,
       rawAnchor: previewAnchorLabel,
       normalizedAnchor: previewAnchorLabel,
       displayAnchor: previewAnchorLabel,
       targetCategory: intent.targetCategory,
-      confidence: intent.queryType === 'unsupported' ? 0.35 : 0.92,
+      confidence: intentResolution.confidence ?? undefined,
+      sourceConfidence: intentResolution.confidence ?? undefined,
+      sourceLatencyMs: intentResolution.latencyMs ?? undefined,
       needsClarification: intent.needsClarification,
       clarificationHint: intent.clarificationHint,
-      parserModel: this.provider.isReady()
-        ? (intentInferredByLlm ? 'agent-intent-understanding' : 'structured-intent-fallback')
-        : 'structured-intent-fallback',
-      parserProvider: this.provider.isReady() && intentInferredByLlm ? 'llm' : 'rule',
+      needsWebSearch: Boolean(intent.needsWebSearch),
+      intentSource: intentResolution.source,
+      parserModel,
+      parserProvider,
+      categoryMain: intent.categoryMain || null,
+      categorySub: intent.categorySub || null,
+      categoryResolved: Boolean(intent.categoryMain),
+      categoryScore: categoryMatchScore ?? undefined,
+    })
+    await writer.reasoning({
+      content: [
+        `NL 理解：将问题判为「${formatIntentQueryType(intent.queryType)}」`,
+        previewAnchorLabel ? `，锚点是「${previewAnchorLabel}」` : '',
+        intent.targetCategory ? `，目标类别是「${intent.targetCategory}」` : '',
+        `，来源是 ${parserProvider === 'embedding' ? 'Embedding' : parserProvider === 'llm' ? 'LLM' : '规则'}${intentResolution.confidence != null ? `（${Math.round(intentResolution.confidence * 100)}%）` : ''}`,
+        intent.needsWebSearch ? '，需要联网补充证据。' : '，先基于本地空间证据。',
+      ].join(''),
     })
 
     if (intent.queryType === 'unsupported' || intent.needsClarification) {
@@ -1296,6 +1899,8 @@ export class GeoLoomAgent {
         writer,
         answer,
         intent,
+        parserModel,
+        parserProvider,
         state,
         startedAt,
         providerReady: this.provider.isReady(),
@@ -1308,7 +1913,6 @@ export class GeoLoomAgent {
       status: 'start',
       message: '正在读取会话上下文...',
     })
-    const snapshot = this.conversationMemory.summarize(await this.memory.getSnapshot(session.id))
     const profiles = await this.memory.loadProfiles()
     const manifests = await this.manifestLoader.loadAll()
     const skills = this.options.registry.list()
@@ -1317,14 +1921,14 @@ export class GeoLoomAgent {
     const tools = buildToolSchemas({ skills, manifests })
     const taskMode = classifyTaskMode({
       intent,
-      rawQuery: lastUserText,
+      rawQuery: contextualUserText,
     })
     const toolLoopMaxRounds = this.resolveToolLoopMaxRounds(taskMode)
     const toolLoopTimeoutMs = taskMode === 'analysis'
       ? getDefaultLlmAnalysisTimeoutMs()
       : getDefaultLlmQueryTimeoutMs()
     const toolLoopUserMessage = this.buildToolLoopUserMessage({
-      rawQuery: lastUserText,
+      rawQuery: contextualUserText,
       intent,
       intentSource: intentResolution.source,
     })
@@ -1332,12 +1936,12 @@ export class GeoLoomAgent {
       sessionId: session.id,
       profiles,
       memory: {
-        summary: snapshot.summary,
-        recentTurns: snapshot.recentTurns,
+        summary: conversationSnapshot.summary,
+        recentTurns: conversationSnapshot.recentTurns,
       },
       skillSnippets: manifests.map((manifest) => manifest.promptSnippet),
       requestContext: {
-        rawQuery: lastUserText,
+        rawQuery: contextualUserText,
         intentHint: intent.queryType,
         intentSource: intentResolution.source,
         anchorHint: intent.anchorSource || null,
@@ -1349,102 +1953,115 @@ export class GeoLoomAgent {
     await writer.stage('tool_select')
     await writer.thinking({
       status: 'start',
-      message: '正在规划本轮 skill 调用...',
+      message: requirements.recommendedTrack === 'fast'
+        ? '已规划确定性 Fast Track，零 LLM 并行取证...'
+        : '已规划 Deep Track，确定性取证 + LLM 补充...',
     })
 
     let execution: Awaited<ReturnType<typeof runFunctionCallingLoop>>
     let toolLoopUsedFallbackProvider = false
-    try {
-      execution = await runFunctionCallingLoop({
-        provider: activeProvider,
-        tools,
-        maxRounds: toolLoopMaxRounds,
-        requestTimeoutMs: toolLoopTimeoutMs,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: toolLoopUserMessage },
-        ],
-        onAssistantMessage: async (assistantMessage, meta) => {
-          if (meta.finishReason !== 'tool_calls') return
-          const reasoningSnippet = extractAssistantReasoningSnippet(assistantMessage)
-          if (!reasoningSnippet) return
-          await writer.reasoning({
-            round: meta.round + 1,
-            content: reasoningSnippet,
-          })
-        },
-        onToolCall: async (call) => {
-          await writer.stage('tool_run')
-          await writer.reasoning({
-            content: describeToolIntent(call),
-          })
-          await writer.thinking({
-            status: 'start',
-            message: `正在执行 ${call.name}.${String(call.arguments.action || '')}...`,
-          })
-          const result = await this.executeToolCall(call, intent, state, skillContext)
-          return {
-            content: JSON.stringify(result.content),
-            trace: result.trace,
-          }
-        },
-      })
-    } catch (error) {
-      if (error instanceof ToolExecutionAbortError) {
-        throw error
-      }
-      const errorMessage = error instanceof Error ? error.message : String(error || 'unknown_llm_error')
-      await writer.thinking({
-        status: 'start',
-        message: 'LLM 调用异常，已切换到确定性证据摘要模式。',
-      })
-      await writer.reasoning({
-        content: `主模型这一轮没有顺利完成工具编排，触发原因是：${errorMessage}。当前先退回可验证证据链，保证后续回答来自真实工具结果，而不是猜测。`,
-      })
-      toolLoopUsedFallbackProvider = true
-      execution = await runFunctionCallingLoop({
-        provider: new InMemoryLLMProvider(),
-        tools,
-        maxRounds: toolLoopMaxRounds,
-        requestTimeoutMs: toolLoopTimeoutMs,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: toolLoopUserMessage },
-        ],
-        onAssistantMessage: async (assistantMessage, meta) => {
-          if (meta.finishReason !== 'tool_calls') return
-          const reasoningSnippet = extractAssistantReasoningSnippet(assistantMessage)
-          if (!reasoningSnippet) return
-          await writer.reasoning({
-            round: meta.round + 1,
-            content: reasoningSnippet,
-          })
-        },
-        onToolCall: async (call) => {
-          await writer.stage('tool_run')
-          await writer.reasoning({
-            content: describeToolIntent(call),
-          })
-          await writer.thinking({
-            status: 'start',
-            message: `正在执行 ${call.name}.${String(call.arguments.action || '')}...`,
-          })
-          const result = await this.executeToolCall(call, intent, state, skillContext)
-          return {
-            content: JSON.stringify(result.content),
-            trace: result.trace,
-          }
-        },
-      })
+    // 阶段 0：证据采集计时开始
+    const evidenceStartedAt = Date.now()
+
+    // 阶段 5+7：Fast Track / Deep Track 分流
+    const executeToolCallDelegate = async (call: { id: string, name: string, arguments: Record<string, unknown> }) => {
+      const result = await this.executeToolCall(call as ToolCallRequest, intent, state, skillContext)
+      return { content: result.content, trace: result.trace }
     }
 
-    await this.recoverCoreSpatialEvidenceIfNeeded({
-      intent,
-      state,
-      writer,
-      context: skillContext,
-      providerReady: this.provider.isReady(),
-    })
+    if (requirements.recommendedTrack === 'fast') {
+      // ── Fast Track：确定性并行执行，零 LLM ──
+      await writer.reasoning({
+        content: `Fast Track 启动：${requirements.requiredAtoms.join(', ')}，共 ${requirements.executionSpecs.length} 个探针并行执行。`,
+      })
+      const fastRuntime = new DeterministicEvidenceRuntime()
+      const traces = await fastRuntime.execute({
+        specs: requirements.executionSpecs,
+        intent,
+        state,
+        writer,
+        executeToolCall: executeToolCallDelegate,
+      })
+      execution = { assistantMessage: null, traces }
+    } else {
+      // ── Deep Track：确定性先跑一轮，不足则最多 1 轮 LLM 补充（逃逸阀）──
+      await writer.reasoning({
+        content: `Deep Track 启动：先确定性执行 ${requirements.requiredAtoms.join(', ')}，再按需补充。`,
+      })
+      const fastRuntime = new DeterministicEvidenceRuntime()
+      const deterministicTraces = await fastRuntime.execute({
+        specs: requirements.executionSpecs,
+        intent,
+        state,
+        writer,
+        executeToolCall: executeToolCallDelegate,
+      })
+
+      // 阶段 7：检查证据是否足够，不足则启动逃逸阀
+      const evidenceGap = this.assessEvidenceGap(state, requirements)
+      if (evidenceGap.needsSupplement) {
+        await writer.reasoning({
+          content: `证据缺口检测：已有 ${evidenceGap.availableAtoms.join(', ')}，仍需补充。启动逃逸阀（最多 1 轮 LLM）。`,
+        })
+        try {
+          const supplementExecution = await runFunctionCallingLoop({
+            provider: activeProvider,
+            tools,
+            maxRounds: 1,
+            requestTimeoutMs: toolLoopTimeoutMs,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              {
+                role: 'user',
+                content: [
+                  toolLoopUserMessage,
+                  `⚠️ 逃逸阀模式：你已经拿到了这些证据：${evidenceGap.availableAtoms.join(', ')}。`,
+                  '请判断还需要补什么，最多再调用一轮工具。',
+                ].join('\n'),
+              },
+            ],
+            onAssistantMessage: async (assistantMessage, meta) => {
+              if (meta.finishReason !== 'tool_calls') return
+              const reasoningSnippet = extractAssistantReasoningSnippet(assistantMessage)
+              if (!reasoningSnippet) return
+              await writer.reasoning({
+                round: meta.round + 1,
+                content: reasoningSnippet,
+              })
+            },
+            onToolCall: async (call) => {
+              await writer.stage('tool_run')
+              await writer.reasoning({
+                content: describeToolIntent(call),
+              })
+              await writer.thinking({
+                status: 'start',
+                message: `正在执行 ${call.name}.${String(call.arguments.action || '')}...`,
+              })
+              const result = await this.executeToolCall(call, intent, state, skillContext)
+              return {
+                content: JSON.stringify(result.content),
+                trace: result.trace,
+              }
+            },
+          })
+          execution = {
+            assistantMessage: supplementExecution.assistantMessage,
+            traces: [...deterministicTraces, ...supplementExecution.traces],
+          }
+        } catch (error) {
+          if (error instanceof ToolExecutionAbortError) throw error
+          // 逃逸阀 LLM 失败，仍然用确定性结果
+          execution = { assistantMessage: null, traces: deterministicTraces }
+          toolLoopUsedFallbackProvider = true
+        }
+      } else {
+        execution = { assistantMessage: null, traces: deterministicTraces }
+      }
+    }
+
+    // 阶段 0：证据采集计时结束
+    const evidenceRuntimeMs = Date.now() - evidenceStartedAt
 
     const primaryAnchor = state.anchors.primary
     const secondaryAnchor = state.anchors.secondary
@@ -1466,11 +2083,13 @@ export class GeoLoomAgent {
     state.evidenceView = evidenceView
 
     const evidenceCount = this.resolveEvidenceCount(evidenceView)
+    console.log(`[诊断] evidenceCount=${evidenceCount}, items=${evidenceView.items.length}, type=${evidenceView.type}, anchor=${!!primaryAnchor}, hasCoord=${hasCoordinates(primaryAnchor)}`)
     const decision = this.confidenceGate.evaluate({
       anchorResolved: intent.queryType === 'similar_regions' || hasCoordinates(primaryAnchor),
       evidenceCount,
       hasConflict: false,
     })
+    console.log(`[诊断] decision=${decision.status}, reason=${decision.reason}`)
 
     await writer.stage('evidence')
     await writer.thinking({
@@ -1497,16 +2116,21 @@ export class GeoLoomAgent {
       this.resolveEvidenceCount(evidenceView),
     )
     const llmAnswer = String(execution.assistantMessage?.content || '').trim()
+    // 阶段 0：合成回答计时开始
+    const synthesisStartedAt = Date.now()
     const synthesizedAnswer = decision.status === 'allow'
       ? await this.synthesizeGroundedAnswer({
         provider: this.provider,
+        contract,
         intent,
         evidenceView,
         rendered,
+        toolCalls: state.toolCalls,
         spatialConstraint: state.spatialConstraint || null,
         rawQuery: lastUserText,
       })
       : null
+    const synthesisMs = Date.now() - synthesisStartedAt
     const groundedSynthesizedAnswer = synthesizedAnswer && this.isAnswerGrounded(synthesizedAnswer, evidenceView)
       ? synthesizedAnswer
       : null
@@ -1514,8 +2138,11 @@ export class GeoLoomAgent {
       ? llmAnswer
       : ''
     const providerReady = this.provider.isReady()
+    // 阶段 8：Fast Track 的确定性 trace 也算有效证据，不再仅依赖 agent-led 判断
+    const hasFastTrackEvidence = requirements.recommendedTrack === 'fast'
+      && state.toolCalls.some(t => t.status === 'done' && t.skill === 'postgis' && t.action === 'execute_spatial_sql')
     const areaInsightAgentLedEvidence = intent.queryType === 'area_overview'
-      && hasAgentLedAreaInsightEvidence(state.toolCalls)
+      && (hasFastTrackEvidence || hasAgentLedAreaInsightEvidence(state.toolCalls))
     const prefersTransparentAnalysisFailure = providerReady
       && intent.queryType === 'area_overview'
       && !areaInsightAgentLedEvidence
@@ -1548,6 +2175,16 @@ export class GeoLoomAgent {
       answerSource = 'fallback_deterministic_renderer'
     } else if (toolLoopUsedFallbackProvider && answerSource === 'insufficient_evidence') {
       answerSource = 'fallback_insufficient_evidence'
+    }
+
+    const markdownAnswer = this.ensureMarkdownAnswer({
+      answer,
+      renderedAnswer: rendered.answer,
+      queryType: intent.queryType,
+    })
+    answer = markdownAnswer.answer
+    if (markdownAnswer.usedRenderedAnswer && answerSource === 'llm_synthesized') {
+      answerSource = 'deterministic_renderer'
     }
 
     if (decision.status === 'allow' && groundedSynthesizedAnswer) {
@@ -1587,11 +2224,14 @@ export class GeoLoomAgent {
       decision: decision.reason,
       taskMode,
       answerSource,
+      recommendedTrack: requirements.recommendedTrack,
     })
 
     await writer.stats(stats)
+    await this.streamAnswerChunks(writer, answer)
     await writer.refinedResult({
       answer,
+      answer_source: answerSource,
       results: {
         pois: rendered.pois,
         stats,
@@ -1602,15 +2242,35 @@ export class GeoLoomAgent {
         intentMode: intent.intentMode,
         placeName: intent.placeName,
         targetCategory: intent.targetCategory,
+        categoryMain: intent.categoryMain,
+        categorySub: intent.categorySub,
+        needsWebSearch: Boolean(intent.needsWebSearch),
+        toolIntent: intent.toolIntent || null,
+        searchIntentHint: intent.searchIntentHint || null,
+        intentSource: intentResolution.source,
+        sourceConfidence: intentResolution.confidence ?? null,
+        sourceLatencyMs: intentResolution.latencyMs ?? null,
+        categoryScore: categoryMatchScore,
+        parserModel,
+        parserProvider,
       },
       tool_calls: state.toolCalls,
       trace_id: traceId,
     })
+    // 阶段 8：计算 LLM 调用轮次 — Phase 1 意图理解 + Phase 2 逃逸阀
+    const llmRoundCount = (intentInferredByLlm ? 1 : 0)
+      + (requirements.recommendedTrack === 'fast' ? 0 : (execution.assistantMessage ? 1 : 0))
     this.recordRequestMetrics({
       startedAt,
       state,
       answer,
       evidenceView,
+      intentMs,
+      evidenceRuntimeMs,
+      synthesisMs,
+      rawQuery: lastUserText,
+      queryType: intent.queryType,
+      llmRoundCount,
     })
     await writer.done({
       duration_ms: Date.now() - startedAt,
@@ -1625,6 +2285,12 @@ export class GeoLoomAgent {
         intent: {
           queryType: intent.queryType,
           targetCategory: intent.targetCategory,
+          categoryKey: intent.categoryKey,
+          categoryMain: intent.categoryMain,
+          categorySub: intent.categorySub,
+          needsWebSearch: intent.needsWebSearch,
+          toolIntent: intent.toolIntent,
+          searchIntentHint: intent.searchIntentHint,
         },
         createdAt: new Date().toISOString(),
       })
@@ -1639,6 +2305,8 @@ export class GeoLoomAgent {
     writer: SSEWriter
     answer: string
     intent: DeterministicIntent
+    parserModel?: string
+    parserProvider?: string
     state: AgentTurnState
     startedAt: number
     providerReady: boolean
@@ -1665,8 +2333,10 @@ export class GeoLoomAgent {
       answerSource: input.intent.needsClarification ? 'clarification' : 'insufficient_evidence',
     })
     await input.writer.stats(stats)
+    await this.streamAnswerChunks(input.writer, input.answer)
     await input.writer.refinedResult({
       answer: input.answer,
+      answer_source: input.intent.needsClarification ? 'clarification' : 'insufficient_evidence',
       results: {
         pois: [],
         stats,
@@ -1686,6 +2356,10 @@ export class GeoLoomAgent {
         intentMode: input.intent.intentMode,
         placeName: input.intent.placeName,
         targetCategory: input.intent.targetCategory,
+        categoryMain: input.intent.categoryMain,
+        categorySub: input.intent.categorySub,
+        parserModel: input.parserModel || null,
+        parserProvider: input.parserProvider || null,
       },
       tool_calls: input.state.toolCalls,
       trace_id: input.state.traceId,
@@ -1706,37 +2380,124 @@ export class GeoLoomAgent {
     request: ChatRequestV4
     rawQuery: string
     fallbackIntent: DeterministicIntent
+    followUpHint?: RecentFollowUpIntentHint | null
     providerReady: boolean
   }): Promise<{
     intent: DeterministicIntent
-    source: 'llm' | 'fallback'
+    source: 'llm' | 'fallback' | 'embedding'
+    confidence?: number | null
+    latencyMs?: number | null
   }> {
+    const attemptLlmResolution = async () => {
+      if (!input.providerReady) {
+        return null
+      }
+
+      const llmStartedAt = Date.now()
+      const hint = await this.inferIntentWithLlm({
+        request: input.request,
+        rawQuery: input.rawQuery,
+        followUpHint: input.followUpHint || null,
+        embeddingResult: embResult,
+      })
+      const llmLatencyMs = Date.now() - llmStartedAt
+      const intent = this.buildIntentFromLlmHint({
+        request: input.request,
+        fallbackIntent: input.fallbackIntent,
+        hint,
+      })
+      if (!intent) {
+        return {
+          intent: input.fallbackIntent,
+          source: 'fallback' as const,
+          latencyMs: llmLatencyMs,
+        }
+      }
+
+      return {
+        intent,
+        source: 'llm' as const,
+        latencyMs: llmLatencyMs,
+      }
+    }
+
+    let embResult: EmbeddingIntentResult | null = null
+    let llmAttempted = false
+
+    if (this.intentClassifier?.isReady) {
+      embResult = await this.intentClassifier.classify(input.rawQuery)
+      if (embResult.usedEmbedding) {
+        const preferLlmPlanner = shouldPreferLlmIntentPlanner({
+          request: input.request,
+          followUpHint: input.followUpHint,
+          embeddingResult: embResult,
+        })
+        if (preferLlmPlanner) {
+          llmAttempted = true
+          const llmResolution = await attemptLlmResolution()
+          if (llmResolution?.source === 'llm') {
+            return llmResolution
+          }
+        }
+
+        if (embResult.confidence >= 0.65 && embResult.queryType !== 'unsupported') {
+          const intent = { ...input.fallbackIntent }
+          intent.queryType = embResult.queryType
+          intent.needsWebSearch = embResult.needsWebSearch || intent.needsWebSearch
+          intent.toolIntent = defaultToolIntentForQueryType(intent.queryType, Boolean(intent.needsWebSearch))
+          intent.searchIntentHint = buildDefaultSearchIntentHint({
+            queryType: intent.queryType,
+            toolIntent: intent.toolIntent,
+            targetCategory: intent.targetCategory,
+            categoryMain: intent.categoryMain,
+            categorySub: intent.categorySub,
+            needsWebSearch: Boolean(intent.needsWebSearch),
+          })
+          // Embedding 分类成功时清除 clarification 标记
+          intent.needsClarification = false
+          intent.clarificationHint = null
+          // Embedding 分类时从 rawQuery 提取锚点地名
+          if (!intent.placeName && input.rawQuery) {
+            const placeMatch = input.rawQuery.match(/^(.+?)(?:附近|周边|这附近|周围|旁边)/)
+              || input.rawQuery.match(/^(.+?)(?:有什么|有没有|哪有|哪有|找)/)
+            if (placeMatch) {
+              const candidate = placeMatch[1].replace(/^(这|那|我|当前|附近)/, '').trim()
+              if (candidate.length >= 2 && candidate.length <= 10) {
+                intent.placeName = candidate
+              }
+            }
+          }
+          console.log(`[EmbeddingIntent] ✓ queryType=${embResult.queryType} confidence=${embResult.confidence} needsWebSearch=${embResult.needsWebSearch} placeName=${intent.placeName} toolIntent=${intent.toolIntent} (${embResult.latencyMs}ms)`)
+          return {
+            intent,
+            source: 'embedding',
+            confidence: embResult.confidence,
+            latencyMs: embResult.latencyMs,
+          }
+        }
+        console.log(`[EmbeddingIntent] ✗ confidence=${embResult.confidence} unsupported=${embResult.queryType === 'unsupported'} preferLlm=${preferLlmPlanner}, fallback to LLM`)
+      }
+    }
+
     if (!input.providerReady) {
       return {
         intent: input.fallbackIntent,
         source: 'fallback',
+        latencyMs: null,
       }
     }
 
-    const hint = await this.inferIntentWithLlm({
-      request: input.request,
-      rawQuery: input.rawQuery,
-    })
-    const intent = this.buildIntentFromLlmHint({
-      request: input.request,
-      fallbackIntent: input.fallbackIntent,
-      hint,
-    })
-    if (!intent) {
-      return {
-        intent: input.fallbackIntent,
-        source: 'fallback',
+    if (!llmAttempted) {
+      const llmResolution = await attemptLlmResolution()
+      if (llmResolution) {
+        return llmResolution
       }
     }
 
     return {
-      intent,
-      source: 'llm',
+      intent: input.fallbackIntent,
+      source: 'fallback',
+      latencyMs: null,
     }
   }
 
@@ -1827,6 +2588,16 @@ export class GeoLoomAgent {
         : hint.queryType === 'compare_places'
           ? (!placeName || !secondaryPlaceName || Boolean(hint.needsClarification))
           : (!placeName || Boolean(hint.needsClarification))
+    const needsWebSearch = Boolean(hint.needsWebSearch)
+    const toolIntent = normalizeToolIntentMode(hint.toolIntent)
+      || defaultToolIntentForQueryType(hint.queryType, needsWebSearch)
+    const searchIntentHint = readOptionalText(hint.searchIntentHint)
+      || buildDefaultSearchIntentHint({
+        queryType: hint.queryType,
+        toolIntent,
+        targetCategory: readOptionalText(hint.targetCategory) || structuredTargetCategory || input.fallbackIntent.targetCategory,
+        needsWebSearch,
+      })
 
     return {
       ...input.fallbackIntent,
@@ -1849,12 +2620,17 @@ export class GeoLoomAgent {
       clarificationHint: needsClarification
         ? (hint.clarificationHint || this.buildClarificationHintForQueryType(hint.queryType))
         : null,
+      needsWebSearch,
+      toolIntent,
+      searchIntentHint,
     } satisfies DeterministicIntent
   }
 
   private async inferIntentWithLlm(input: {
     request: ChatRequestV4
     rawQuery: string
+    followUpHint?: RecentFollowUpIntentHint | null
+    embeddingResult?: EmbeddingIntentResult | null
   }): Promise<{
     queryType: DeterministicIntent['queryType']
     anchorSource?: NonNullable<DeterministicIntent['anchorSource']> | null
@@ -1865,6 +2641,9 @@ export class GeoLoomAgent {
     categoryKey?: string | null
     needsClarification?: boolean
     clarificationHint?: string | null
+    needsWebSearch?: boolean
+    toolIntent?: ToolIntentMode | null
+    searchIntentHint?: string | null
   } | null> {
     try {
       const selectedCategories = normalizeSelectedCategories(input.request.options?.selectedCategories || [])
@@ -1888,12 +2667,27 @@ export class GeoLoomAgent {
               '不要因为用户换一种说法就判 unsupported。',
               'selectedCategories 和 selectedRegions 只是结构化上下文线索，不能替代对 user_query 的自然语言理解。',
               '如果用户是在让系统解读、分析、读懂、看看某片区域，而当前有地图范围上下文，这通常应判成 area_overview + map_view。',
+              '⚠️ 重要区分：当用户问「有哪些+具体品类」（如"有哪些高分酒店"、"附近有什么好吃的"、"周边有哪些咖啡店"），这是 nearby_poi 而不是 area_overview。只有问片区整体特征（配套、业态、结构、机会）时才是 area_overview。',
+              '请同时给出 toolIntent，用来指导下游工具编排。可选值：candidate_lookup | candidate_reputation | nearest_transit | area_insight | place_comparison | similar_region_search。',
+              '如果这是“附近有哪些高分/推荐/口碑好的X”这类问题，请把 toolIntent 设为 candidate_reputation，并补 searchIntentHint，例如“酒店 评分 推荐”。',
+              '如果这是普通“附近有什么X”这类问题，请把 toolIntent 设为 candidate_lookup。',
+              '如果这是区域解读题，请把 toolIntent 设为 area_insight；最近地铁站设为 nearest_transit；双地点比较设为 place_comparison；相似片区设为 similar_region_search。',
+              '如果 user_query 里出现“补充追问：”，说明前半句是上一轮原问题，后半句是本轮省略式追问；你要结合两部分一起判断主问题类型，不要只看最后那句短追问。',
+              '像“那这儿呢 / 这边呢 / 这里呢”这类追问，如果前半句已经明确是在查某类 POI、地铁站或区域解读，通常应延续同一主任务类型，再结合当前空间上下文理解。',
+              'follow_up_recent_intent 是上一轮稳定意图摘要，只能作为理解线索，不能机械照抄；如果它和本轮上下文冲突，以完整 user_query 为准。',
+              '同时判断 needsWebSearch（布尔值）：当用户问题涉及评价、评分、口碑、推荐、排名、高分、好不好、体验、实时营业状态、价格、人均消费、新开、最新动态、趋势、规划等需要互联网实时/UGC信息才能回答时，设为 true；纯空间查询（如"附近有什么"、"最近地铁站"等）设为 false。',
               `user_query: ${input.rawQuery}`,
+              `follow_up_recent_intent: ${JSON.stringify(input.followUpHint || null)}`,
+              `embedding_prior: ${JSON.stringify(input.embeddingResult && input.embeddingResult.usedEmbedding ? {
+                queryType: input.embeddingResult.queryType,
+                confidence: input.embeddingResult.confidence,
+                needsWebSearch: input.embeddingResult.needsWebSearch,
+              } : null)}`,
               `has_spatial_view: ${Boolean(readMapViewAnchor(input.request))}`,
               `has_user_location: ${Boolean(readUserLocation(input.request))}`,
               `selected_categories: ${JSON.stringify(selectedCategories)}`,
               `selected_regions: ${JSON.stringify(selectedRegionNames)}`,
-              '返回 JSON，例如：{"queryType":"area_overview","anchorSource":"map_view","placeName":null,"secondaryPlaceName":null,"categoryKey":null,"targetCategory":"区域洞察","needsClarification":false,"clarificationHint":null}',
+              '返回 JSON，例如：{"queryType":"area_overview","anchorSource":"map_view","placeName":null,"secondaryPlaceName":null,"categoryKey":null,"targetCategory":"区域洞察","needsClarification":false,"clarificationHint":null,"needsWebSearch":false,"toolIntent":"area_insight","searchIntentHint":null}',
             ].join('\n'),
           },
         ],
@@ -1922,6 +2716,9 @@ export class GeoLoomAgent {
         categoryKey: readOptionalText(parsed.categoryKey),
         needsClarification: Boolean(parsed.needsClarification),
         clarificationHint: parsed.clarificationHint == null ? null : String(parsed.clarificationHint),
+        needsWebSearch: parsed.needsWebSearch === true,
+        toolIntent: normalizeToolIntentMode(parsed.toolIntent),
+        searchIntentHint: readOptionalText(parsed.searchIntentHint),
       }
     } catch {
       return null
@@ -1951,7 +2748,7 @@ export class GeoLoomAgent {
   private buildToolLoopUserMessage(input: {
     rawQuery: string
     intent: DeterministicIntent
-    intentSource?: 'llm' | 'fallback'
+    intentSource?: 'llm' | 'fallback' | 'embedding'
   }) {
     const intentSource = input.intentSource || 'fallback'
     const lines = [
@@ -1963,20 +2760,17 @@ export class GeoLoomAgent {
       input.intent.secondaryPlaceName ? `次锚点：${input.intent.secondaryPlaceName}` : '',
       input.intent.targetCategory ? `目标类别：${input.intent.targetCategory}` : '',
       input.intent.categoryKey ? `category_key：${input.intent.categoryKey}` : '',
+      input.intent.toolIntent ? `工具意图：${input.intent.toolIntent}` : '',
+      input.intent.searchIntentHint ? `联网语义焦点：${input.intent.searchIntentHint}` : '',
     ]
 
     if (input.intent.queryType === 'area_overview') {
-      lines.push(
-        input.intent.anchorSource === 'map_view'
-          ? '编排要求：这是区域洞察题，优先把当前 map_view 当作分析范围，先拿结构证据，再补 AOI / landuse 语义，再组织结论。'
-          : '编排要求：这是区域洞察题，先确认空间锚点，再拿结构证据，补 AOI / landuse 语义后再组织结论。',
-      )
-      lines.push(
-        '如果多个工具彼此没有前后输入依赖，应在同一轮直接给出多个 tool calls 并行执行；只有后一工具必须读取前一工具结果时才拆成串行多轮。',
-        '如果 area insight 已经拿到，而问题只关注某个主题、某类设施或结构焦点，拿到 area insight 后优先调用 semantic_selector.select_area_evidence 做按需取证，不要在脑中手动删样本。',
-      )
+      lines.push('编排要求：这是区域洞察题，围绕用户原问题按需取证，不要超范围分析。')
     } else if (input.intent.queryType === 'nearby_poi') {
       lines.push('编排要求：这是附近查询题，先锁定锚点，再抓取附近真实候选，不要把查询题答成片区总结。')
+      if (input.intent.toolIntent === 'candidate_reputation') {
+        lines.push('补充要求：这是候选点评价核验题，联网时优先围绕本地候选点名称核验评分、口碑和推荐信息，而不是原句裸搜。')
+      }
     } else if (input.intent.queryType === 'nearest_station') {
       lines.push('编排要求：这是最近地铁站查询题，先锁定锚点，再回答最近站点与可用站口。')
     } else if (input.intent.queryType === 'compare_places') {
@@ -1986,6 +2780,68 @@ export class GeoLoomAgent {
     }
 
     return lines.filter(Boolean).join('\n')
+  }
+
+  /**
+   * 阶段 7：评估当前证据是否足够覆盖 NLContract 要求
+   * 用于 Deep Track 判断是否需要启动逃逸阀（最多 1 轮 LLM 补充）
+   */
+  private assessEvidenceGap(
+    state: AgentTurnState,
+    requirements: import('../evidence/RequirementResolver.js').ResolvedRequirements,
+  ): { needsSupplement: boolean, availableAtoms: string[], missingAtoms: string[] } {
+    const completedTemplates = new Set<string>()
+    const completedActions = new Set<string>()
+    for (const trace of state.toolCalls) {
+      if (trace.status !== 'done') continue
+      if (trace.action === 'resolve_anchor') {
+        const role = String((trace.payload as Record<string, unknown>)?.role || 'primary')
+        completedActions.add(`anchor.${role === 'secondary' ? 'secondary_resolved' : 'resolved'}`)
+      } else if (trace.action === 'execute_spatial_sql') {
+        const template = String((trace.payload as Record<string, unknown>)?.template || '')
+        if (template) completedTemplates.add(template)
+      } else if (trace.action === 'select_area_evidence') {
+        completedActions.add('area.focused_samples')
+      } else if (trace.action === 'encode_region_snapshot') {
+        completedActions.add('area.region_encoding')
+      } else if (trace.action === 'encode_poi_profile') {
+        completedActions.add('poi.profile_encoding')
+      }
+    }
+
+    // Map atom names to completed templates/actions
+    const ATOM_TEMPLATE_MAP: Record<string, string> = {
+      'poi.nearby_list': 'nearby_poi',
+      'poi.nearest_station': 'nearest_station',
+      'area.category_histogram': 'area_category_histogram',
+      'area.representative_samples': 'area_representative_sample',
+      'area.hotspots': 'area_h3_hotspots',
+      'area.ring_distribution': 'area_ring_distribution',
+      'area.competition_density': 'area_competition_density',
+      'area.aoi_context': 'area_aoi_context',
+      'area.landuse_context': 'area_landuse_context',
+      'compare.pairs': 'compare_places',
+    }
+
+    const availableAtoms: string[] = []
+    const missingAtoms: string[] = []
+
+    for (const atom of requirements.requiredAtoms) {
+      const template = ATOM_TEMPLATE_MAP[atom]
+      if (template && completedTemplates.has(template)) {
+        availableAtoms.push(atom)
+      } else if (completedActions.has(atom)) {
+        availableAtoms.push(atom)
+      } else {
+        missingAtoms.push(atom)
+      }
+    }
+
+    return {
+      needsSupplement: missingAtoms.length > 0,
+      availableAtoms,
+      missingAtoms,
+    }
   }
 
   private resolveToolLoopMaxRounds(taskMode: 'query' | 'analysis') {
@@ -2372,6 +3228,7 @@ export class GeoLoomAgent {
         template,
         state.spatialConstraint,
       )
+    console.log(`[诊断:PostGIS] template=${template}, rows=${rows.length}, categoryKey=${intent.categoryKey}, categoryMain=${intent.categoryMain}, categorySub=${intent.categorySub}, anchor=(${anchor?.lon},${anchor?.lat})`)
 
     return {
       ok: true,
@@ -2439,6 +3296,21 @@ export class GeoLoomAgent {
       }
     }
 
+    // 语义重排序：对 nearby_poi 查询结果融合距离 + 语义分数
+    if (rows.length > 0 && this.poiEmbeddingCache && intent.queryType === 'nearby_poi') {
+      const rankResult = await this.poiEmbeddingCache.semanticRank(
+        rows as import('../catalog/poiEmbeddingCache.js').PoiRow[],
+        intent.rawQuery,
+        { maxDistanceM: intent.radiusM || 3000, queryVec: intent.queryVec },
+      )
+      if (rankResult.usedSemanticRank) {
+        // 截断到原始 limit
+        const ranked = rankResult.rows.slice(0, limit)
+        console.log(`[语义重排序] ${rows.length} 条候选 → 语义精排 ${ranked.length} 条, 新缓存=${rankResult.newlyCached}, 耗时=${rankResult.latencyMs}ms`)
+        return ranked as Record<string, unknown>[]
+      }
+    }
+
     return rows
   }
 
@@ -2480,7 +3352,12 @@ export class GeoLoomAgent {
     }
   }
 
-  private buildCategoryFilters(categoryKey: string, selectedCategories: string[] = []) {
+  private buildCategoryFilters(
+    categoryKey: string,
+    selectedCategories: string[] = [],
+    categoryMain?: string | null,
+    categorySub?: string | null,
+  ) {
     const whereFilters: string[] = []
     const joinFilters: string[] = []
     const pushFilter = (field: string, value: string) => {
@@ -2488,7 +3365,15 @@ export class GeoLoomAgent {
       joinFilters.push(`AND p.${field} = '${escapeSqlLiteral(value)}'`)
     }
 
-    if (categoryKey === 'metro_station') {
+    // 优先使用 embedding 语义匹配结果（categoryMain/categorySub）
+    if (categoryMain) {
+      pushFilter('category_main', categoryMain)
+      // category_sub 更精确时追加二级过滤
+      if (categorySub && categorySub !== categoryMain) {
+        pushFilter('category_sub', categorySub)
+      }
+    } else if (categoryKey === 'metro_station') {
+      // 旧硬编码 fallback（embedding 索引不可用时兜底）
       pushFilter('category_main', '交通设施服务')
       pushFilter('category_sub', '地铁站')
     } else if (categoryKey === 'coffee') {
@@ -2496,6 +3381,8 @@ export class GeoLoomAgent {
       pushFilter('category_sub', '咖啡')
     } else if (categoryKey === 'food') {
       pushFilter('category_main', '餐饮美食')
+    } else if (categoryKey === 'hotel') {
+      pushFilter('category_main', '住宿服务')
     } else if (categoryKey === 'supermarket') {
       pushFilter('category_main', '购物服务')
     }
@@ -2527,26 +3414,45 @@ export class GeoLoomAgent {
     limit: number
     spatialConstraint?: SpatialAnalysisConstraint | null
   }) {
-    const template = loadPostgisTemplate(input.templateName)
+    const viewportTileConfig = buildViewportTileConfig(input.intent.viewportContext)
+    const effectiveTemplateName = viewportTileConfig && input.templateName === 'area_representative_sample'
+      ? 'area_representative_sample_large_viewport'
+      : viewportTileConfig && input.templateName === 'area_aoi_context'
+        ? 'area_aoi_context_large_viewport'
+        : input.templateName
+    const template = loadPostgisTemplate(effectiveTemplateName)
     if (!template) {
       return null
     }
 
     const spatialFragments = this.buildSpatialSqlFragments(input)
     const selectedCategories = input.spatialConstraint?.selectedCategories || []
-    const categoryFilters = this.buildCategoryFilters(input.categoryKey, selectedCategories)
+    const categoryFilters = this.buildCategoryFilters(input.categoryKey, selectedCategories, input.intent.categoryMain, input.intent.categorySub)
     const competitionDimension = input.categoryKey || selectedCategories.length > 0 ? 'category_sub' : 'category_main'
+    const effectiveLimit = viewportTileConfig
+      ? input.templateName === 'area_representative_sample'
+        ? Math.max(input.limit, viewportTileConfig.tileCols * viewportTileConfig.tileRows * 2)
+        : input.templateName === 'area_aoi_context'
+          ? Math.max(input.limit, viewportTileConfig.tileCols * viewportTileConfig.tileRows)
+          : input.limit
+      : input.limit
     const rendered = renderPostgisTemplate(template, {
       POINT_GEOGRAPHY: spatialFragments.pointGeography,
       AREA_GEOMETRY: spatialFragments.areaGeometry,
       AREA_FILTER: spatialFragments.areaFilter,
       AREA_JOIN_FILTER: spatialFragments.areaJoinFilter,
       RADIUS_M: String(Math.max(input.intent.radiusM, 1)),
-      LIMIT: String(Math.max(input.limit, 1)),
+      LIMIT: String(Math.max(effectiveLimit, 1)),
       CATEGORY_FILTER: categoryFilters.where.length > 0 ? `\n${categoryFilters.where.join('\n')}` : '',
       CATEGORY_JOIN_FILTER: categoryFilters.join.length > 0 ? `\n${categoryFilters.join.join('\n')}` : '',
       COMPETITION_DIMENSION: competitionDimension,
       CELL_SIZE_DEG: input.intent.radiusM >= 1500 ? '0.003' : input.intent.radiusM >= 1000 ? '0.002' : '0.0015',
+      VIEWPORT_MIN_LON: formatNumericLiteral(viewportTileConfig?.minLon),
+      VIEWPORT_MIN_LAT: formatNumericLiteral(viewportTileConfig?.minLat),
+      VIEWPORT_TILE_WIDTH: formatNumericLiteral(viewportTileConfig?.tileWidth, 0.0001),
+      VIEWPORT_TILE_HEIGHT: formatNumericLiteral(viewportTileConfig?.tileHeight, 0.0001),
+      VIEWPORT_TILE_COLS: String(viewportTileConfig?.tileCols || 1),
+      VIEWPORT_TILE_ROWS: String(viewportTileConfig?.tileRows || 1),
     })
 
     return rendered.replace(/\n{3,}/g, '\n\n').trim()
@@ -2561,7 +3467,7 @@ export class GeoLoomAgent {
     spatialConstraint?: SpatialAnalysisConstraint | null,
   ) {
     const resolvedTemplateName = this.resolvePostgisTemplateName(intent, templateName)
-    if (AREA_INSIGHT_TEMPLATES.includes(resolvedTemplateName as typeof AREA_INSIGHT_TEMPLATES[number])) {
+    if (POSTGIS_TEMPLATE_FILE_MAP[resolvedTemplateName]) {
       const areaTemplateSql = this.buildAreaInsightTemplateSQL({
         templateName: resolvedTemplateName,
         intent,
@@ -2582,7 +3488,9 @@ export class GeoLoomAgent {
     })
     const effectiveLimit = categoryKey === 'metro_station' && intent.queryType === 'nearby_poi'
       ? Math.max(limit, 12)
-      : Math.max(limit, 1)
+      : this.poiEmbeddingCache && intent.queryType === 'nearby_poi'
+        ? Math.max(limit * 3, 30)  // 语义重排序时扩大 3x 候选
+        : Math.max(limit, 1)
     const baseSelect = [
       'SELECT id, name, category_main, category_sub, longitude, latitude,',
       `  ST_Distance(geom::geography, ${spatialFragments.pointGeography}) AS distance_m`,
@@ -2590,7 +3498,7 @@ export class GeoLoomAgent {
       `WHERE ${spatialFragments.areaFilter}`,
     ]
 
-    const categoryFilters = this.buildCategoryFilters(categoryKey, spatialConstraint?.selectedCategories || [])
+    const categoryFilters = this.buildCategoryFilters(categoryKey, spatialConstraint?.selectedCategories || [], intent.categoryMain, intent.categorySub)
     const filters: string[] = [...categoryFilters.where]
     if (resolvedTemplateName === 'nearest_station' || intent.queryType === 'nearest_station' || categoryKey === 'metro_station') {
       return [
@@ -2627,6 +3535,11 @@ export class GeoLoomAgent {
       .reverse()
       .find((trace) => trace.skill === 'postgis' && trace.action === 'execute_spatial_sql' && trace.status === 'done')
       ?.result as { rows?: Record<string, unknown>[], comparison_pairs?: ComparisonPair[] } | undefined
+    const latestLookupRows = intent.queryType === 'nearest_station'
+      ? collectLatestLookupRows(state.toolCalls, 'nearest_station')
+      : intent.queryType === 'nearby_poi'
+        ? collectLatestLookupRows(state.toolCalls, 'nearby_poi')
+        : latestPostgisRows
     const latestComparisonResult = [...state.toolCalls]
       .reverse()
       .find((trace) => {
@@ -2738,15 +3651,98 @@ export class GeoLoomAgent {
       if (selectionDiagnostics) {
         view.meta.semantic_selection = selectionDiagnostics
       }
+
+      // entity_alignment 融合排序结果注入 area_overview 视图
+      const areaAlignmentTrace = [...state.toolCalls]
+        .reverse()
+        .find((trace) => trace.skill === 'entity_alignment' && trace.action === 'align_and_rank' && trace.status === 'done')
+      const areaAlignmentResult = areaAlignmentTrace?.result as {
+        ranked_results?: Array<{
+          name: string
+          fusionScore: number
+          verification: string
+          localPoi?: Record<string, unknown>
+          distance_m?: number | null
+          category?: string | null
+        }>
+        alignment_summary?: Record<string, unknown>
+      } | undefined
+
+      if (areaAlignmentResult?.ranked_results && areaAlignmentResult.ranked_results.length > 0) {
+        // 用对齐结果替换 items，使 Renderer 和前端 POI 列表展示对齐后的 POI
+        view.items = areaAlignmentResult.ranked_results.map((r, idx) => ({
+          name: r.name,
+          distance_m: r.distance_m ?? null,
+          category: r.category ?? null,
+          score: r.fusionScore,
+          rank: idx + 1,
+          meta: {
+            verification: r.verification,
+            fusionScore: r.fusionScore,
+          },
+        }))
+        // 同步更新 representativeSamples，使 Renderer 的「代表性样本」行展示对齐 POI
+        view.representativeSamples = areaAlignmentResult.ranked_results.slice(0, 5).map((r, idx) => ({
+          name: r.name,
+          distance_m: r.distance_m ?? null,
+          category: r.category ?? null,
+          score: r.fusionScore,
+          rank: idx + 1,
+          meta: {
+            verification: r.verification,
+            fusionScore: r.fusionScore,
+          },
+        }))
+        view.meta.entity_alignment = areaAlignmentResult.alignment_summary
+      }
+
       return view
+    }
+
+    // 检查是否有 entity_alignment 融合排序结果
+    const alignmentTrace = [...state.toolCalls]
+      .reverse()
+      .find((trace) => trace.skill === 'entity_alignment' && trace.action === 'align_and_rank' && trace.status === 'done')
+    const alignmentResult = alignmentTrace?.result as {
+      ranked_results?: Array<{
+        name: string
+        fusionScore: number
+        verification: string
+        localPoi?: Record<string, unknown>
+        distance_m?: number | null
+        category?: string | null
+      }>
+      alignment_summary?: Record<string, unknown>
+    } | undefined
+
+    console.log(`[诊断:buildEvidenceView] alignmentTrace存在=${!!alignmentTrace}, ranked_results长度=${alignmentResult?.ranked_results?.length ?? 'N/A'}, latestPostgisRows长度=${latestPostgisRows?.rows?.length ?? 'N/A'}`)
+    let items: EvidenceItem[]
+    if (alignmentResult?.ranked_results && alignmentResult.ranked_results.length > 0) {
+      // 使用融合排序后的结果，保留验证状态标注
+      items = alignmentResult.ranked_results.map((r, idx) => ({
+        name: r.name,
+        distance_m: r.distance_m ?? null,
+        category: r.category ?? null,
+        score: r.fusionScore,
+        rank: idx + 1,
+        meta: {
+          verification: r.verification,
+          fusionScore: r.fusionScore,
+        },
+      }))
+    } else {
+      items = normalizePoiRows(latestLookupRows?.rows || latestPostgisRows?.rows || [])
     }
 
     const view = this.evidenceFactory.create({
       intent,
       anchor: fallbackAnchor,
-      rows: latestPostgisRows?.rows || [],
-      items: normalizePoiRows(latestPostgisRows?.rows || []),
+      rows: latestLookupRows?.rows || latestPostgisRows?.rows || [],
+      items,
     })
+    if (alignmentResult?.alignment_summary) {
+      view.meta.entity_alignment = alignmentResult.alignment_summary
+    }
     if (semanticEvidence) {
       view.semanticEvidence = semanticEvidence
     }
@@ -2762,16 +3758,16 @@ export class GeoLoomAgent {
       return
     }
 
-    view.regionFeatures = parsed.featureTags
+    view.regionFeatures = parsed.featureTags as RegionFeatureTag[]
     view.regionFeatureSummary = parsed.summary || null
 
     if (parsed.featureTags.length > 0) {
       const nextHints = [
         ...(view.semanticHints || []),
-        ...parsed.featureTags.slice(0, 3).map((tag) => ({
-          label: tag.label,
-          detail: tag.detail || undefined,
-          score: tag.score,
+        ...parsed.featureTags.slice(0, 3).filter(Boolean).map((tag) => ({
+          label: tag!.label,
+          detail: tag!.detail || undefined,
+          score: tag!.score,
         })),
       ]
       view.semanticHints = nextHints.slice(0, 6)
@@ -2960,266 +3956,6 @@ export class GeoLoomAgent {
     }
   }
 
-  private async recoverCoreSpatialEvidenceIfNeeded(input: {
-    intent: DeterministicIntent
-    state: AgentTurnState
-    writer: SSEWriter
-    context: ReturnType<typeof createSkillExecutionContext>
-    providerReady?: boolean
-  }) {
-    const { intent, state, writer, context } = input
-    const existingAreaTemplates = intent.queryType === 'area_overview'
-      ? collectAreaInsightTemplateResults(state.toolCalls)
-      : new Map<string, Record<string, unknown>>()
-    const allowAreaInsightGapFill = intent.queryType !== 'area_overview'
-      || !input.providerReady
-      || !this.hasAlignedCorePostgisEvidence(intent, state)
-      || hasAgentLedAreaInsightEvidence(state.toolCalls)
-    if (!['nearby_poi', 'nearest_station', 'compare_places', 'area_overview'].includes(intent.queryType)) {
-      return false
-    }
-
-    const hasRegionComparison = intent.queryType === 'compare_places'
-      && (state.spatialConstraint?.regions.length || 0) >= 2
-    const needsPrimaryAnchor = Boolean(intent.placeName) && !hasCoordinates(state.anchors.primary) && !hasRegionComparison
-    const needsSecondaryAnchor = intent.queryType === 'compare_places'
-      && Boolean(intent.secondaryPlaceName)
-      && !hasCoordinates(state.anchors.secondary)
-      && !hasRegionComparison
-    const needsDeterministicSql = !this.hasAlignedCorePostgisEvidence(intent, state)
-      && (
-        intent.queryType === 'nearby_poi'
-        || intent.queryType === 'nearest_station'
-        || intent.queryType === 'compare_places'
-        || (intent.queryType === 'area_overview' && allowAreaInsightGapFill)
-      )
-    const needsOptionalAreaEnhancement = intent.queryType === 'area_overview'
-      && allowAreaInsightGapFill
-      && hasCoordinates(state.anchors.primary)
-      && AREA_INSIGHT_SEMANTIC_TEMPLATES.some((template) => !existingAreaTemplates.has(template))
-
-    if (!needsPrimaryAnchor && !needsSecondaryAnchor && !needsDeterministicSql && !needsOptionalAreaEnhancement) {
-      return false
-    }
-
-    let recovered = false
-
-    await writer.stage('tool_run')
-    await writer.thinking({
-      status: 'start',
-      message: '核心空间证据不足，正在切换确定性 postgis 兜底...',
-    })
-    await writer.reasoning({
-      content: '首轮工具结果还不足以稳定回答当前问题，正在补齐核心空间证据，优先确保范围内的主导结构、热点和竞争关系是可验证的。',
-    })
-
-    if (needsPrimaryAnchor && intent.placeName) {
-      await this.executeToolCall({
-        id: `fallback_resolve_primary_${state.toolCalls.length + 1}`,
-        name: 'postgis',
-        arguments: {
-          action: 'resolve_anchor',
-          payload: {
-            place_name: intent.placeName,
-            role: 'primary',
-          },
-        },
-      }, intent, state, context)
-      recovered = true
-    }
-
-    if (needsSecondaryAnchor && intent.secondaryPlaceName) {
-      await this.executeToolCall({
-        id: `fallback_resolve_secondary_${state.toolCalls.length + 1}`,
-        name: 'postgis',
-        arguments: {
-          action: 'resolve_anchor',
-          payload: {
-            place_name: intent.secondaryPlaceName,
-            role: 'secondary',
-          },
-        },
-      }, intent, state, context)
-      recovered = true
-    }
-
-    if (!needsDeterministicSql && !needsOptionalAreaEnhancement) {
-      return recovered
-    }
-
-    if (intent.queryType === 'compare_places') {
-      const canUseRegionComparison = (state.spatialConstraint?.regions.length || 0) >= 2
-      if (!canUseRegionComparison && (!hasCoordinates(state.anchors.primary) || !hasCoordinates(state.anchors.secondary))) {
-        return recovered
-      }
-
-      await this.executeToolCall({
-        id: `fallback_compare_sql_${state.toolCalls.length + 1}`,
-        name: 'postgis',
-        arguments: {
-          action: 'execute_spatial_sql',
-          payload: {
-            template: 'compare_places',
-            category_key: intent.categoryKey || 'food',
-            limit: 10,
-          },
-        },
-      }, intent, state, context)
-      return true
-    }
-
-    if (!hasCoordinates(state.anchors.primary)) {
-      return recovered
-    }
-
-    if (intent.queryType === 'area_overview') {
-      const existingTemplates = collectAreaInsightTemplateResults(state.toolCalls)
-      const missingTemplates = AREA_INSIGHT_CORE_TEMPLATES
-        .filter((template) => !existingTemplates.has(template))
-      const optionalTemplates = AREA_INSIGHT_SEMANTIC_TEMPLATES
-        .filter((template) => !existingTemplates.has(template))
-
-      if (missingTemplates.length > 0 || optionalTemplates.length > 0) {
-        await writer.reasoning({
-          content: `当前准备补取的结构证据包括：${[
-            ...missingTemplates,
-            ...optionalTemplates,
-          ].join('、')}。这样后面回答时，才能把“主导业态、热点、异常、机会”对应到真实证据上。`,
-        })
-      }
-
-      for (const template of missingTemplates) {
-        await this.executeToolCall({
-          id: `fallback_area_${template}_${state.toolCalls.length + 1}`,
-          name: 'postgis',
-          arguments: {
-            action: 'execute_spatial_sql',
-            payload: {
-              template,
-              category_key: intent.categoryKey || '',
-              limit: template === 'area_representative_sample'
-                ? 18
-                : template === 'area_h3_hotspots'
-                  ? 5
-                  : 8,
-            },
-          },
-        }, intent, state, context)
-      }
-
-      for (const template of optionalTemplates) {
-        await this.executeToolCall({
-          id: `fallback_area_${template}_${state.toolCalls.length + 1}`,
-          name: 'postgis',
-          arguments: {
-            action: 'execute_spatial_sql',
-            payload: {
-              template,
-              category_key: intent.categoryKey || '',
-              limit: template === 'area_aoi_context' ? 5 : 6,
-            },
-          },
-        }, intent, state, context)
-      }
-
-      return recovered || missingTemplates.length > 0 || optionalTemplates.length > 0
-    }
-
-    await this.executeToolCall({
-      id: `fallback_core_sql_${state.toolCalls.length + 1}`,
-      name: 'postgis',
-      arguments: {
-        action: 'execute_spatial_sql',
-        payload: {
-          template: intent.queryType === 'nearest_station'
-            ? 'nearest_station'
-            : intent.queryType === 'area_overview'
-              ? 'area_overview'
-              : 'nearby_poi',
-          category_key: intent.categoryKey || '',
-          limit: intent.queryType === 'nearest_station'
-            ? 1
-            : intent.queryType === 'area_overview'
-              ? 80
-              : 5,
-        },
-      },
-    }, intent, state, context)
-    return true
-  }
-
-  private hasAlignedCorePostgisEvidence(intent: DeterministicIntent, state: AgentTurnState) {
-    const latestPostgisResult = [...state.toolCalls]
-      .reverse()
-      .find((trace) => trace.skill === 'postgis' && trace.action === 'execute_spatial_sql' && trace.status === 'done')
-      ?.result as { rows?: Record<string, unknown>[], comparison_pairs?: ComparisonPair[] } | undefined
-
-    if (!latestPostgisResult) {
-      return false
-    }
-
-    if (intent.queryType === 'area_overview') {
-      const areaInsightResults = collectAreaInsightTemplateResults(state.toolCalls)
-      return AREA_INSIGHT_CORE_TEMPLATES.every((template) => {
-        const result = areaInsightResults.get(template)
-        return Array.isArray(result?.rows) && result.rows.length > 0
-      })
-    }
-
-    if (intent.queryType === 'compare_places') {
-      const pairs = [...state.toolCalls]
-        .reverse()
-        .find((trace) => {
-          if (trace.skill !== 'postgis' || trace.action !== 'execute_spatial_sql' || trace.status !== 'done') {
-            return false
-          }
-          const result = trace.result as { comparison_pairs?: ComparisonPair[] } | undefined
-          return Array.isArray(result?.comparison_pairs) && result.comparison_pairs.length > 0
-        })
-        ?.result as { comparison_pairs?: ComparisonPair[] } | undefined
-      const comparisonPairs = pairs?.comparison_pairs || []
-      if (comparisonPairs.length === 0) return false
-      if (!intent.categoryKey) return true
-      return comparisonPairs.every((pair) => pair.items.some((item) => this.matchesIntentCategory(
-        intent.categoryKey || '',
-        (item.meta as Record<string, unknown> | undefined) || {
-          category_main: item.categoryMain,
-          category_sub: item.categorySub || item.category,
-        },
-      )))
-    }
-
-    const rows = latestPostgisResult.rows || []
-    if (rows.length === 0) {
-      return false
-    }
-
-    if (!intent.categoryKey) {
-      return true
-    }
-
-    return rows.some((row) => this.matchesIntentCategory(intent.categoryKey || '', row))
-  }
-
-  private matchesIntentCategory(categoryKey: string, row: Record<string, unknown> = {}) {
-    const categoryMain = readCategoryValue(row, ['category_main', 'categoryMain'])
-    const categorySub = readCategoryValue(row, ['category_sub', 'categorySub', 'category'])
-
-    if (categoryKey === 'coffee') {
-      return categoryMain === '餐饮美食' && categorySub === '咖啡'
-    }
-
-    if (categoryKey === 'food') {
-      return categoryMain === '餐饮美食'
-    }
-
-    if (categoryKey === 'metro_station') {
-      return categoryMain === '交通设施服务' && categorySub === '地铁站'
-    }
-
-    return true
-  }
-
   private renderAnswer(view: EvidenceView): RenderedAnswer {
     const answer = this.renderer.render(view)
     const pois = view.items
@@ -3231,6 +3967,48 @@ export class GeoLoomAgent {
         result_count: pois.length,
         query_type: view.meta.queryType,
       },
+    }
+  }
+
+  private ensureMarkdownAnswer(input: {
+    answer: string
+    renderedAnswer: string
+    queryType: DeterministicIntent['queryType']
+  }) {
+    const answer = String(input.answer || '').trim()
+    const renderedAnswer = String(input.renderedAnswer || '').trim()
+
+    if (looksLikeMarkdownAnswer(answer)) {
+      return {
+        answer,
+        usedRenderedAnswer: false,
+      }
+    }
+
+    if (looksLikeMarkdownAnswer(renderedAnswer)) {
+      return {
+        answer: renderedAnswer,
+        usedRenderedAnswer: true,
+      }
+    }
+
+    if (!answer) {
+      return {
+        answer: renderedAnswer,
+        usedRenderedAnswer: true,
+      }
+    }
+
+    if (['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.queryType)) {
+      return {
+        answer: `## 结论\n- ${answer}`,
+        usedRenderedAnswer: false,
+      }
+    }
+
+    return {
+      answer,
+      usedRenderedAnswer: false,
     }
   }
 
@@ -3329,50 +4107,178 @@ export class GeoLoomAgent {
       lines.push(`用地参考: ${landuse.join('、')}`)
     }
 
+    // entity_alignment 对齐结果证据
+    const alignmentMeta = view.meta.entity_alignment as Record<string, unknown> | undefined
+    if (alignmentMeta) {
+      const dualCount = Number(alignmentMeta.dual_verified || 0)
+      const localOnlyCount = Number(alignmentMeta.local_only || 0)
+      const webOnlyCount = Number(alignmentMeta.web_only || 0)
+      const embedMs = Number(alignmentMeta.embed_recall_ms || 0)
+      const rerankMs = Number(alignmentMeta.rerank_ms || 0)
+      lines.push(`联网对齐: 双重验证 ${dualCount} 个、仅本地 ${localOnlyCount} 个、仅联网 ${webOnlyCount} 个${embedMs > 0 ? `、Embedding ${embedMs}ms` : ''}${rerankMs > 0 ? `、Reranker ${rerankMs}ms` : ''}`)
+      // 列出对齐后的 POI 名称（最高优先级证据）
+      const alignedItems = (view.items || []).filter(
+        (item) => (item.meta as Record<string, unknown>)?.verification
+      )
+      const dualNames = alignedItems
+        .filter((item) => (item.meta as Record<string, unknown>)?.verification === 'dual_verified')
+        .slice(0, 5)
+        .map((item) => `${item.name}${item.distance_m != null ? `(${Math.round(Number(item.distance_m))}m)` : ''}`)
+      if (dualNames.length > 0) {
+        lines.push(`双重验证样本: ${dualNames.join('、')}`)
+      }
+    }
+
     return lines
+  }
+
+  private buildLookupSynthesisEvidence(input: {
+    view: EvidenceView
+    toolCalls: ToolExecutionTrace[]
+  }) {
+    const lines: string[] = []
+    const anchorName = String(
+      input.view.anchor.resolvedPlaceName || input.view.anchor.displayName || input.view.anchor.placeName || ''
+    ).trim()
+
+    if (anchorName) {
+      lines.push(`查询锚点: ${anchorName}`)
+    }
+
+    const localItems = (input.view.items || [])
+      .slice(0, 6)
+      .map((item) => {
+        const category = String(item.category || item.categorySub || item.categoryMain || '').trim()
+        const distance = Number(item.distance_m)
+        const distanceLabel = Number.isFinite(distance) ? `${Math.round(distance)}m` : ''
+        return [item.name, category, distanceLabel].filter(Boolean).join(' · ')
+      })
+      .filter(Boolean)
+    if (localItems.length > 0) {
+      lines.push(`本地命中: ${localItems.join('、')}`)
+    }
+
+    const alignmentMeta = input.view.meta.entity_alignment as Record<string, unknown> | undefined
+    if (alignmentMeta) {
+      const dualCount = Number(alignmentMeta.dual_verified || 0)
+      const localOnlyCount = Number(alignmentMeta.local_only || 0)
+      const webOnlyCount = Number(alignmentMeta.web_only || 0)
+      lines.push(`实体对齐: 双重验证 ${dualCount} 个、仅本地 ${localOnlyCount} 个、仅联网 ${webOnlyCount} 个`)
+      const alignedSamples = (input.view.items || [])
+        .filter((item) => (item.meta as Record<string, unknown> | undefined)?.verification)
+        .slice(0, 4)
+        .map((item) => {
+          const verification = String((item.meta as Record<string, unknown> | undefined)?.verification || '').trim()
+          return `${item.name}${verification ? `(${verification})` : ''}`
+        })
+      if (alignedSamples.length > 0) {
+        lines.push(`对齐样本: ${alignedSamples.join('、')}`)
+      }
+    }
+
+    const webObservations = collectWebSearchObservations(input.toolCalls)
+    for (const observation of webObservations) {
+      const sourceLabel = observation.source === 'tavily' ? 'Tavily' : '多引擎'
+      const titles = observation.items
+        .slice(0, 3)
+        .map((item) => item.title)
+        .filter(Boolean)
+      lines.push(
+        observation.items.length > 0
+          ? `联网搜索(${sourceLabel}): 命中 ${observation.items.length} 条；样本：${titles.join('、')}`
+          : `联网搜索(${sourceLabel}): 未命中稳定结果`
+      )
+      if (observation.answerPreview) {
+        lines.push(`联网摘要(${sourceLabel}): ${observation.answerPreview}`)
+      }
+    }
+
+    return lines
+  }
+
+  private async streamAnswerChunks(writer: SSEWriter, answer: string) {
+    const chunks = splitStreamableText(answer)
+    if (chunks.length === 0) {
+      return
+    }
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      await writer.message(chunks[index])
+      if (index < chunks.length - 1) {
+        await delay(10)
+      }
+    }
   }
 
   private async synthesizeGroundedAnswer(input: {
     provider: LLMProvider
+    contract?: NLContract
     intent: DeterministicIntent
     evidenceView: EvidenceView
     rendered: RenderedAnswer
+    toolCalls: ToolExecutionTrace[]
     spatialConstraint: SpatialAnalysisConstraint | null
     rawQuery: string
   }) {
     if (!input.provider.isReady()) return null
-    if (input.intent.queryType !== 'area_overview') return null
+    if (!['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.intent.queryType)) return null
 
     const scopeSummary = this.describeSpatialConstraint(input.spatialConstraint)
-    const evidenceLines = this.buildAreaSynthesisEvidence(input.evidenceView)
+    const evidenceLines = ['nearby_poi', 'nearest_station'].includes(input.intent.queryType)
+      ? this.buildLookupSynthesisEvidence({ view: input.evidenceView, toolCalls: input.toolCalls })
+      : this.buildAreaSynthesisEvidence(input.evidenceView)
     if (evidenceLines.length === 0) return null
+
+    const narrativeClause = input.contract?.narrative
+      ? `任务契约：${input.contract.narrative}`
+      : ''
+    const forbiddenClause = input.contract?.meta.forbiddenBlocks.length
+      ? `禁止涉及：${input.contract.meta.forbiddenBlocks.join('、')}。`
+      : ''
 
     const questionMode = String(input.evidenceView.meta.questionMode || 'summary').trim() || 'summary'
     const areaSubjectConfidence = String(input.evidenceView.areaSubject?.confidence || '').trim()
     const explicitAreaSubject = areaSubjectConfidence === 'high'
       ? String(input.evidenceView.areaSubject?.title || '').trim()
       : ''
+    const answerStyle = input.intent.queryType === 'nearest_station'
+      ? '先直接给出最近结果，再补一句距离或类别依据。'
+      : input.intent.queryType === 'nearby_poi'
+        ? '先直接回答最值得关注的对象，再带出 2-4 个证据样本。'
+        : '写成 1-2 段自然中文，不要写成日志或执行列表。'
 
     const synthesisPrompt = [
       `问题：${input.rawQuery}`,
+      narrativeClause,
       `问题模式：${questionMode}`,
       `范围：${scopeSummary}`,
-      '只基于下面证据写最终回答，不要写进度更新，不要写下一步动作，不要复述取证过程。',
-      '必须输出 Markdown，包含：## 区域主语 / ## 关键特征 / ## 热点与结构 / ## 机会与风险。',
-      explicitAreaSubject
-        ? `必须直接写“${explicitAreaSubject}”，不要只写“当前区域”。`
-        : '必须明确写出区域主语，不要只写“当前区域”。如果 AOI / 用地信号是混合的，优先选择更宽、证据更充分的区域主语，不要被单个校园或楼盘名字带偏。',
+      forbiddenClause,
+      '请把下面证据整理成用户可直接阅读的最终中文回答。',
+      '铁律：',
+      '1. 忠于用户原始提问。用户问的是什么，你就仅仅回答什么。',
+      '2. 先给直接结论，再给必要证据。',
+      '3. 写成自然中文，不要写成日志、探针列表或系统回放。',
+      '4. 如果底层数据没有呈现，直接回答"未包含相关数据"，绝不推演。',
+      '5. 如果联网搜索没有命中稳定结果，要明确说联网未提供稳定补充证据，不要编造口碑。',
+      '6. 如果本地结果与联网结果做了实体对齐，优先写双重验证对象。',
+      '7. 附近检索和最近地铁站问题必须先回答具体对象，不要扩展成片区分析。',
+      input.intent.queryType === 'area_overview'
+        ? (explicitAreaSubject
+            ? `必须直接写"${explicitAreaSubject}"，不要只写"当前区域"。`
+            : '必须明确写出区域主语，不要只写"当前区域"。如果 AOI / 用地信号是混合的，优先选择更宽、证据更充分的区域主语，不要被单个校园或楼盘名字带偏。')
+        : '',
+      answerStyle,
       '只保留有解释力的数字和样本，不要罗列无意义统计。',
       '证据：',
       ...evidenceLines.map((line) => `- ${line}`),
-    ].join('\n')
+    ].filter(Boolean).join('\n')
 
     try {
       const response = await input.provider.complete({
         messages: [
           {
             role: 'system',
-            content: '你负责把已验证空间证据写成最终中文回答。禁止脱离证据自由发挥。',
+            content: '你是一个绝对客观的观察器界面，没有人类感情，不是规划师也不是分析专家。你负责把已验证空间证据写成最终中文回答。禁止脱离证据自由发挥。',
           },
           {
             role: 'user',
@@ -3402,6 +4308,7 @@ export class GeoLoomAgent {
     decision: string
     taskMode?: 'query' | 'analysis'
     answerSource?: string
+    recommendedTrack?: 'fast' | 'deep'
   }) {
     const fallbackAnchorCoordSys = input.intent.anchorSource === 'user_location' ? 'wgs84' : DEFAULT_POI_COORD_SYS
     const semanticEvidence = collectSemanticEvidence(input.toolCalls)
@@ -3426,6 +4333,8 @@ export class GeoLoomAgent {
       tool_call_count: input.toolCalls.length,
       confidence_gate: input.decision,
       answer_source: input.answerSource || (input.providerReady ? 'llm_or_guardrail' : 'deterministic_renderer'),
+      // 阶段 8：暴露 Fast/Deep Track 路径指标
+      recommended_track: input.recommendedTrack || null,
       semantic_evidence_level: semanticEvidence?.level,
       semantic_evidence_mode: semanticEvidence?.mode,
       semantic_evidence_weak: semanticEvidence?.weakEvidence,
@@ -3438,6 +4347,13 @@ export class GeoLoomAgent {
     state: AgentTurnState
     answer: string
     evidenceView?: EvidenceView
+    /** 阶段 0 新增：分阶段耗时 */
+    intentMs?: number
+    evidenceRuntimeMs?: number
+    synthesisMs?: number
+    rawQuery?: string
+    queryType?: string
+    llmRoundCount?: number
   }) {
     this.metrics.recordRequest({
       latencyMs: Date.now() - input.startedAt,
@@ -3445,6 +4361,22 @@ export class GeoLoomAgent {
       sqlAccepted: input.state.sqlValidationAttempts > 0
         && input.state.sqlValidationAttempts === input.state.sqlValidationPassed,
       answerGrounded: this.isAnswerGrounded(input.answer, input.evidenceView),
+      // 阶段 0 新增：分阶段耗时
+      intentMs: input.intentMs,
+      evidenceRuntimeMs: input.evidenceRuntimeMs,
+      synthesisMs: input.synthesisMs,
+      // 阶段 0 新增：LLM 调用轮次
+      llmRoundCount: input.llmRoundCount,
+      // 阶段 0 新增：工具调用次数
+      toolCallCount: input.state.toolCalls.length,
+      // P0 修复：queryType 必须传入真实值，否则 detectUnnecessaryAnalysis 会跳过所有查询类型
+      unnecessaryAnalysis: input.rawQuery
+        ? detectUnnecessaryAnalysis({
+          rawQuery: input.rawQuery,
+          answer: input.answer,
+          intent: { queryType: input.queryType || '' },
+        })
+        : false,
     })
   }
 

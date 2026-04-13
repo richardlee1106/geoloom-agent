@@ -4,7 +4,7 @@ import { GeoLoomAgent } from '../../../src/agent/GeoLoomAgent.js'
 import { SessionManager } from '../../../src/agent/SessionManager.js'
 import { ConversationMemory } from '../../../src/agent/ConversationMemory.js'
 import { createApp } from '../../../src/app.js'
-import type { LLMProvider } from '../../../src/llm/types.js'
+import type { LLMContentBlock, LLMProvider, LLMResponse } from '../../../src/llm/types.js'
 import { InMemoryLLMProvider } from '../../../src/llm/InMemoryLLMProvider.js'
 import { LongTermMemory } from '../../../src/memory/LongTermMemory.js'
 import { MemoryManager } from '../../../src/memory/MemoryManager.js'
@@ -23,14 +23,14 @@ import type { FaissIndex } from '../../../src/integration/faissIndex.js'
 
 function createMockLLMResponse(input: {
   message?: string | null
-  contentBlocks?: Array<Record<string, unknown>>
+  contentBlocks?: LLMContentBlock[]
   toolCalls?: Array<{
     id: string
     name: string
     arguments: Record<string, unknown>
   }>
   finishReason: 'tool_calls' | 'stop'
-}) {
+}): LLMResponse {
   const toolCalls = input.toolCalls || []
 
   return {
@@ -281,6 +281,32 @@ function buildTestApp(options: {
                 longitude: 114.312,
                 latitude: 30.581,
                 distance_m: 220,
+              },
+            ],
+            rowCount: 2,
+          }
+        }
+
+        if (sql.includes("category_main = '住宿服务'")) {
+          return {
+            rows: [
+              {
+                id: 41,
+                name: '光谷凯悦酒店',
+                category_main: '住宿服务',
+                category_sub: '宾馆酒店',
+                longitude: 114.4138,
+                latitude: 30.5086,
+                distance_m: 180,
+              },
+              {
+                id: 42,
+                name: '星程酒店',
+                category_main: '住宿服务',
+                category_sub: '宾馆酒店',
+                longitude: 114.4126,
+                latitude: 30.5079,
+                distance_m: 260,
               },
             ],
             rowCount: 2,
@@ -552,6 +578,133 @@ describe('POST /api/geo/chat', () => {
     expect(refined.results.stats.query_type).toBe('nearby_poi')
     expect(refined.results.evidence_view.type).toBe('poi_list')
     expect(refined.tool_calls.length).toBeGreaterThan(0)
+
+    await app.close()
+  })
+
+  it('inherits the previous nearby category intent for elliptical follow-up queries in the same session', async () => {
+    const app = buildTestApp({
+      provider: {
+        isReady: () => true,
+        getStatus: () => ({
+          ready: true,
+          provider: 'mock-follow-up-provider',
+          model: 'mock-follow-up-v1',
+        }),
+        complete: async ({ messages }) => {
+          const prompt = String(messages.find((message) => message.role === 'user')?.content || '')
+
+          if (prompt.includes('user_query: 这附近高分推荐的酒店，最好靠近地铁站。补充追问：那这儿呢？')) {
+            return createMockLLMResponse({
+              message: JSON.stringify({
+                queryType: 'nearby_poi',
+                anchorSource: 'map_view',
+                placeName: null,
+                secondaryPlaceName: null,
+                targetCategory: '住宿服务',
+                comparisonTarget: null,
+                categoryKey: 'hotel',
+                needsClarification: false,
+                clarificationHint: null,
+                needsWebSearch: true,
+              }),
+              finishReason: 'stop',
+              toolCalls: [],
+            })
+          }
+
+          if (prompt.includes('user_query: 这附近高分推荐的酒店，最好靠近地铁站')) {
+            return createMockLLMResponse({
+              message: JSON.stringify({
+                queryType: 'nearby_poi',
+                anchorSource: 'map_view',
+                placeName: null,
+                secondaryPlaceName: null,
+                targetCategory: '住宿服务',
+                comparisonTarget: null,
+                categoryKey: 'hotel',
+                needsClarification: false,
+                clarificationHint: null,
+                needsWebSearch: false,
+              }),
+              finishReason: 'stop',
+              toolCalls: [],
+            })
+          }
+
+          return createMockLLMResponse({
+            message: JSON.stringify({
+              queryType: 'unsupported',
+              anchorSource: 'unknown',
+              placeName: null,
+              secondaryPlaceName: null,
+              targetCategory: null,
+              comparisonTarget: null,
+              categoryKey: null,
+              needsClarification: true,
+              clarificationHint: '请再具体一点。',
+              needsWebSearch: false,
+            }),
+            finishReason: 'stop',
+            toolCalls: [],
+          })
+        },
+      },
+    })
+    await app.ready()
+
+    const sessionId = 'sess_followup_context_001'
+    const firstResponse = await app.inject({
+      method: 'POST',
+      url: '/api/geo/chat',
+      payload: {
+        messages: [{ role: 'user', content: '这附近高分推荐的酒店，最好靠近地铁站' }],
+        options: {
+          requestId: 'req_followup_context_001',
+          sessionId,
+          spatialContext: {
+            center: { lon: 114.33412099978432, lat: 30.57687000005052 },
+            radius: 800,
+            coordSys: 'gcj02',
+          },
+        },
+      },
+    })
+
+    expect(firstResponse.statusCode).toBe(200)
+    const firstEvents = parseSSE(firstResponse.body)
+    const firstRefined = firstEvents.find((item) => item.event === 'refined_result')?.data
+    expect(firstRefined.results.stats.query_type).toBe('nearby_poi')
+    expect(firstRefined.answer).toMatch(/酒店/)
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: '/api/geo/chat',
+      payload: {
+        messages: [{ role: 'user', content: '那这儿呢？' }],
+        options: {
+          requestId: 'req_followup_context_002',
+          sessionId,
+          spatialContext: {
+            center: { lon: 114.412919, lat: 30.507681 },
+            radius: 800,
+            coordSys: 'gcj02',
+          },
+        },
+      },
+    })
+
+    expect(secondResponse.statusCode).toBe(200)
+    const secondEvents = parseSSE(secondResponse.body)
+    const secondIntentPreview = secondEvents.find((item) => item.event === 'intent_preview')?.data
+    const secondRefined = secondEvents.find((item) => item.event === 'refined_result')?.data
+
+    expect(secondIntentPreview?.parserProvider).toBe('llm')
+    expect(secondIntentPreview?.targetCategory).toBe('住宿服务')
+    expect(secondRefined.results.stats.query_type).toBe('nearby_poi')
+    expect(secondRefined.intent.targetCategory).toBe('住宿服务')
+    expect(secondRefined.answer).toMatch(/光谷凯悦酒店|星程酒店/)
+    expect(secondRefined.answer).not.toMatch(/地名地址信息/)
 
     await app.close()
   })

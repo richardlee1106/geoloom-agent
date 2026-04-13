@@ -53,6 +53,8 @@ describe('Renderer', () => {
       },
     })
 
+    expect(answer).toMatch(/^## 结论/m)
+    expect(answer).toMatch(/## 候选地点/)
     expect(answer).toMatch(/找到 6 个地铁站相关地点/)
     expect(answer).toMatch(/1\. 湖北大学地铁站E口/)
     expect(answer).toMatch(/6\. 秦园路\(地铁站\)/)

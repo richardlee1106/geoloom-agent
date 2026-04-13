@@ -147,6 +147,38 @@ export const SSE_EVENT_SCHEMAS = Object.freeze({
     type: 'object',
     additionalProperties: true
   }),
+  web_search: withEventMeta({
+    type: 'object',
+    required: ['status'],
+    properties: {
+      status: { type: 'string' },
+      source: { type: 'string' },
+      query: { type: 'string' },
+      pages_read: { type: 'number' },
+      answer_preview: { type: 'string' },
+      message: { type: 'string' },
+    },
+    additionalProperties: true
+  }),
+  entity_alignment: withEventMeta({
+    type: 'object',
+    required: ['status'],
+    properties: {
+      status: { type: 'string' },
+      total_web_results: { type: 'number' },
+      total_local_pois: { type: 'number' },
+      matched_count: { type: 'number' },
+      dual_verified: { type: 'number' },
+      local_only: { type: 'number' },
+      web_only: { type: 'number' },
+      message: { type: 'string' },
+      sample_matches: {
+        type: 'array',
+        items: { type: 'object' }
+      }
+    },
+    additionalProperties: true
+  }),
   refined_result: withEventMeta({
     type: 'object',
     additionalProperties: true

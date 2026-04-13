@@ -1,0 +1,61 @@
+{
+  "global_domains": [
+    "wuhan.gov.cn",
+    "visitwuhan.com",
+    "ctrip.com",
+    "you.ctrip.com",
+    "mafengwo.cn",
+    "qyer.com",
+    "dianping.com",
+    "meituan.com",
+    "qunar.com",
+    "tuniu.com",
+    "xiaohongshu.com",
+    "douyin.com",
+    "zhihu.com",
+    "sohu.com",
+    "qq.com"
+  ],
+  "scene_domains": {
+    "food": [
+      "dianping.com",
+      "meituan.com",
+      "xiaohongshu.com",
+      "douyin.com",
+      "zhihu.com",
+      "sohu.com"
+    ],
+    "hotel": [
+      "ctrip.com",
+      "you.ctrip.com",
+      "qunar.com",
+      "meituan.com",
+      "tuniu.com",
+      "zhihu.com"
+    ],
+    "scenic": [
+      "visitwuhan.com",
+      "wuhan.gov.cn",
+      "you.ctrip.com",
+      "ctrip.com",
+      "mafengwo.cn",
+      "qyer.com",
+      "zhihu.com",
+      "sohu.com"
+    ],
+    "park": [
+      "wuhan.gov.cn",
+      "visitwuhan.com",
+      "you.ctrip.com",
+      "ctrip.com",
+      "qq.com",
+      "zhihu.com",
+      "sohu.com"
+    ],
+    "metro_station": [
+      "wuhan.gov.cn",
+      "qq.com",
+      "zhihu.com"
+    ]
+  }
+}

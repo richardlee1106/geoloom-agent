@@ -1093,6 +1093,70 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     expect(intent.needsClarification).toBe(false)
   })
 
+  it('prefers llm intent planning for map-view queries even when embedding is confident', async () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+      provider: createJsonProvider({
+        queryType: 'nearby_poi',
+        anchorSource: 'map_view',
+        placeName: null,
+        targetCategory: '酒店',
+        needsClarification: false,
+        clarificationHint: null,
+        needsWebSearch: true,
+        toolIntent: 'candidate_reputation',
+        searchIntentHint: '酒店 评分 推荐',
+      }),
+      intentClassifier: {
+        isReady: true,
+        classify: async () => ({
+          queryType: 'nearby_poi',
+          confidence: 0.92,
+          needsWebSearch: true,
+          webSearchConfidence: 0.88,
+          latencyMs: 12,
+          usedEmbedding: true,
+        }),
+      } as any,
+    })
+
+    const resolution = await (agent as any).resolveIntent({
+      request: {
+        messages: [{ role: 'user', content: '这块有哪些高分推荐的酒店？' }],
+        options: {
+          spatialContext: {
+            viewport: [114.3, 30.55, 114.34, 30.58],
+            center: { lon: 114.32, lat: 30.565 },
+          },
+        },
+      },
+      rawQuery: '这块有哪些高分推荐的酒店？',
+      fallbackIntent: {
+        queryType: 'unsupported',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '这块有哪些高分推荐的酒店？',
+        placeName: null,
+        anchorSource: 'map_view',
+        secondaryPlaceName: null,
+        targetCategory: null,
+        comparisonTarget: null,
+        categoryKey: null,
+        radiusM: 800,
+        needsClarification: true,
+        clarificationHint: '请更明确说明你的查询目标。',
+      },
+      followUpHint: null,
+      providerReady: true,
+    })
+
+    expect(resolution.source).toBe('llm')
+    expect(resolution.intent.queryType).toBe('nearby_poi')
+    expect(resolution.intent.anchorSource).toBe('map_view')
+    expect(resolution.intent.toolIntent).toBe('candidate_reputation')
+    expect(resolution.intent.searchIntentHint).toBe('酒店 评分 推荐')
+  })
+
   it('builds a structured tool-loop handoff from the resolved LLM intent instead of reusing raw phrasing', () => {
     const agent = new GeoLoomAgent({
       registry: new SkillRegistry(),

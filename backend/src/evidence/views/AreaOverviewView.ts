@@ -13,6 +13,14 @@ import type {
 } from '../../chat/types.js'
 import { buildAnomalySignals, buildLivelihoodProfile } from '../areaInsight/livelihoodProfile.js'
 import { buildOpportunitySignals } from '../areaInsight/opportunitySignals.js'
+import {
+  classifyRepresentativeAnchorType,
+  getRepresentativeAnchorPriority,
+  isLargeViewport,
+  prioritizeRepresentativeItems,
+  sortRepresentativeAoiContext,
+  type RepresentativeAnchorType,
+} from '../areaInsight/representativeAnchorPriority.js'
 
 function normalizeAnchor(anchor: ResolvedAnchor): EvidenceAnchor {
   return {
@@ -204,11 +212,7 @@ function isInvalidSubjectName(name: string) {
 }
 
 function isCampusLikeText(text: string) {
-  return /(大学|学院|学校|校园|校区)/u.test(String(text || '').trim())
-}
-
-function isExplicitAnchorSubjectText(text: string) {
-  return /(大学|学院|学校|校区)/u.test(String(text || '').trim())
+  return classifyRepresentativeAnchorType({ name: text }) === 'campus'
 }
 
 function normalizeSubjectAnchorName(name: string) {
@@ -218,6 +222,11 @@ function normalizeSubjectAnchorName(name: string) {
   const explicitCampus = raw.match(/(.+?(大学|学院|学校|校区))/u)
   if (explicitCampus?.[1]) {
     return explicitCampus[1].trim()
+  }
+
+  const explicitStation = raw.match(/(.+?地铁站)/u)
+  if (explicitStation?.[1]) {
+    return explicitStation[1].trim()
   }
 
   const normalized = raw
@@ -255,39 +264,64 @@ function buildAreaSubject(input: {
   aoiContext: AreaAoiContextItem[]
   landuseContext: AreaLanduseContextItem[]
   representativeItems: EvidenceItem[]
+  viewportContext?: DeterministicIntent['viewportContext']
 }): AreaSubject | undefined {
   const candidates = input.aoiContext
     .map((item) => {
       const rawName = String(item.name || '').trim()
       const anchorName = normalizeSubjectAnchorName(rawName)
+      const anchorType = classifyRepresentativeAnchorType({
+        name: rawName,
+        fclass: item.fclass,
+      })
       return {
         rawName,
         anchorName,
-        campusLike: isCampusLikeText(rawName) || /school|education|campus|university|college/i.test(String(item.fclass || '')),
+        anchorType,
         weight: Number(item.population || item.areaSqm || 1),
       }
     })
     .filter((item) => item.anchorName && !isGenericAreaName(item.anchorName))
     .sort((left, right) => {
-      if (Number(right.campusLike) !== Number(left.campusLike)) {
-        return Number(right.campusLike) - Number(left.campusLike)
+      const priorityDiff = getRepresentativeAnchorPriority(left.anchorType) - getRepresentativeAnchorPriority(right.anchorType)
+      if (priorityDiff !== 0) {
+        return priorityDiff
       }
       if (right.weight !== left.weight) {
         return right.weight - left.weight
       }
-      return right.anchorName.length - left.anchorName.length
+      return left.anchorName.length - right.anchorName.length
     })
 
   let anchorName = candidates[0]?.anchorName || ''
   let reasons = candidates[0]?.rawName ? [`AOI 命中 ${candidates[0].rawName}`] : []
+  let anchorType: RepresentativeAnchorType = candidates[0]?.anchorType || 'other'
 
   if (!anchorName) {
     const itemCandidate = input.representativeItems
-      .map((item) => normalizeSubjectAnchorName(item.name))
-      .find((name) => isExplicitAnchorSubjectText(name) && !isGenericAreaName(name))
+      .map((item) => ({
+        rawName: item.name,
+        anchorName: normalizeSubjectAnchorName(item.name),
+        anchorType: classifyRepresentativeAnchorType({
+          name: item.name,
+          categoryMain: item.categoryMain,
+          categorySub: item.categorySub || item.category,
+          allowNameFallback: false,
+        }),
+        distanceM: Number.isFinite(Number(item.distance_m)) ? Number(item.distance_m) : Number.MAX_SAFE_INTEGER,
+      }))
+      .filter((item) => item.anchorName && item.anchorType !== 'other' && !isGenericAreaName(item.anchorName))
+      .sort((left, right) => {
+        const priorityDiff = getRepresentativeAnchorPriority(left.anchorType) - getRepresentativeAnchorPriority(right.anchorType)
+        if (priorityDiff !== 0) {
+          return priorityDiff
+        }
+        return left.distanceM - right.distanceM
+      })[0]
     if (itemCandidate) {
-      anchorName = itemCandidate
-      reasons = [`代表样本命中 ${itemCandidate}`]
+      anchorName = itemCandidate.anchorName
+      anchorType = itemCandidate.anchorType
+      reasons = [`代表样本命中 ${itemCandidate.rawName}`]
     }
   }
 
@@ -295,6 +329,7 @@ function buildAreaSubject(input: {
     const fallbackAnchor = normalizeSubjectAnchorName(input.anchor.resolved_place_name || input.anchor.display_name || input.anchor.place_name)
     if (fallbackAnchor && !isGenericAreaName(fallbackAnchor)) {
       anchorName = fallbackAnchor
+      anchorType = classifyRepresentativeAnchorType({ name: fallbackAnchor })
       reasons = [`锚点命中 ${fallbackAnchor}`]
     }
   }
@@ -307,10 +342,18 @@ function buildAreaSubject(input: {
     aoiContext: input.aoiContext,
     landuseContext: input.landuseContext,
   })
-  const campusLike = isCampusLikeText(anchorName) || semanticFlags.hasEducation
+  const campusLike = anchorType === 'campus' || isCampusLikeText(anchorName) || semanticFlags.hasEducation
 
   let typeHint = '混合片区'
-  if (campusLike && semanticFlags.hasResidential && semanticFlags.hasCommercial) {
+  if (anchorType === 'scenic' && semanticFlags.hasCommercial) {
+    typeHint = '景区商业带'
+  } else if (anchorType === 'scenic') {
+    typeHint = '景区片区'
+  } else if (anchorType === 'commercial') {
+    typeHint = '商业片区'
+  } else if (anchorType === 'station') {
+    typeHint = '交通节点片区'
+  } else if (campusLike && semanticFlags.hasResidential && semanticFlags.hasCommercial) {
     typeHint = '校园生活带'
   } else if (campusLike && semanticFlags.hasCommercial) {
     typeHint = '校园商业带'
@@ -330,8 +373,13 @@ function buildAreaSubject(input: {
     title: anchorName.includes(typeHint) ? anchorName : `${anchorName}${typeHint}`,
     anchorName,
     typeHint,
-    confidence: campusLike && (semanticFlags.hasResidential || semanticFlags.hasCommercial) ? 'high' : candidates.length > 0 ? 'medium' : 'low',
-    reasons,
+    confidence: (
+      (campusLike && (semanticFlags.hasResidential || semanticFlags.hasCommercial))
+      || (isLargeViewport(input.viewportContext) && getRepresentativeAnchorPriority(anchorType) < getRepresentativeAnchorPriority('other'))
+    ) ? 'high' : candidates.length > 0 ? 'medium' : 'low',
+    reasons: isLargeViewport(input.viewportContext) && getRepresentativeAnchorPriority(anchorType) < getRepresentativeAnchorPriority('other')
+      ? [...reasons, `大 viewport 优先采用 ${anchorType} 主锚点`]
+      : reasons,
   }
 }
 
@@ -392,12 +440,19 @@ export function buildAreaOverviewView(input: {
     ? input.areaInsight.representativeSamples
     : input.rows
   const items = representativeRows.map(normalizeAreaItem)
+  const representativeSamples = prioritizeRepresentativeItems(items, input.intent.viewportContext)
   const histogramBuckets = buildBucketsFromHistogram(input.areaInsight?.categoryHistogram)
   const buckets = histogramBuckets.length > 0
     ? histogramBuckets
     : buildBuckets(items)
-  const hotspots = buildHotspots(input.areaInsight?.hotspotCells, items)
-  const aoiContext = buildAoiContext(input.areaInsight?.aoiContext)
+  const hotspots = buildHotspots(
+    input.areaInsight?.hotspotCells,
+    representativeSamples.length > 0 ? representativeSamples : items,
+  )
+  const aoiContext = sortRepresentativeAoiContext(
+    buildAoiContext(input.areaInsight?.aoiContext),
+    input.intent.viewportContext,
+  )
   const landuseContext = buildLanduseContext(input.areaInsight?.landuseContext)
   const areaProfile = buildLivelihoodProfile({
     items,
@@ -412,14 +467,15 @@ export function buildAreaOverviewView(input: {
   const confidence = buildConfidence({
     hotspots,
     profileAvailable: Boolean(areaProfile),
-    representativeSamples: items,
+    representativeSamples: representativeSamples.length > 0 ? representativeSamples : items,
     competitionDensity: input.areaInsight?.competitionDensity,
   })
   const areaSubject = buildAreaSubject({
     anchor: input.anchor,
     aoiContext,
     landuseContext,
-    representativeItems: items,
+    representativeItems: representativeSamples.length > 0 ? representativeSamples : items,
+    viewportContext: input.intent.viewportContext,
   })
 
   return {
@@ -434,12 +490,13 @@ export function buildAreaOverviewView(input: {
       queryType: input.intent.queryType,
       rawQuery: input.intent.rawQuery,
       questionMode: inferAreaQuestionMode(input.intent.rawQuery),
+      viewportScale: input.intent.viewportContext?.scale || 'unknown',
     },
     areaProfile,
     hotspots,
     anomalySignals,
     opportunitySignals,
-    representativeSamples: items,
+    representativeSamples: representativeSamples.length > 0 ? representativeSamples : items,
     confidence,
     areaSubject,
     aoiContext,

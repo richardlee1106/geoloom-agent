@@ -32,6 +32,15 @@ function buildMarkdownSection(title: string, lines: Array<unknown>) {
   return [`## ${title}`, ...cleaned.map((line) => `- ${line}`)].join('\n')
 }
 
+function buildMarkdownNumberedSection(title: string, lines: Array<unknown>) {
+  const cleaned = lines
+    .map((line) => trimClause(line))
+    .filter(Boolean)
+
+  if (cleaned.length === 0) return ''
+  return [`## ${title}`, ...cleaned.map((line, index) => `${index + 1}. ${line}`)].join('\n')
+}
+
 function humanizeCategoryLabel(label: unknown) {
   const normalized = String(label || '').trim()
   if (!normalized) return '未分类'
@@ -269,6 +278,55 @@ function inferAreaSemanticContext(view: EvidenceView) {
   return `从 AOI 与用地看，这里更像${areaType}${nameTail}`
 }
 
+/**
+ * 构建 entity_alignment 对齐结果的 Markdown section
+ * 展示联网搜索与本地 POI 对齐后的验证样本
+ */
+function buildAlignmentSection(
+  items: Array<{ name: string; distance_m?: number | null; category?: string | null; score?: number | null; meta?: Record<string, unknown> }>,
+  summary: Record<string, unknown>,
+) {
+  const dualVerified = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'dual_verified')
+  const localOnly = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'local_only')
+  const webOnly = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'web_only')
+
+  const lines: string[] = []
+
+  // 双重验证样本（最高可信度）
+  if (dualVerified.length > 0) {
+    const names = dualVerified.slice(0, 5).map((item) => {
+      const dist = item.distance_m != null ? `，约${formatDistance(item.distance_m)}` : ''
+      const cat = item.category ? `（${humanizeCategoryLabel(item.category)}）` : ''
+      return `${item.name}${cat}${dist}`
+    })
+    lines.push(`双重验证（本地+联网）：${names.join('、')}`)
+  }
+
+  // 仅本地
+  if (localOnly.length > 0) {
+    const names = localOnly.slice(0, 3).map((item) => item.name)
+    lines.push(`仅本地数据：${names.join('、')}`)
+  }
+
+  // 仅联网
+  if (webOnly.length > 0) {
+    const names = webOnly.slice(0, 3).map((item) => item.name)
+    lines.push(`仅联网数据：${names.join('、')}`)
+  }
+
+  // 摘要统计
+  const totalWeb = Number(summary.total_web_results || 0)
+  const totalLocal = Number(summary.total_local_pois || 0)
+  const matchedCount = Number(summary.matched_count || 0)
+  const embedMs = Number(summary.embed_recall_ms || 0)
+  const rerankMs = Number(summary.rerank_ms || 0)
+  if (totalWeb > 0 || totalLocal > 0) {
+    lines.push(`对齐统计：联网 ${totalWeb} 条、本地 ${totalLocal} 个、匹配 ${matchedCount} 对${embedMs > 0 ? `、Embedding ${embedMs}ms` : ''}${rerankMs > 0 ? `、Reranker ${rerankMs}ms` : ''}`)
+  }
+
+  return buildMarkdownSection('联网验证样本', lines)
+}
+
 function inferAreaQuestionMode(view: EvidenceView) {
   const explicit = String(view.meta.questionMode || '').trim()
   if (explicit) return explicit
@@ -456,17 +514,32 @@ export class Renderer {
       const summary = (view.pairs || [])
         .map((pair) => `${pair.label}${pair.value} 家`)
         .join('，')
-      return `围绕 ${anchorName} 和 ${view.secondaryAnchor?.resolvedPlaceName || '另一个地点'} 做对比后，${summary}。`
+      return [
+        buildMarkdownSection('结论', [`围绕 ${anchorName} 和 ${view.secondaryAnchor?.resolvedPlaceName || '另一个地点'} 做对比后，${summary}`]),
+        buildMarkdownNumberedSection('对比结果', (view.pairs || []).map((pair) => `${pair.label}：${pair.value} 家`)),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     }
 
     if (view.type === 'semantic_candidate') {
       const names = view.items.slice(0, 3).map((item) => `${item.name}（相似度 ${((item.score || 0) * 100).toFixed(0)}%）`)
-      return `以${anchorName}为参考，当前最相似的片区有：${names.join('，')}。`
+      return [
+        buildMarkdownSection('结论', [`以${anchorName}为参考，当前最相似的片区已经收敛到以下候选`]),
+        buildMarkdownNumberedSection('相似片区', names),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     }
 
     if (view.type === 'bucket') {
       const lines = (view.buckets || []).map((bucket) => `${bucket.label} ${bucket.value} 个`)
-      return `以${anchorName}为锚点，当前聚合结果显示：${lines.join('，')}。`
+      return [
+        buildMarkdownSection('结论', [`以${anchorName}为锚点，当前聚合结果已经形成基础分布`]),
+        buildMarkdownNumberedSection('聚合结果', lines),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     }
 
     if (view.type === 'transport') {
@@ -474,7 +547,7 @@ export class Renderer {
       const targetCategory = String(view.meta.targetCategory || '地铁站')
 
       if (!nearest) {
-        return `以${anchorName}为锚点，附近暂未找到可用的${targetCategory}。`
+        return buildMarkdownSection('结论', [`以${anchorName}为锚点，附近暂未找到可用的${targetCategory}`])
       }
 
       const nearestStation = parseMetroExit(nearest.name)
@@ -484,14 +557,24 @@ export class Renderer {
         .map((item) => String(item.exitName)))]
 
       if (nearestStation.exitName && exitNames.length > 1) {
-        return `以${anchorName}为锚点，最近的${targetCategory}是${nearestStation.stationName}，最近的出口是${nearestStation.exitName}，距离约${formatDistance(nearest.distance_m)}；可用站口包括${exitNames.join('、')}。`
+        return [
+          buildMarkdownSection('结论', [`以${anchorName}为锚点，最近的${targetCategory}是${nearestStation.stationName}，最近的出口是${nearestStation.exitName}，距离约${formatDistance(nearest.distance_m)}`]),
+          buildMarkdownSection('站口参考', [`可用站口包括${exitNames.join('、')}`]),
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       }
 
-      return `以${anchorName}为锚点，最近的${targetCategory}是${nearest.name}，距离约${formatDistance(nearest.distance_m)}。`
+      return buildMarkdownSection('结论', [`以${anchorName}为锚点，最近的${targetCategory}是${nearest.name}，距离约${formatDistance(nearest.distance_m)}`])
     }
 
     if (view.type === 'area_overview') {
       const questionMode = inferAreaQuestionMode(view)
+      // entity_alignment 对齐结果：当存在时，增加「联网验证样本」section
+      const alignmentSummary = view.meta.entity_alignment as Record<string, unknown> | undefined
+      const alignmentItems = (view.items || []).filter(
+        (item) => (item.meta as Record<string, unknown>)?.verification
+      )
 
       if (
         view.areaProfile
@@ -501,43 +584,77 @@ export class Renderer {
           || (view.opportunitySignals?.length || 0) > 0
         )
       ) {
-        return buildStructuredAreaMarkdown(view, questionMode)
+        const base = buildStructuredAreaMarkdown(view, questionMode)
+        // 追加联网对齐结果
+        if (alignmentItems.length > 0 && alignmentSummary) {
+          return base + '\n\n' + buildAlignmentSection(alignmentItems, alignmentSummary)
+        }
+        return base
       }
 
       const buckets = [...(view.buckets || [])].sort((left, right) => right.value - left.value)
       if (view.items.length === 0 || buckets.length === 0) {
-        return [
+        const base = [
           buildMarkdownSection('区域主语', [describeAreaSubject(view)]),
           buildMarkdownSection('关键特征', ['当前还没有足够的周边样本，暂时只能给出基础汇总']),
           buildMarkdownSection('机会与风险', ['没法稳定判断主导业态、热点和机会，建议先补充可验证样本']),
         ]
           .filter(Boolean)
           .join('\n\n')
+        if (alignmentItems.length > 0 && alignmentSummary) {
+          return base + '\n\n' + buildAlignmentSection(alignmentItems, alignmentSummary)
+        }
+        return base
       }
 
-      return buildFallbackAreaMarkdown(view, questionMode)
+      const fallback = buildFallbackAreaMarkdown(view, questionMode)
+      if (alignmentItems.length > 0 && alignmentSummary) {
+        return fallback + '\n\n' + buildAlignmentSection(alignmentItems, alignmentSummary)
+      }
+      return fallback
     }
 
     const radiusM = Number(view.meta.radiusM || 800)
     const targetCategory = String(view.meta.targetCategory || '相关地点')
 
     if (view.items.length === 0) {
-      return `以${anchorName}为锚点，在 ${radiusM} 米范围内暂未找到${targetCategory === '相关地点' ? '' : targetCategory}结果。`
+      return buildMarkdownSection('结论', [`以${anchorName}为锚点，在 ${radiusM} 米范围内暂未找到${targetCategory === '相关地点' ? '' : targetCategory}结果`])
     }
+
+    const hasAlignment = (view.items || []).some(
+      (item) => (item.meta as Record<string, unknown>)?.verification
+    )
 
     const visibleItems = view.items.length <= 8
       ? view.items
       : view.items.slice(0, 6)
 
     const lines = visibleItems
-      .map((item, index) => `${index + 1}. ${item.name}（${item.category || '未分类'}，约${formatDistance(item.distance_m)}）`)
-      .join('\n')
+      .map((item, index) => {
+        const verification = (item.meta as Record<string, unknown>)?.verification as string | undefined
+        const badge = verification === 'dual_verified' ? '✓双重验证' : verification === 'web_only' ? '联网' : verification === 'local_only' ? '本地' : ''
+        const badgeText = badge ? `，${badge}` : ''
+        return `${item.name}（${item.category || '未分类'}，约${formatDistance(item.distance_m)}${badgeText}）`
+      })
 
     const hiddenCount = Math.max(view.items.length - visibleItems.length, 0)
-    const tail = hiddenCount > 0
-      ? `\n其余 ${hiddenCount} 个结果可在地图和标签云里继续查看。`
+    const tail = hiddenCount > 0 ? `其余 ${hiddenCount} 个结果可在地图和标签云里继续查看` : ''
+
+    // 如果有联网对齐结果，追加 alignment section
+    const alignmentSummary = view.meta.entity_alignment as Record<string, unknown> | undefined
+    const alignmentItems = (view.items || []).filter(
+      (item) => (item.meta as Record<string, unknown>)?.verification
+    )
+    const alignmentTail = (hasAlignment && alignmentSummary && alignmentItems.length > 0)
+      ? '\n\n' + buildAlignmentSection(alignmentItems, alignmentSummary)
       : ''
 
-    return `以${anchorName}为锚点，在 ${radiusM} 米范围内找到 ${view.items.length} 个${targetCategory === '相关地点' ? '相关地点' : `${targetCategory}相关地点`}：\n${lines}${tail}`
+    return [
+      buildMarkdownSection('结论', [`以${anchorName}为锚点，在 ${radiusM} 米范围内找到 ${view.items.length} 个${targetCategory === '相关地点' ? '相关地点' : `${targetCategory}相关地点`}`]),
+      buildMarkdownNumberedSection('候选地点', lines),
+      buildMarkdownSection('补充说明', [tail]),
+    ]
+      .filter(Boolean)
+      .join('\n\n') + alignmentTail
   }
 }

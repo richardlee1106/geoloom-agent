@@ -7,6 +7,13 @@ export interface RuntimeRequestMetric {
   sqlValidated: boolean
   sqlAccepted: boolean
   answerGrounded: boolean
+  // 阶段 0：分段耗时与可观测性指标
+  intentMs?: number
+  evidenceRuntimeMs?: number
+  synthesisMs?: number
+  llmRoundCount?: number
+  toolCallCount?: number
+  unnecessaryAnalysis?: boolean
 }
 
 export interface RuntimeMetricsSnapshot {
@@ -28,6 +35,24 @@ export interface RuntimeMetricsSnapshot {
     ungrounded: number
   }
   evidence_grounded_answer_rate: number
+  // 阶段 0：分段耗时聚合
+  phase_latency: {
+    intent_p50_ms: number
+    intent_p95_ms: number
+    evidence_p50_ms: number
+    evidence_p95_ms: number
+    synthesis_p50_ms: number
+    synthesis_p95_ms: number
+  }
+  llm_rounds: {
+    avg: number
+    max: number
+  }
+  tool_calls: {
+    avg: number
+    max: number
+  }
+  unnecessary_analysis_rate: number
 }
 
 function roundRate(value: number) {
@@ -59,6 +84,14 @@ export class RuntimeMetrics {
 
   private answersGrounded = 0
 
+  // 阶段 0：分段耗时滑动窗口
+  private readonly intentLatencies: number[] = []
+  private readonly evidenceLatencies: number[] = []
+  private readonly synthesisLatencies: number[] = []
+  private readonly llmRounds: number[] = []
+  private readonly toolCalls: number[] = []
+  private unnecessaryAnalysisCount = 0
+
   constructor(options: RuntimeMetricsOptions = {}) {
     this.windowSize = Math.max(1, Number(options.windowSize || 200))
   }
@@ -80,6 +113,41 @@ export class RuntimeMetrics {
 
     if (metric.answerGrounded) {
       this.answersGrounded += 1
+    }
+
+    // 阶段 0：采集分段耗时
+    if (metric.intentMs != null) {
+      this.intentLatencies.push(Math.max(0, metric.intentMs))
+      if (this.intentLatencies.length > this.windowSize) {
+        this.intentLatencies.splice(0, this.intentLatencies.length - this.windowSize)
+      }
+    }
+    if (metric.evidenceRuntimeMs != null) {
+      this.evidenceLatencies.push(Math.max(0, metric.evidenceRuntimeMs))
+      if (this.evidenceLatencies.length > this.windowSize) {
+        this.evidenceLatencies.splice(0, this.evidenceLatencies.length - this.windowSize)
+      }
+    }
+    if (metric.synthesisMs != null) {
+      this.synthesisLatencies.push(Math.max(0, metric.synthesisMs))
+      if (this.synthesisLatencies.length > this.windowSize) {
+        this.synthesisLatencies.splice(0, this.synthesisLatencies.length - this.windowSize)
+      }
+    }
+    if (metric.llmRoundCount != null) {
+      this.llmRounds.push(Math.max(0, metric.llmRoundCount))
+      if (this.llmRounds.length > this.windowSize) {
+        this.llmRounds.splice(0, this.llmRounds.length - this.windowSize)
+      }
+    }
+    if (metric.toolCallCount != null) {
+      this.toolCalls.push(Math.max(0, metric.toolCallCount))
+      if (this.toolCalls.length > this.windowSize) {
+        this.toolCalls.splice(0, this.toolCalls.length - this.windowSize)
+      }
+    }
+    if (metric.unnecessaryAnalysis) {
+      this.unnecessaryAnalysisCount += 1
     }
   }
 
@@ -109,6 +177,33 @@ export class RuntimeMetrics {
       },
       evidence_grounded_answer_rate: this.answersTotal > 0
         ? roundRate(this.answersGrounded / this.answersTotal)
+        : 0,
+      phase_latency: {
+        intent_p50_ms: percentile(this.intentLatencies, 0.5),
+        intent_p95_ms: percentile(this.intentLatencies, 0.95),
+        evidence_p50_ms: percentile(this.evidenceLatencies, 0.5),
+        evidence_p95_ms: percentile(this.evidenceLatencies, 0.95),
+        synthesis_p50_ms: percentile(this.synthesisLatencies, 0.5),
+        synthesis_p95_ms: percentile(this.synthesisLatencies, 0.95),
+      },
+      llm_rounds: {
+        avg: this.llmRounds.length > 0
+          ? roundRate(this.llmRounds.reduce((a, b) => a + b, 0) / this.llmRounds.length)
+          : 0,
+        max: this.llmRounds.length > 0
+          ? Math.max(...this.llmRounds)
+          : 0,
+      },
+      tool_calls: {
+        avg: this.toolCalls.length > 0
+          ? roundRate(this.toolCalls.reduce((a, b) => a + b, 0) / this.toolCalls.length)
+          : 0,
+        max: this.toolCalls.length > 0
+          ? Math.max(...this.toolCalls)
+          : 0,
+      },
+      unnecessary_analysis_rate: this.answersTotal > 0
+        ? roundRate(this.unnecessaryAnalysisCount / this.answersTotal)
         : 0,
     }
   }

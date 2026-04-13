@@ -507,6 +507,81 @@ describe('EvidenceViewFactory', () => {
     expect(JSON.stringify(view.areaSubject)).toMatch(/湖北大学/)
   })
 
+  it('treats campus scenic commercial station anchors as the only representative samples for large viewport map views', () => {
+    const view = factory.create({
+      intent: {
+        queryType: 'area_overview',
+        intentMode: 'agent_full_loop',
+        placeName: '当前区域',
+        anchorSource: 'map_view',
+        targetCategory: '区域洞察',
+        radiusM: 1200,
+        needsClarification: false,
+        clarificationHint: null,
+        rawQuery: '请快速读懂当前区域',
+        viewportContext: {
+          diagonalM: 8600,
+          scale: 'large',
+        },
+      },
+      anchor: {
+        ...anchor,
+        place_name: '当前区域',
+        display_name: '当前区域',
+        resolved_place_name: '当前区域',
+      },
+      rows: [
+        {
+          id: 9501,
+          name: '东湖景区',
+          category_main: '风景名胜',
+          category_sub: '景点',
+          distance_m: 380,
+        },
+        {
+          id: 9502,
+          name: '江汉路步行街',
+          category_main: '购物服务',
+          category_sub: '购物中心',
+          distance_m: 420,
+        },
+        {
+          id: 9503,
+          name: '江汉路地铁站',
+          category_main: '交通设施服务',
+          category_sub: '地铁站',
+          distance_m: 180,
+        },
+        {
+          id: 9504,
+          name: '老四烧烤',
+          category_main: '餐饮美食',
+          category_sub: '烧烤店',
+          distance_m: 120,
+        },
+      ],
+      areaInsight: {
+        aoiContext: [
+          { id: 9601, name: '武汉大学', fclass: 'school', area_sqm: 180000 },
+          { id: 9602, name: '东湖景区', fclass: 'park', area_sqm: 220000 },
+          { id: 9603, name: '江汉路步行街', fclass: 'commercial', area_sqm: 150000 },
+        ],
+        landuseContext: [
+          { land_type: 'education', parcel_count: 4, total_area_sqm: 90000 },
+          { land_type: 'commercial', parcel_count: 6, total_area_sqm: 86000 },
+        ],
+      },
+    })
+
+    expect(view.areaSubject?.anchorName).toBe('武汉大学')
+    expect(view.representativeSamples?.map((item) => item.name)).toEqual([
+      '东湖景区',
+      '江汉路步行街',
+      '江汉路地铁站',
+    ])
+    expect(view.representativeSamples?.map((item) => item.name)).not.toContain('老四烧烤')
+  })
+
   it('filters invalid AOI placeholder names so area subjects do not degrade into None-like labels', () => {
     const view = factory.create({
       intent: {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { appendAgentEventToMessage, buildAgentRunSnapshot } from '../agentRunTimeline'
+import { appendAgentEventToMessage, buildAgentEventRecord, buildAgentRunSnapshot } from '../agentRunTimeline'
 
 describe('buildAgentRunSnapshot', () => {
   it('merges agent events and tool calls into one readable timeline', () => {
@@ -104,5 +104,21 @@ describe('buildAgentRunSnapshot', () => {
       title: '推理片段',
       detail: '先锁定当前范围，再判断主导业态和热点是不是挤在同一片网格里。',
     })
+  })
+
+  it('shows embedding as the parser provider in intent preview details', () => {
+    const event = buildAgentEventRecord('intent_preview', {
+      displayAnchor: '光谷',
+      categoryMain: '餐饮美食',
+      categoryResolved: true,
+      parserProvider: 'embedding',
+      confidence: 0.92,
+    }, 1000)
+
+    expect(event).toMatchObject({
+      title: '识别问题',
+    })
+    expect(event?.detail).toContain('来源 Embedding')
+    expect(event?.detail).toContain('置信 92%')
   })
 })

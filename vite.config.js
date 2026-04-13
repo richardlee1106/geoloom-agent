@@ -30,7 +30,12 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       exclude: ['three', '@deck.gl/core', '@deck.gl/layers', '@deck.gl/aggregation-layers'],
-      include: ['vue', 'vue-router', 'axios', 'd3', 'd3-cloud', 'marked', 'earcut']
+      include: [
+        'vue', 'vue-router', 'axios', 'd3', 'd3-cloud', 'marked', 'earcut',
+        'ol', 'element-plus', '@element-plus/icons-vue',
+        '@turf/boolean-point-in-polygon', '@turf/centroid', '@turf/helpers',
+        'geotiff', 'rbush', 'html2canvas'
+      ]
     },
     build: {
       chunkSizeWarningLimit: 1000,

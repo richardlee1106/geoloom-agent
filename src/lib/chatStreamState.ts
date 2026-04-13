@@ -20,6 +20,8 @@ export interface AssistantRun {
   currentStage: string
   thinking: string
   intentPreview: unknown
+  webSearch: unknown
+  entityAlignment: unknown
   pois: unknown[]
   boundary: unknown
   spatialClusters: unknown
@@ -67,6 +69,8 @@ export function createAssistantRun(prompt: string): AssistantRun {
     currentStage: 'pending',
     thinking: '',
     intentPreview: null,
+    webSearch: null,
+    entityAlignment: null,
     pois: [],
     boundary: null,
     spatialClusters: null,
@@ -115,6 +119,12 @@ export function applyStreamEvent(run: AssistantRun, event: string, payload: unkn
     }
     case 'intent_preview':
       next.intentPreview = payload
+      break
+    case 'web_search':
+      next.webSearch = payload
+      break
+    case 'entity_alignment':
+      next.entityAlignment = payload
       break
     case 'pois':
       next.pois = Array.isArray(payload) ? payload : []
