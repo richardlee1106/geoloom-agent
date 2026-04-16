@@ -4,10 +4,22 @@ export interface IntentMeta {
   queryType: string | null
   intentMode: string | null
   queryPlan: PlainObject | null
+  placeName: string | null
+  targetCategory: string | null
   parserProvider: string | null
   parserModel: string | null
+  needsWebSearch: boolean | null
+  webEvidencePlanned: boolean | null
+  webSearchStrategy: string | null
+  webRequirementMode: string | null
+  intentSource: string | null
+  sourceConfidence: number | null
+  sourceLatencyMs: number | null
   categoryMain: string | null
   categorySub: string | null
+  categoryScore: number | null
+  toolIntent: string | null
+  searchIntentHint: string | null
 }
 
 export interface NormalizedRefinedResultEvidence {
@@ -47,6 +59,22 @@ function pickString(...candidates: unknown[]): string {
   return ''
 }
 
+function pickBoolean(...candidates: unknown[]): boolean | null {
+  for (const value of candidates) {
+    if (value === true) return true
+    if (value === false) return false
+  }
+  return null
+}
+
+function pickNumber(...candidates: unknown[]): number | null {
+  for (const value of candidates) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric
+  }
+  return null
+}
+
 function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMeta | null {
   const rootStats = pickObject(root.stats)
   const resultsStats = pickObject(results.stats)
@@ -75,6 +103,24 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
     rootQueryExecuted,
     intentMetaCandidate?.queryPlan,
     intentMetaCandidate?.query_plan
+  )
+
+  const placeName = pickString(
+    intentMetaCandidate?.placeName,
+    intentMetaCandidate?.place_name,
+    results.placeName,
+    results.place_name,
+    root.placeName,
+    root.place_name
+  )
+
+  const targetCategory = pickString(
+    intentMetaCandidate?.targetCategory,
+    intentMetaCandidate?.target_category,
+    results.targetCategory,
+    results.target_category,
+    root.targetCategory,
+    root.target_category
   )
 
   const queryType = pickString(
@@ -133,6 +179,70 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
     root.parser_model
   )
 
+  const needsWebSearch = pickBoolean(
+    intentMetaCandidate?.needsWebSearch,
+    intentMetaCandidate?.needs_web_search,
+    results.needsWebSearch,
+    results.needs_web_search,
+    root.needsWebSearch,
+    root.needs_web_search
+  )
+
+  const webEvidencePlanned = pickBoolean(
+    intentMetaCandidate?.webEvidencePlanned,
+    intentMetaCandidate?.web_evidence_planned,
+    results.webEvidencePlanned,
+    results.web_evidence_planned,
+    root.webEvidencePlanned,
+    root.web_evidence_planned
+  )
+
+  const webSearchStrategy = pickString(
+    intentMetaCandidate?.webSearchStrategy,
+    intentMetaCandidate?.web_search_strategy,
+    results.webSearchStrategy,
+    results.web_search_strategy,
+    root.webSearchStrategy,
+    root.web_search_strategy
+  )
+
+  const webRequirementMode = pickString(
+    intentMetaCandidate?.webRequirementMode,
+    intentMetaCandidate?.web_requirement_mode,
+    results.webRequirementMode,
+    results.web_requirement_mode,
+    root.webRequirementMode,
+    root.web_requirement_mode
+  )
+
+  const intentSource = pickString(
+    intentMetaCandidate?.intentSource,
+    intentMetaCandidate?.intent_source,
+    results.intentSource,
+    results.intent_source,
+    root.intentSource,
+    root.intent_source,
+    parserProvider
+  )
+
+  const sourceConfidence = pickNumber(
+    intentMetaCandidate?.sourceConfidence,
+    intentMetaCandidate?.source_confidence,
+    results.sourceConfidence,
+    results.source_confidence,
+    root.sourceConfidence,
+    root.source_confidence
+  )
+
+  const sourceLatencyMs = pickNumber(
+    intentMetaCandidate?.sourceLatencyMs,
+    intentMetaCandidate?.source_latency_ms,
+    results.sourceLatencyMs,
+    results.source_latency_ms,
+    root.sourceLatencyMs,
+    root.source_latency_ms
+  )
+
   const categoryMain = pickString(
     intentMetaCandidate?.categoryMain,
     intentMetaCandidate?.category_main,
@@ -151,7 +261,54 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
     root.category_sub
   )
 
-  if (!queryPlan && !queryType && !intentMode && !parserProvider && !parserModel && !categoryMain && !categorySub) {
+  const categoryScore = pickNumber(
+    intentMetaCandidate?.categoryScore,
+    intentMetaCandidate?.category_score,
+    results.categoryScore,
+    results.category_score,
+    root.categoryScore,
+    root.category_score
+  )
+
+  const toolIntent = pickString(
+    intentMetaCandidate?.toolIntent,
+    intentMetaCandidate?.tool_intent,
+    results.toolIntent,
+    results.tool_intent,
+    root.toolIntent,
+    root.tool_intent
+  )
+
+  const searchIntentHint = pickString(
+    intentMetaCandidate?.searchIntentHint,
+    intentMetaCandidate?.search_intent_hint,
+    results.searchIntentHint,
+    results.search_intent_hint,
+    root.searchIntentHint,
+    root.search_intent_hint
+  )
+
+  if (
+    !queryPlan
+    && !queryType
+    && !intentMode
+    && !placeName
+    && !targetCategory
+    && !parserProvider
+    && !parserModel
+    && needsWebSearch === null
+    && webEvidencePlanned === null
+    && !webSearchStrategy
+    && !webRequirementMode
+    && !intentSource
+    && sourceConfidence === null
+    && sourceLatencyMs === null
+    && !categoryMain
+    && !categorySub
+    && categoryScore === null
+    && !toolIntent
+    && !searchIntentHint
+  ) {
     return null
   }
 
@@ -159,10 +316,22 @@ function normalizeIntentMeta(root: PlainObject, results: PlainObject): IntentMet
     queryType: queryType || null,
     intentMode: intentMode || null,
     queryPlan: queryPlan || null,
+    placeName: placeName || null,
+    targetCategory: targetCategory || null,
     parserProvider: parserProvider || null,
     parserModel: parserModel || null,
+    needsWebSearch,
+    webEvidencePlanned,
+    webSearchStrategy: webSearchStrategy || null,
+    webRequirementMode: webRequirementMode || null,
+    intentSource: intentSource || null,
+    sourceConfidence,
+    sourceLatencyMs,
     categoryMain: categoryMain || null,
-    categorySub: categorySub || null
+    categorySub: categorySub || null,
+    categoryScore,
+    toolIntent: toolIntent || null,
+    searchIntentHint: searchIntentHint || null
   }
 }
 

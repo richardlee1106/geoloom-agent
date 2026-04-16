@@ -20,7 +20,7 @@ export async function encodeRegionAction(
 }>> {
   const text = payload.label || payload.text || ''
   const encoded = await deps.bridge.encodeText(text)
-  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus())
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus({ probe: false }))
   const embeddingId = `region_${randomUUID()}`
   const vectorRef = `vector:region:${embeddingId}`
   deps.store.set(vectorRef, {

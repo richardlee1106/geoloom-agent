@@ -398,6 +398,588 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     })
   })
 
+  it('prefers aligned nearby items over raw postgis rows when building the final poi list view', async () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+    })
+
+    const view = await (agent as any).buildEvidenceView(
+      {
+        queryType: 'nearby_poi',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '光谷附近美食',
+        placeName: '光谷广场',
+        anchorSource: 'place',
+        targetCategory: '餐饮美食',
+        categoryKey: 'food',
+        radiusM: 800,
+        needsClarification: false,
+        clarificationHint: null,
+      },
+      {
+        requestId: 'req_test',
+        traceId: 'trace_test',
+        sessionId: 'session_test',
+        anchors: {},
+        evidenceView: undefined,
+        spatialConstraint: undefined,
+        sqlValidationAttempts: 0,
+        sqlValidationPassed: 0,
+        toolCalls: [
+          {
+            id: 'tool_nearby',
+            skill: 'postgis',
+            action: 'execute_spatial_sql',
+            status: 'done',
+            payload: { template: 'nearby_poi' },
+            result: {
+              rows: [
+                { id: 1, name: '东湖宾馆食堂', category_main: '餐饮美食', category_sub: '中餐厅', distance_m: 6500 },
+                {
+                  id: 21,
+                  name: '光谷步行街牛肉面',
+                  category_main: '餐饮美食',
+                  category_sub: '面馆',
+                  longitude: 114.40123,
+                  latitude: 30.50678,
+                  coord_sys: 'gcj02',
+                  distance_m: 180,
+                },
+              ],
+              meta: { template: 'nearby_poi' },
+            },
+          },
+          {
+            id: 'tool_alignment',
+            skill: 'entity_alignment',
+            action: 'align_and_rank',
+            status: 'done',
+            payload: {},
+            result: {
+              ranked_results: [
+                {
+                  name: '光谷步行街牛肉面',
+                  fusionScore: 0.92,
+                  verification: 'dual_verified',
+                  localPoi: {
+                    id: 21,
+                    name: '光谷步行街牛肉面',
+                    categoryMain: '餐饮美食',
+                    categorySub: '面馆',
+                    longitude: 114.40123,
+                    latitude: 30.50678,
+                    coord_sys: 'gcj02',
+                    distance_m: 180,
+                  },
+                  distance_m: 180,
+                  category: '面馆',
+                },
+              ],
+              alignment_summary: {
+                dual_verified: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        place_name: '光谷广场',
+        display_name: '光谷广场',
+        role: 'primary',
+        source: 'resolved_anchor',
+        resolved_place_name: '光谷广场',
+        poi_id: null,
+        lon: 114.39857,
+        lat: 30.50533,
+      },
+    )
+
+  expect(view.items[0]?.name).toBe('光谷步行街牛肉面')
+  expect(view.items[0]?.meta?.verification).toBe('dual_verified')
+  expect(view.items[0]?.id).toBe(21)
+  expect(view.items[0]?.longitude).toBeCloseTo(114.40123)
+  expect(view.items[0]?.latitude).toBeCloseTo(30.50678)
+})
+
+it('falls back to local nearby rows when entity alignment only yields web_only titles', async () => {
+  const agent = new GeoLoomAgent({
+    registry: new SkillRegistry(),
+    version: 'test',
+  })
+
+  const view = await (agent as any).buildEvidenceView(
+    {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: '光谷附近美食',
+      placeName: '光谷广场',
+      anchorSource: 'place',
+      targetCategory: '餐饮美食',
+      radiusM: 800,
+      needsClarification: false,
+      clarificationHint: null,
+    },
+    {
+      requestId: 'req_test',
+      traceId: 'trace_test',
+      sessionId: 'session_test',
+      anchors: {},
+      evidenceView: undefined,
+      spatialConstraint: undefined,
+      sqlValidationAttempts: 0,
+      sqlValidationPassed: 0,
+      toolCalls: [
+        {
+          id: 'tool_nearby',
+          skill: 'postgis',
+          action: 'execute_spatial_sql',
+          status: 'done',
+          payload: { template: 'nearby_poi' },
+          result: {
+            rows: [
+              { id: 1, name: '光谷步行街牛肉面', category_main: '餐饮美食', category_sub: '面馆', distance_m: 180 },
+            ],
+            meta: { template: 'nearby_poi' },
+          },
+        },
+        {
+          id: 'tool_alignment',
+          skill: 'entity_alignment',
+          action: 'align_and_rank',
+          status: 'done',
+          payload: {},
+          result: {
+            ranked_results: [
+              {
+                name: '武汉武昌最好玩的30个景点一定要去玩一次 - 今日头条',
+                fusionScore: 0.88,
+                verification: 'web_only',
+              },
+            ],
+            alignment_summary: {
+              dual_verified: 0,
+              local_only: 0,
+              web_only: 1,
+            },
+          },
+        },
+      ],
+    },
+    {
+      place_name: '光谷广场',
+      display_name: '光谷广场',
+      role: 'primary',
+      source: 'resolved_anchor',
+      resolved_place_name: '光谷广场',
+      poi_id: null,
+      lon: 114.39857,
+      lat: 30.50533,
+    },
+  )
+
+  expect(view.items.map((item: { name: string }) => item.name)).toEqual(['光谷步行街牛肉面'])
+  expect(view.items.some((item: { name: string }) => item.name.includes('今日头条'))).toBe(false)
+  expect(view.meta.entity_alignment).toMatchObject({ web_only: 1 })
+})
+
+it('falls back to local nearby rows when entity alignment has no dual_verified match and only local_only candidates', async () => {
+  const agent = new GeoLoomAgent({
+    registry: new SkillRegistry(),
+    version: 'test',
+  })
+
+  const view = await (agent as any).buildEvidenceView(
+    {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: '汉口美食推荐',
+      placeName: '汉口',
+      anchorSource: 'place',
+      targetCategory: '餐饮美食',
+      categoryKey: 'food',
+      categoryMain: '餐饮美食',
+      categorySub: '中国菜',
+      radiusM: 1200,
+      needsClarification: false,
+      clarificationHint: null,
+    },
+    {
+      requestId: 'req_test',
+      traceId: 'trace_test',
+      sessionId: 'session_test',
+      anchors: {},
+      evidenceView: undefined,
+      spatialConstraint: undefined,
+      sqlValidationAttempts: 0,
+      sqlValidationPassed: 0,
+      toolCalls: [
+        {
+          id: 'tool_nearby',
+          skill: 'postgis',
+          action: 'execute_spatial_sql',
+          status: 'done',
+          payload: { template: 'nearby_poi' },
+          result: {
+            rows: [
+              { id: 11, name: '湖锦酒楼', category_main: '餐饮美食', category_sub: '中国菜', distance_m: 320 },
+            ],
+            meta: { template: 'nearby_poi' },
+          },
+        },
+        {
+          id: 'tool_alignment',
+          skill: 'entity_alignment',
+          action: 'align_and_rank',
+          status: 'done',
+          payload: {},
+          result: {
+            ranked_results: [
+              {
+                name: '湖锦酒楼',
+                fusionScore: 0.89,
+                verification: 'local_only',
+                localPoi: {
+                  id: 11,
+                  name: '湖锦酒楼',
+                  categoryMain: '餐饮美食',
+                  categorySub: '中国菜',
+                  distance_m: 320,
+                },
+                distance_m: 320,
+                category: '中国菜',
+              },
+            ],
+            alignment_summary: {
+              dual_verified: 0,
+              local_only: 1,
+              web_only: 0,
+            },
+          },
+        },
+      ],
+    },
+    {
+      place_name: '汉口',
+      display_name: '汉口',
+      role: 'primary',
+      source: 'resolved_anchor',
+      resolved_place_name: '汉口',
+      poi_id: null,
+      lon: 114.27,
+      lat: 30.6,
+    },
+  )
+
+  expect(view.items.map((item: { name: string }) => item.name)).toEqual(['湖锦酒楼'])
+  expect(view.items[0]?.meta?.verification).toBeUndefined()
+  expect(view.meta.entity_alignment).toMatchObject({ dual_verified: 0, local_only: 1 })
+})
+
+it('filters out category-mismatched alignment pois for nearby food queries and falls back to local rows', async () => {
+  const agent = new GeoLoomAgent({
+    registry: new SkillRegistry(),
+    version: 'test',
+  })
+
+  const view = await (agent as any).buildEvidenceView(
+    {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: '汉口美食推荐',
+      placeName: '汉口',
+      anchorSource: 'place',
+      targetCategory: '餐饮美食',
+      categoryKey: 'food',
+      radiusM: 800,
+      needsClarification: false,
+      clarificationHint: null,
+    },
+    {
+      requestId: 'req_test',
+      traceId: 'trace_test',
+      sessionId: 'session_test',
+      anchors: {},
+      evidenceView: undefined,
+      spatialConstraint: undefined,
+      sqlValidationAttempts: 0,
+      sqlValidationPassed: 0,
+      toolCalls: [
+        {
+          id: 'tool_nearby',
+          skill: 'postgis',
+          action: 'execute_spatial_sql',
+          status: 'done',
+          payload: { template: 'nearby_poi' },
+          result: {
+            rows: [
+              { id: 1, name: '湖锦酒楼', category_main: '餐饮美食', category_sub: '中国菜', distance_m: 320 },
+            ],
+            meta: { template: 'nearby_poi' },
+          },
+        },
+        {
+          id: 'tool_alignment',
+          skill: 'entity_alignment',
+          action: 'align_and_rank',
+          status: 'done',
+          payload: {},
+          result: {
+            ranked_results: [
+              {
+                name: '汉口火车站二店',
+                fusionScore: 0.9,
+                verification: 'dual_verified',
+                localPoi: {
+                  id: 9,
+                  name: '汉口火车站二店',
+                  categoryMain: '生活服务',
+                  categorySub: '生活服务场所',
+                  longitude: 114.27,
+                  latitude: 30.61,
+                },
+              },
+            ],
+            alignment_summary: {
+              dual_verified: 1,
+            },
+          },
+        },
+      ],
+    },
+    {
+      place_name: '汉口',
+      display_name: '汉口',
+      role: 'primary',
+      source: 'resolved_anchor',
+      resolved_place_name: '汉口',
+      poi_id: null,
+      lon: 114.27,
+      lat: 30.6,
+    },
+  )
+
+  expect(view.items.map((item: { name: string }) => item.name)).toEqual(['湖锦酒楼'])
+  expect(view.items.some((item: { name: string }) => item.name.includes('汉口火车站二店'))).toBe(false)
+  expect(view.meta.entity_alignment).toMatchObject({ dual_verified: 1 })
+})
+
+it('keeps nearby evidence authoritative even if alignment returns a dual_verified item outside the local candidate set', async () => {
+  const agent = new GeoLoomAgent({
+    registry: new SkillRegistry(),
+    version: 'test',
+  })
+
+  const view = await (agent as any).buildEvidenceView(
+    {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: '汉口美食推荐',
+      placeName: '汉口',
+      anchorSource: 'place',
+      targetCategory: '餐饮美食',
+      categoryKey: 'food',
+      categoryMain: '餐饮美食',
+      radiusM: 1200,
+      needsClarification: false,
+      clarificationHint: null,
+      needsWebSearch: true,
+      toolIntent: 'candidate_reputation',
+    },
+    {
+      requestId: 'req_test',
+      traceId: 'trace_test',
+      sessionId: 'session_test',
+      anchors: {},
+      evidenceView: undefined,
+      spatialConstraint: undefined,
+      sqlValidationAttempts: 0,
+      sqlValidationPassed: 0,
+      toolCalls: [
+        {
+          id: 'tool_nearby',
+          skill: 'postgis',
+          action: 'execute_spatial_sql',
+          status: 'done',
+          payload: { template: 'nearby_poi' },
+          result: {
+            rows: [
+              { id: 1, name: '湖锦酒楼', category_main: '餐饮美食', category_sub: '中国菜', longitude: 114.271, latitude: 30.601, distance_m: 320 },
+              { id: 2, name: '顺香居', category_main: '餐饮美食', category_sub: '小吃快餐', longitude: 114.272, latitude: 30.602, distance_m: 410 },
+            ],
+            meta: { template: 'nearby_poi' },
+          },
+        },
+        {
+          id: 'tool_alignment',
+          skill: 'entity_alignment',
+          action: 'align_and_rank',
+          status: 'done',
+          payload: {},
+          result: {
+            ranked_results: [
+              {
+                name: '当米亚诺意大利餐厅',
+                fusionScore: 0.81,
+                verification: 'dual_verified',
+                localPoi: {
+                  id: 99,
+                  name: '当米亚诺意大利餐厅',
+                  categoryMain: '餐饮美食',
+                  categorySub: '西餐厅',
+                  longitude: 114.299,
+                  latitude: 30.633,
+                  distance_m: 210,
+                },
+                webItem: {
+                  title: '汉口美食推荐',
+                },
+              },
+            ],
+            alignment_summary: {
+              dual_verified: 1,
+              local_only: 0,
+              web_only: 0,
+            },
+          },
+        },
+      ],
+    },
+    {
+      place_name: '汉口',
+      display_name: '汉口',
+      role: 'primary',
+      source: 'resolved_anchor',
+      resolved_place_name: '汉口',
+      poi_id: null,
+      lon: 114.27,
+      lat: 30.6,
+    },
+  )
+
+  expect(view.items.map((item: { name: string }) => item.name)).toEqual(['湖锦酒楼', '顺香居'])
+  expect(view.items.some((item: { name: string }) => item.name.includes('当米亚诺'))).toBe(false)
+  expect(view.meta.entity_alignment).toMatchObject({ dual_verified: 1 })
+})
+
+it('uses town cell annotations to diversify nearby poi ordering instead of keeping the top results in one cell pocket', () => {
+  const agent = new GeoLoomAgent({
+    registry: new SkillRegistry(),
+    version: 'test',
+  })
+
+  const view: EvidenceView = {
+    type: 'poi_list',
+    anchor: {
+      placeName: '光谷广场',
+      displayName: '光谷广场',
+      resolvedPlaceName: '光谷广场',
+      lon: 114.39857,
+      lat: 30.50533,
+    },
+    items: [
+      {
+        name: 'A店',
+        category: '餐饮美食',
+        categoryMain: '餐饮美食',
+        longitude: 114.3905,
+        latitude: 30.50215,
+        score: 0.94,
+        rank: 1,
+        meta: { verification: 'dual_verified', source: 'entity_alignment' },
+      },
+      {
+        name: 'B店',
+        category: '餐饮美食',
+        categoryMain: '餐饮美食',
+        longitude: 114.3906,
+        latitude: 30.50225,
+        score: 0.92,
+        rank: 2,
+        meta: { verification: 'dual_verified', source: 'entity_alignment' },
+      },
+      {
+        name: 'C店',
+        category: '餐饮美食',
+        categoryMain: '餐饮美食',
+        longitude: 114.39234,
+        latitude: 30.51157,
+        score: 0.85,
+        rank: 3,
+        meta: { verification: 'dual_verified', source: 'entity_alignment' },
+      },
+    ],
+    meta: {},
+  }
+
+  ;(agent as any).applyTownPoiCellAnnotationsToView({
+    intent: {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: '光谷附近美食',
+      placeName: '光谷广场',
+      anchorSource: 'place',
+      targetCategory: '餐饮美食',
+      categoryKey: 'food',
+      radiusM: 800,
+      needsClarification: false,
+      clarificationHint: null,
+    },
+    view,
+    result: {
+      anchor_cell_context: {
+        cell_id: 'anchor_cell',
+        dominant_category: '购物消费',
+      },
+      results: [
+        {
+          original_index: 0,
+          cell_context: {
+            cell_id: 'cell_a',
+            dominant_category: '购物消费',
+            similarity: 0.99,
+          },
+        },
+        {
+          original_index: 1,
+          cell_context: {
+            cell_id: 'cell_a',
+            dominant_category: '购物消费',
+            similarity: 0.98,
+          },
+        },
+        {
+          original_index: 2,
+          cell_context: {
+            cell_id: 'cell_b',
+            dominant_category: '餐饮美食',
+            similarity: 0.97,
+          },
+        },
+      ],
+      semantic_evidence: {
+        dependency: 'spatial_encoder',
+        level: 'available',
+        weakEvidence: false,
+        mode: 'remote',
+        reason: null,
+        target: 'http://encoder.test',
+      },
+    },
+  })
+
+  expect(view.items.map((item) => item.name)).toEqual(['A店', 'C店', 'B店'])
+  expect(view.items[1]?.meta?.townCell).toMatchObject({
+    cellId: 'cell_b',
+    dominantCategory: '餐饮美食',
+  })
+  expect(view.meta.town_diversification).toMatchObject({
+    applied: true,
+    uniqueCellCount: 2,
+    annotatedCount: 3,
+  })
+})
+
   it('expands the nearby metro limit so exits do not get truncated too early', () => {
     const agent = new GeoLoomAgent({
       registry: new SkillRegistry(),
@@ -895,6 +1477,96 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     expect(sql).toContain('ORDER BY pass_order ASC')
   })
 
+  it('ignores viewport polygons for explicit nearby place anchors and falls back to anchor radius', () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+    })
+
+    const sql = (agent as any).buildTemplateSQL(
+      {
+        queryType: 'nearby_poi',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '光谷附近美食',
+        placeName: '光谷广场',
+        anchorSource: 'place',
+        targetCategory: '餐饮美食',
+        categoryKey: 'food',
+        categoryMain: '餐饮美食',
+        radiusM: 800,
+        needsClarification: false,
+        clarificationHint: null,
+      },
+      {
+        place_name: '光谷广场',
+        display_name: '光谷广场',
+        role: 'primary',
+        source: 'resolved_anchor',
+        resolved_place_name: '光谷广场',
+        poi_id: null,
+        lon: 114.39857,
+        lat: 30.50533,
+        coord_sys: 'gcj02',
+      },
+      'food',
+      10,
+      'nearby_poi',
+      {
+        scope: 'viewport',
+        areaWkt: 'POLYGON((114.34 30.54, 114.42 30.54, 114.42 30.60, 114.34 30.60, 114.34 30.54))',
+        selectedCategories: [],
+        regions: [],
+      },
+    )
+
+    expect(sql).toContain('ST_Buffer(')
+    expect(sql).not.toContain("POLYGON((114.34 30.54, 114.42 30.54, 114.42 30.60, 114.34 30.60, 114.34 30.54))")
+    expect(sql).toContain("category_main = '餐饮美食'")
+  })
+
+  it('adds a district-boundary constraint for soft-scoped nearby anchors like 汉口', () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+    })
+
+    const sql = (agent as any).buildTemplateSQL(
+      {
+        queryType: 'nearby_poi',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '汉口美食推荐',
+        placeName: '汉口',
+        anchorSource: 'place',
+        targetCategory: '餐饮美食',
+        categoryKey: 'food',
+        categoryMain: '餐饮美食',
+        radiusM: 800,
+        needsClarification: false,
+        clarificationHint: null,
+      },
+      {
+        place_name: '汉口',
+        display_name: '汉口',
+        role: 'primary',
+        source: 'resolved_anchor',
+        resolved_place_name: '汉口',
+        poi_id: null,
+        lon: 114.255008,
+        lat: 30.618096,
+        coord_sys: 'gcj02',
+      },
+      'food',
+      10,
+      'nearby_poi',
+      null,
+    )
+
+    expect(sql).toContain('FROM districts d')
+    expect(sql).toContain('d.id IN (4, 5, 6)')
+    expect(sql).toContain('ST_Intersects(pois.geom, d.geom)')
+    expect(sql).toContain("category_main = '餐饮美食'")
+  })
+
   it('stacks selected-category filters on top of the spatial area filter for area insight sql', () => {
     const agent = new GeoLoomAgent({
       registry: new SkillRegistry(),
@@ -1029,11 +1701,28 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     const synthesisPrompt = captured.find((message) => message.role === 'user')?.content || ''
 
     expect(answer).toContain('武汉大学校园片区')
-    expect(synthesisPrompt).toContain('只基于下面证据写最终回答')
+    expect(synthesisPrompt).toContain('请只基于下面证据写最终回答')
     expect(synthesisPrompt).toContain('## 区域主语 / ## 关键特征 / ## 热点与结构 / ## 机会与风险')
     expect(synthesisPrompt).toContain('片区特征: 校园主导、多核活力')
     expect(synthesisPrompt).not.toContain('机械兜底草稿')
     expect(synthesisPrompt).not.toContain('置信度:')
+  })
+
+  it('falls back to rendered sectioned markdown when nearby LLM output is not properly sectioned', () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+    })
+
+    const result = (agent as any).ensureMarkdownAnswer({
+      answer: '先看海底捞和老通城，再补一句使用说明。',
+      renderedAnswer: '## 推荐结论\n优先看海底捞和老通城。\n\n## 就近可选\n1. 海底捞火锅（火锅，约1.2 公里）',
+      queryType: 'nearby_poi',
+    })
+
+    expect(result.usedRenderedAnswer).toBe(true)
+    expect(result.answer).toContain('## 推荐结论')
+    expect(result.answer).toContain('## 就近可选')
   })
 
   it('still rejects area-overview answers that miss both the subject and the evidence cues', () => {
@@ -1091,6 +1780,58 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     expect(intent.anchorSource).toBe('place')
     expect(intent.placeName).toBe('武汉大学')
     expect(intent.needsClarification).toBe(false)
+  })
+
+  it('normalizes llm map-view area hints back to nearby_poi for concrete nearby category queries', async () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+      provider: createJsonProvider({
+        queryType: 'area_overview',
+        anchorSource: 'map_view',
+        placeName: null,
+        targetCategory: '区域洞察',
+        needsClarification: false,
+        clarificationHint: null,
+        needsWebSearch: false,
+      }),
+    })
+
+    const resolution = await (agent as any).resolveIntent({
+      request: {
+        messages: [{ role: 'user', content: '光谷附近美食' }],
+        options: {
+          selectedCategories: ['餐饮美食'],
+          spatialContext: {
+            viewport: [114.36, 30.49, 114.42, 30.52],
+            center: { lon: 114.39, lat: 30.505 },
+          },
+        },
+      },
+      rawQuery: '光谷附近美食',
+      fallbackIntent: {
+        queryType: 'unsupported',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '光谷附近美食',
+        placeName: null,
+        anchorSource: 'map_view',
+        secondaryPlaceName: null,
+        targetCategory: '餐饮美食',
+        comparisonTarget: null,
+        categoryKey: 'food',
+        radiusM: 800,
+        needsClarification: true,
+        clarificationHint: '请更明确说明你的查询目标。',
+      },
+      followUpHint: null,
+      providerReady: true,
+    })
+
+    expect(resolution.source).toBe('llm')
+    expect(resolution.intent.queryType).toBe('nearby_poi')
+    expect(resolution.intent.anchorSource).toBe('place')
+    expect(resolution.intent.placeName).toBe('光谷')
+    expect(resolution.intent.targetCategory).toBe('餐饮美食')
   })
 
   it('prefers llm intent planning for map-view queries even when embedding is confident', async () => {
@@ -1155,6 +1896,69 @@ describe('GeoLoomAgent metro nearby fallback SQL', () => {
     expect(resolution.intent.anchorSource).toBe('map_view')
     expect(resolution.intent.toolIntent).toBe('candidate_reputation')
     expect(resolution.intent.searchIntentHint).toBe('酒店 评分 推荐')
+  })
+
+  it('keeps explicit place nearby queries on the embedding path even with map context', async () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+      provider: createJsonProvider({
+        queryType: 'area_overview',
+        anchorSource: 'map_view',
+        placeName: null,
+        targetCategory: '区域洞察',
+        needsClarification: false,
+        clarificationHint: null,
+      }),
+      intentClassifier: {
+        isReady: true,
+        classify: async () => ({
+          queryType: 'nearby_poi',
+          confidence: 0.91,
+          needsWebSearch: false,
+          webSearchConfidence: 0.12,
+          latencyMs: 9,
+          usedEmbedding: true,
+        }),
+      } as any,
+    })
+
+    const resolution = await (agent as any).resolveIntent({
+      request: {
+        messages: [{ role: 'user', content: '光谷附近美食' }],
+        options: {
+          spatialContext: {
+            viewport: [114.36, 30.49, 114.43, 30.53],
+            center: { lon: 114.395, lat: 30.505 },
+          },
+        },
+      },
+      rawQuery: '光谷附近美食',
+      fallbackIntent: {
+        queryType: 'unsupported',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '光谷附近美食',
+        placeName: null,
+        anchorSource: 'map_view',
+        secondaryPlaceName: null,
+        targetCategory: '餐饮美食',
+        comparisonTarget: null,
+        categoryKey: 'food',
+        categoryMain: '餐饮美食',
+        radiusM: 800,
+        needsClarification: true,
+        clarificationHint: '请更明确说明你的查询目标。',
+        needsWebSearch: false,
+      },
+      followUpHint: null,
+      providerReady: true,
+    })
+
+    expect(resolution.source).toBe('embedding')
+    expect(resolution.intent.queryType).toBe('nearby_poi')
+    expect(resolution.intent.anchorSource).toBe('place')
+    expect(resolution.intent.placeName).toBe('光谷')
+    expect(resolution.intent.radiusM).toBe(800)
   })
 
   it('builds a structured tool-loop handoff from the resolved LLM intent instead of reusing raw phrasing', () => {

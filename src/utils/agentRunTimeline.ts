@@ -71,6 +71,27 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null
 }
 
+function formatWebSearchStrategy(value: unknown): string {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return ''
+  if (normalized === 'hybrid') return 'Hybrid'
+  if (normalized === 'hybrid_with_discovery') return 'Hybrid+发现'
+  if (normalized === 'tavily') return 'Tavily'
+  if (normalized === 'multi_search') return '多引擎'
+  if (normalized === 'poi_discovery') return 'POI发现'
+  return String(value || '').trim()
+}
+
+function formatWebRequirementLabel(payload: PlainObject): string {
+  const normalized = pickString(payload.webRequirementMode, payload.web_requirement_mode).toLowerCase()
+  if (normalized === 'required') return '强依赖联网'
+  if (normalized === 'default_on') return '默认联网'
+  if (normalized === 'local_first') return '本地优先'
+  if (payload.needsWebSearch === true) return '需联网'
+  if (payload.webEvidencePlanned === true || payload.web_evidence_planned === true) return '默认联网'
+  return ''
+}
+
 function normalizeState(value: unknown, fallback: AgentTimelineState = 'info'): AgentTimelineState {
   const normalized = String(value || '').trim().toLowerCase()
   if (!normalized) return fallback
@@ -231,13 +252,16 @@ function buildIntentPreviewDetail(payload: PlainObject): string {
     ? (categorySub && categorySub !== categoryMain ? `${categoryMain}·${categorySub}` : categoryMain)
     : pickString(payload.targetCategory, payload.poi_sub_type)
   const parserProvider = formatParserProvider(payload.intentSource ?? payload.parserProvider ?? payload.parser_provider)
+  const webRequirementLabel = formatWebRequirementLabel(payload)
+  const webSearchStrategy = formatWebSearchStrategy(payload.webSearchStrategy ?? payload.web_search_strategy)
 
   const parts = [
     queryTypeLabel,
     pickString(payload.displayAnchor, payload.place_name),
     categoryLabel,
     parserProvider ? `来源 ${parserProvider}` : '',
-    payload.needsWebSearch === true ? '需联网' : '',
+    webRequirementLabel,
+    webSearchStrategy ? `策略 ${webSearchStrategy}` : '',
     pickString(payload.spatialRelation),
   ].filter(Boolean)
 
@@ -524,7 +548,15 @@ export function buildAgentEventRecord(type: string, payload: unknown = {}, times
     }
 
     if (status === 'done' || status === 'complete' || status === 'success') {
-      const sourceLabel = source === 'tavily' ? 'Tavily' : source === 'xiaohongshu' ? '小红书' : source === 'multi_search' ? '多引擎' : source
+      const sourceLabel = source === 'tavily'
+        ? 'Tavily'
+        : source === 'xiaohongshu'
+          ? '小红书'
+          : source === 'multi_search'
+            ? '多引擎'
+            : source === 'poi_discovery'
+              ? 'POI发现'
+              : source
       const pagesDetail = pagesRead !== null && pagesRead > 0 ? `，已阅读 ${pagesRead} 个网页` : ''
       const sampleDetail = sampleTitles.length > 0 ? `：${sampleTitles.join('；')}` : ''
       const countDetail = resultCount !== null
@@ -659,11 +691,51 @@ function normalizeToolCallStatus(status: unknown): AgentTimelineState {
 }
 
 function buildToolCallDetail(call: PlainObject): string {
+  const skill = pickString(call.skill, call.tool, call.name)
+  const action = pickString(call.action, call.operation, call.method, call.function)
   const latencyMs = toFiniteNumber(call.latency_ms ?? call.latencyMs)
   const parts = []
 
   if (latencyMs !== null) {
     parts.push(`${Math.round(latencyMs)} ms`)
+  }
+
+  if (skill === 'spatial_encoder') {
+    const result = asPlainObject(call.result)
+    const semanticEvidence = asPlainObject(result.semantic_evidence)
+    const modelRoute = pickString(result.model_route, semanticEvidence.mode)
+    const modelsUsed = asArray(result.models_used).map((item) => pickString(item)).filter(Boolean).join('+')
+
+    if (action === 'inspect_anchor_cell') {
+      const context = asPlainObject(result.context)
+      const cellLabel = pickString(context.cell_id, context.cellId, context.name, context.label, context.town_name, context.scene_label)
+      if (cellLabel) parts.push(`锚点格网 ${cellLabel}`)
+    }
+
+    if (action === 'search_anchor_cells') {
+      const cells = asArray(result.cells).length
+      const sceneTags = asArray(result.scene_tags).map((item) => pickString(item)).filter(Boolean).slice(0, 2).join('、')
+      const buckets = asArray(result.dominant_buckets).map((item) => pickString(item)).filter(Boolean).slice(0, 2).join('、')
+      parts.push(`邻域格网 ${cells} 个`)
+      if (sceneTags) parts.push(`场景 ${sceneTags}`)
+      if (buckets) parts.push(`桶 ${buckets}`)
+    }
+
+    if (action === 'annotate_poi_cells') {
+      const results = asArray(result.results)
+      const annotatedCount = results.filter((item) => {
+        const row = asPlainObject(item)
+        return Object.keys(asPlainObject(row.cell_context)).length > 0
+      }).length
+      parts.push(`POI格网标注 ${annotatedCount || results.length} 个`)
+    }
+
+    if (modelRoute) {
+      parts.push(`路由 ${modelRoute}`)
+    }
+    if (modelsUsed) {
+      parts.push(`模型 ${modelsUsed}`)
+    }
   }
 
   const provider = pickString(call.provider)
@@ -679,6 +751,15 @@ function buildToolCallDetail(call: PlainObject): string {
   return parts.join(' · ')
 }
 
+function buildToolCallTitle(skill: string, action: string): string {
+  if (skill === 'spatial_encoder') {
+    if (action === 'inspect_anchor_cell') return '空间编码器：锚点格网'
+    if (action === 'search_anchor_cells') return '空间编码器：邻域检索'
+    if (action === 'annotate_poi_cells') return '空间编码器：POI格网标注'
+  }
+  return `${skill}.${action}`
+}
+
 function normalizeToolCallEvent(call: unknown, index: number, fallbackTimestamp: number): AgentTimelineEvent {
   const payload = asPlainObject(call)
   const skill = pickString(payload.skill, payload.tool, payload.name) || 'tool'
@@ -690,7 +771,7 @@ function normalizeToolCallEvent(call: unknown, index: number, fallbackTimestamp:
     type: 'tool_call',
     kind: 'tool',
     state: normalizeToolCallStatus(payload.status),
-    title: `${skill}.${action}`,
+    title: buildToolCallTitle(skill, action),
     detail: buildToolCallDetail(payload),
     timestamp,
     meta: payload,

@@ -231,6 +231,130 @@ describe('RemoteFirstPythonBridge', () => {
     )
   })
 
+  it('keeps the last fallback status for snapshot/profile style calls when the remote endpoint is missing', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/health')) {
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+      }
+
+      if (url.endsWith('/encode-region-snapshot')) {
+        return new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 })
+      }
+
+      return new Response(JSON.stringify({
+        vector: [0.12, 0.88],
+        tokens: ['武汉大学', '咖啡'],
+        dimension: 2,
+      }), { status: 200 })
+    })
+
+    const bridge = new RemoteFirstPythonBridge({
+      baseUrl: 'http://encoder.test',
+      fetchImpl,
+      fallback: new LocalPythonBridge(),
+    })
+
+    const encoded = await bridge.encodeRegionSnapshot({
+      subjectName: '湖北大学校园生活带',
+      dominantCategories: [{ label: '餐饮美食', count: 10, share: 0.4 }],
+    })
+
+    expect(encoded.dimension).toBeGreaterThan(0)
+    await expect(bridge.getStatus({ probe: false })).resolves.toMatchObject({
+      name: 'spatial_encoder',
+      mode: 'fallback',
+      degraded: true,
+      reason: 'remote_endpoint_unavailable',
+      details: {
+        path: '/encode-region-snapshot',
+      },
+    })
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      name: 'spatial_encoder',
+      mode: 'remote',
+      degraded: false,
+      target: 'http://encoder.test',
+    })
+  })
+
+  it('reads town cell context and nearby cell search from the remote encoder when available', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/cell/context')) {
+        return new Response(JSON.stringify({
+          context: {
+            cell_id: '8840a69023fffff',
+            dominant_category: '购物消费',
+            region_name: '居住类',
+          },
+          models_used: ['town_encoder'],
+        }), { status: 200 })
+      }
+
+      if (url.endsWith('/cell/search')) {
+        return new Response(JSON.stringify({
+          anchor_cell_context: {
+            cell_id: '8840a69023fffff',
+            dominant_category: '购物消费',
+          },
+          cells: [
+            { cell_id: '8840a69023fffff', dominant_category: '购物消费', search_score: 0.9 },
+            { cell_id: '8840a6903dfffff', dominant_category: '餐饮美食', search_score: 0.84 },
+          ],
+          model_route: 'town_encoder',
+          models_used: ['town_encoder'],
+          search_radius_m: 1600,
+          per_cell_radius_m: 750,
+          support_bucket_distribution: [{ bucket: '零售购物', count: 10 }],
+          dominant_buckets: ['零售购物', '餐饮配套'],
+          scene_tags: ['居住社区', '餐饮活跃'],
+          cell_mix: [{ label: '居住类', count: 5, ratio: 1 }],
+          macro_uncertainty: { consistency_score: 0.91 },
+        }), { status: 200 })
+      }
+
+      return new Response(JSON.stringify({
+        status: 'ok',
+      }), { status: 200 })
+    })
+
+    const bridge = new RemoteFirstPythonBridge({
+      baseUrl: 'http://encoder.test',
+      fetchImpl,
+      fallback: new LocalPythonBridge(),
+    })
+
+    const context = await bridge.getCellContext(114.398573, 30.505338)
+    const search = await bridge.searchNearbyCells({
+      anchorLon: 114.398573,
+      anchorLat: 30.505338,
+      userQuery: '光谷附近美食',
+      taskType: 'nearby_poi',
+      topK: 5,
+    })
+
+    expect(context).toMatchObject({
+      context: {
+        cell_id: '8840a69023fffff',
+        dominant_category: '购物消费',
+      },
+      models_used: ['town_encoder'],
+    })
+    expect(search).toMatchObject({
+      dominant_buckets: ['零售购物', '餐饮配套'],
+      scene_tags: ['居住社区', '餐饮活跃'],
+      search_radius_m: 1600,
+      per_cell_radius_m: 750,
+    })
+    await expect(bridge.getStatus({ probe: false })).resolves.toMatchObject({
+      name: 'spatial_encoder',
+      mode: 'remote',
+      degraded: false,
+      target: 'http://encoder.test',
+    })
+  })
+
   it('recovers health status after a transient remote encoder failure', async () => {
     let encodeAttempts = 0
     const bridge = new RemoteFirstPythonBridge({

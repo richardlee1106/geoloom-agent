@@ -22,7 +22,7 @@ export async function encodePoiProfileAction(
 }>> {
   const profile = payload.profile || { name: '' }
   const encoded = await deps.bridge.encodePoiProfile(profile)
-  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus())
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus({ probe: false }))
   const embeddingId = `poi_${randomUUID()}`
   const vectorRef = `vector:poi:${embeddingId}`
   deps.store.set(vectorRef, {

@@ -17,7 +17,7 @@ export async function searchSimilarRegionsAction(
       score: item.score,
       summary: item.summary,
     }))
-  const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus())
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus({ probe: false }))
 
   return {
     ok: true,

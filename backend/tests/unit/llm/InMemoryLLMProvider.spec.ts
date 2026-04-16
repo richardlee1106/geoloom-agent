@@ -86,8 +86,8 @@ describe('InMemoryLLMProvider', () => {
     })
 
     expect(result.finishReason).toBe('tool_calls')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_aoi_context')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_landuse_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_aoi_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_landuse_context')
   })
 
   it('requests AOI and landuse templates for current-area summary questions so the model can explain semantics instead of only counting poi', async () => {
@@ -104,8 +104,8 @@ describe('InMemoryLLMProvider', () => {
     })
 
     expect(result.finishReason).toBe('tool_calls')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_aoi_context')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_landuse_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_aoi_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_landuse_context')
   })
 
   it('treats 解读一下这片区域 as an area-analysis query in fallback tool planning mode', async () => {
@@ -122,8 +122,8 @@ describe('InMemoryLLMProvider', () => {
     })
 
     expect(result.finishReason).toBe('tool_calls')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_category_histogram')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_aoi_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_category_histogram')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_aoi_context')
   })
 
   it('strips area-analysis lead-ins before resolving explicit place anchors in fallback mode', async () => {
@@ -201,7 +201,7 @@ describe('InMemoryLLMProvider', () => {
     })
 
     expect(result.finishReason).toBe('tool_calls')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_aoi_context')
-    expect(result.toolCalls.map((call) => call.arguments.payload.template)).toContain('area_landuse_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_aoi_context')
+    expect(result.toolCalls.map((call) => (call.arguments.payload as Record<string, unknown>).template)).toContain('area_landuse_context')
   })
 })

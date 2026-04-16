@@ -1,4 +1,5 @@
 import type { DeterministicIntent, EvidenceAnchor, EvidenceItem, EvidenceView, ResolvedAnchor } from '../../chat/types.js'
+import { isSoftScopedNearbyIntent, resolveNearbyMacroScope } from '../nearbyScope.js'
 import { normalizeNearbyItemsByIntent } from '../transportNormalization.js'
 
 function normalizePoiItem(row: Record<string, unknown>): EvidenceItem {
@@ -30,10 +31,19 @@ function normalizeAnchor(anchor: ResolvedAnchor): EvidenceAnchor {
 export function buildPOIListView(input: {
   anchor: ResolvedAnchor
   rows: Record<string, unknown>[]
+  items?: EvidenceItem[]
   intent: DeterministicIntent
 }): EvidenceView {
+  const nearbyMacroScope = resolveNearbyMacroScope({
+    intent: input.intent,
+    rawQuery: input.intent.rawQuery,
+    resolvedPlaceName: input.anchor.resolved_place_name || input.anchor.place_name,
+  })
+  const sourceItems = Array.isArray(input.items) && input.items.length > 0
+    ? input.items.map((item) => ({ ...item }))
+    : input.rows.map(normalizePoiItem)
   const items = normalizeNearbyItemsByIntent(
-    input.rows.map(normalizePoiItem),
+    sourceItems,
     input.intent
   )
 
@@ -44,8 +54,12 @@ export function buildPOIListView(input: {
     meta: {
       resultCount: items.length,
       radiusM: input.intent.radiusM,
+      distanceConstraintMode: isSoftScopedNearbyIntent(input.intent) ? 'soft' : 'hard',
       targetCategory: input.intent.targetCategory,
       queryType: input.intent.queryType,
+      scopeLabel: nearbyMacroScope?.label || null,
+      scopeDistricts: nearbyMacroScope?.districts || [],
+      scopeAlias: nearbyMacroScope?.alias || null,
     },
   }
 }

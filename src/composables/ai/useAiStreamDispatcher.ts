@@ -100,6 +100,14 @@ export function useAiStreamDispatcher({
     return Number.isFinite(numeric) ? numeric : null
   }
 
+  function buildWebRequirementTail(intentPreview: PlainObject = {}): string {
+    const mode = String(intentPreview.webRequirementMode || '').trim().toLowerCase()
+    if (mode === 'required') return ' · 强依赖联网'
+    if (mode === 'default_on') return ' · 默认联网'
+    if (mode === 'local_first') return ' · 本地优先'
+    return intentPreview.needsWebSearch === true ? ' · 联网辅助' : ''
+  }
+
   function resolvePrefetchStatusTag(prefetchDebug: PlainObject = {}): string {
     if (prefetchDebug.degraded === true) return 'degraded'
     if (prefetchDebug.wasted === true) return 'wasted'
@@ -173,6 +181,7 @@ export function useAiStreamDispatcher({
   function applyIntentMetaToMessage(message: AssistantMessage | null, intent: unknown): PlainObject | null {
     if (!message || !intent) return null
     const intentObject = asPlainObject(intent)
+    const currentPreview = asPlainObject(message.intentPreview)
 
     const mergedIntent = {
       ...(message.intentMeta || {}),
@@ -188,22 +197,30 @@ export function useAiStreamDispatcher({
       message.intentMode = resolvedMode
     }
 
+    const mergedNeedsWebSearch = toBooleanOrNull(mergedIntent.needsWebSearch)
+    const mergedWebEvidencePlanned = toBooleanOrNull(mergedIntent.webEvidencePlanned)
+
     message.intentPreview = {
-      ...(asPlainObject(message.intentPreview) || {}),
-      queryType: mergedIntent.queryType ?? asPlainObject(message.intentPreview).queryType ?? null,
-      displayAnchor: mergedIntent.placeName ?? asPlainObject(message.intentPreview).displayAnchor ?? null,
-      placeName: mergedIntent.placeName ?? asPlainObject(message.intentPreview).placeName ?? null,
-      targetCategory: mergedIntent.targetCategory ?? asPlainObject(message.intentPreview).targetCategory ?? null,
-      parserModel: mergedIntent.parserModel ?? asPlainObject(message.intentPreview).parserModel ?? null,
-      parserProvider: mergedIntent.parserProvider ?? asPlainObject(message.intentPreview).parserProvider ?? null,
-      needsWebSearch: toBooleanOrNull(mergedIntent.needsWebSearch) === true,
-      intentSource: mergedIntent.intentSource ?? asPlainObject(message.intentPreview).intentSource ?? mergedIntent.parserProvider ?? null,
-      sourceConfidence: Number.isFinite(Number(mergedIntent.sourceConfidence)) ? Number(mergedIntent.sourceConfidence) : asPlainObject(message.intentPreview).sourceConfidence ?? null,
-      sourceLatencyMs: Number.isFinite(Number(mergedIntent.sourceLatencyMs)) ? Number(mergedIntent.sourceLatencyMs) : asPlainObject(message.intentPreview).sourceLatencyMs ?? null,
-      categoryMain: mergedIntent.categoryMain ?? asPlainObject(message.intentPreview).categoryMain ?? null,
-      categorySub: mergedIntent.categorySub ?? asPlainObject(message.intentPreview).categorySub ?? null,
-      categoryResolved: Boolean(mergedIntent.categoryMain ?? asPlainObject(message.intentPreview).categoryMain),
-      categoryScore: Number.isFinite(Number(mergedIntent.categoryScore)) ? Number(mergedIntent.categoryScore) : asPlainObject(message.intentPreview).categoryScore ?? null,
+      ...currentPreview,
+      queryType: mergedIntent.queryType ?? currentPreview.queryType ?? null,
+      displayAnchor: mergedIntent.placeName ?? currentPreview.displayAnchor ?? null,
+      placeName: mergedIntent.placeName ?? currentPreview.placeName ?? null,
+      targetCategory: mergedIntent.targetCategory ?? currentPreview.targetCategory ?? null,
+      parserModel: mergedIntent.parserModel ?? currentPreview.parserModel ?? null,
+      parserProvider: mergedIntent.parserProvider ?? currentPreview.parserProvider ?? null,
+      needsWebSearch: mergedNeedsWebSearch ?? toBooleanOrNull(currentPreview.needsWebSearch),
+      webEvidencePlanned: mergedWebEvidencePlanned ?? toBooleanOrNull(currentPreview.webEvidencePlanned),
+      webSearchStrategy: mergedIntent.webSearchStrategy ?? currentPreview.webSearchStrategy ?? null,
+      webRequirementMode: mergedIntent.webRequirementMode ?? currentPreview.webRequirementMode ?? null,
+      intentSource: mergedIntent.intentSource ?? currentPreview.intentSource ?? mergedIntent.parserProvider ?? null,
+      sourceConfidence: Number.isFinite(Number(mergedIntent.sourceConfidence)) ? Number(mergedIntent.sourceConfidence) : currentPreview.sourceConfidence ?? null,
+      sourceLatencyMs: Number.isFinite(Number(mergedIntent.sourceLatencyMs)) ? Number(mergedIntent.sourceLatencyMs) : currentPreview.sourceLatencyMs ?? null,
+      categoryMain: mergedIntent.categoryMain ?? currentPreview.categoryMain ?? null,
+      categorySub: mergedIntent.categorySub ?? currentPreview.categorySub ?? null,
+      categoryResolved: Boolean(mergedIntent.categoryMain ?? currentPreview.categoryMain),
+      categoryScore: Number.isFinite(Number(mergedIntent.categoryScore)) ? Number(mergedIntent.categoryScore) : currentPreview.categoryScore ?? null,
+      toolIntent: mergedIntent.toolIntent ?? currentPreview.toolIntent ?? null,
+      searchIntentHint: mergedIntent.searchIntentHint ?? currentPreview.searchIntentHint ?? null,
     }
 
     return mergedIntent
@@ -306,6 +323,8 @@ export function useAiStreamDispatcher({
       const previewPayload = data as PlainObject
       if (currentMsg) {
         applySSEMetaToMessage(currentMsg, previewPayload)
+        const previewNeedsWebSearch = toBooleanOrNull(previewPayload.needsWebSearch)
+        const previewWebEvidencePlanned = toBooleanOrNull(previewPayload.webEvidencePlanned)
         currentMsg.intentPreview = {
           queryType: previewPayload.queryType ?? null,
           anchorSource: previewPayload.anchorSource ?? null,
@@ -322,7 +341,10 @@ export function useAiStreamDispatcher({
           isAbbreviation: previewPayload.isAbbreviation === true,
           parserModel: previewPayload.parserModel || previewPayload.parser_model || null,
           parserProvider: previewPayload.parserProvider || previewPayload.parser_provider || null,
-          needsWebSearch: previewPayload.needsWebSearch === true,
+          needsWebSearch: previewNeedsWebSearch,
+          webEvidencePlanned: previewWebEvidencePlanned,
+          webSearchStrategy: previewPayload.webSearchStrategy ?? previewPayload.web_search_strategy ?? null,
+          webRequirementMode: previewPayload.webRequirementMode ?? previewPayload.web_requirement_mode ?? null,
           intentSource: previewPayload.intentSource ?? previewPayload.parserProvider ?? previewPayload.parser_provider ?? null,
           sourceConfidence: Number.isFinite(Number(previewPayload.sourceConfidence)) ? Number(previewPayload.sourceConfidence) : null,
           sourceLatencyMs: Number.isFinite(Number(previewPayload.sourceLatencyMs)) ? Number(previewPayload.sourceLatencyMs) : null,
@@ -330,12 +352,14 @@ export function useAiStreamDispatcher({
           categorySub: previewPayload.categorySub ?? null,
           categoryResolved: previewPayload.categoryResolved === true,
           categoryScore: Number.isFinite(Number(previewPayload.categoryScore)) ? Number(previewPayload.categoryScore) : null,
+          toolIntent: previewPayload.toolIntent ?? previewPayload.tool_intent ?? null,
+          searchIntentHint: previewPayload.searchIntentHint ?? previewPayload.search_intent_hint ?? null,
         }
         const intentPreview = asPlainObject(currentMsg.intentPreview)
         const categoryLabel = intentPreview.categoryResolved && intentPreview.categoryMain
           ? `${intentPreview.categoryMain}${intentPreview.categorySub && intentPreview.categorySub !== intentPreview.categoryMain ? `·${intentPreview.categorySub}` : ''}`
           : intentPreview.targetCategory
-        const webTail = intentPreview.needsWebSearch === true ? ' · 联网辅助' : ''
+        const webTail = buildWebRequirementTail(intentPreview)
         currentMsg.thinkingMessage = intentPreview.displayAnchor
           ? `已识别：${intentPreview.displayAnchor}${categoryLabel ? ` · ${categoryLabel}` : ''}${webTail}`
           : (currentMsg.thinkingMessage || `已识别问题类型：${String(intentPreview.queryType || '未定')}`)

@@ -17,7 +17,7 @@ export async function searchSemanticPOIsAction(
       score: item.score,
       category: item.category,
     }))
-  const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus())
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus({ probe: false }))
 
   return {
     ok: true,

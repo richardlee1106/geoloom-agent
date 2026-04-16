@@ -27,6 +27,32 @@ describe('validateSpatialSQLAction', () => {
     expect(result.data?.valid).toBe(true)
   })
 
+  it('passes a nearby query that constrains pois by whitelisted district polygons', async () => {
+    const result = await validateSpatialSQLAction(
+      {
+        sql: `
+          SELECT id, name
+          FROM pois
+          WHERE ST_Intersects(
+            geom,
+            ST_Buffer(ST_SetSRID(ST_MakePoint(114.255, 30.618), 4326)::geography, 8000)::geometry
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM districts d
+            WHERE d.id IN (4, 5, 6)
+              AND ST_Intersects(pois.geom, d.geom)
+          )
+          LIMIT 20
+        `,
+      },
+      { catalog },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.data?.valid).toBe(true)
+  })
+
   it('rejects mutation statements', async () => {
     const result = await validateSpatialSQLAction(
       { sql: 'DELETE FROM pois WHERE id = 1' },

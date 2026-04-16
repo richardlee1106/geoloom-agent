@@ -20,8 +20,15 @@ export class RequirementResolver {
     contract: NLContract
     intent: DeterministicIntent
   }): ResolvedRequirements {
-    const { depth, needsWebEvidence, webSearchStrategy } = input.contract.meta
+    const { depth, needsWebEvidence } = input.contract.meta
     const { queryType } = input.intent
+    const webSearchStrategy = (
+      input.intent.queryType === 'nearby_poi'
+      && input.intent.toolIntent === 'candidate_reputation'
+      && input.contract.meta.webSearchStrategy === 'hybrid_with_discovery'
+    )
+      ? 'hybrid'
+      : input.contract.meta.webSearchStrategy
 
     // lookup 型：最小集 + 联网搜索（如有需要）
     if (depth === 'lookup') {
@@ -31,6 +38,18 @@ export class RequirementResolver {
       const webAtoms = this.resolveWebAtoms(needsWebEvidence, webSearchStrategy, lookupWebDeps)
       if (queryType === 'nearest_station') {
         return this.buildResult(['anchor.resolved', 'poi.nearest_station', ...webAtoms.required], webAtoms.optional, 'fast', input.intent)
+      }
+      if (
+        input.intent.queryType === 'nearby_poi'
+        && input.intent.toolIntent === 'candidate_lookup'
+        && webSearchStrategy === 'hybrid_with_discovery'
+      ) {
+        return this.buildResult(
+          ['anchor.resolved', 'poi.nearby_list', 'anchor.scope_cells', 'web.poi_discovery'],
+          ['web.tavily', 'web.entity_alignment', ...webAtoms.optional],
+          'fast',
+          input.intent,
+        )
       }
       return this.buildResult(['anchor.resolved', 'poi.nearby_list', ...webAtoms.required], webAtoms.optional, 'fast', input.intent)
     }
@@ -117,7 +136,7 @@ export class RequirementResolver {
 
   /**
    * 根据 webSearchStrategy 解析需要注入的 web atoms
-   * 优先级：Multi Search（DDG主力，免费56%相关性）→ Tavily（后备）
+   * 默认优先级：Tavily 主搜索；Multi Search 仅保留为显式兼容路径。
    */
   private resolveWebAtoms(
     needsWebEvidence: boolean,
@@ -144,17 +163,27 @@ export class RequirementResolver {
         break
       case 'multi_search':
         required.push('web.multi_search')
-        optional.push('web.tavily')
         required.push('web.entity_alignment')
         break
       case 'hybrid':
-        required.push('web.multi_search')
-        optional.push('web.tavily')
+        required.push('web.tavily')
+        optional.push('web.multi_search')
         required.push('web.entity_alignment')
         break
       case 'entity_alignment_only':
         // web search skills 不可用时的降级策略
         required.push('web.entity_alignment')
+        break
+      case 'poi_discovery':
+        required.push('anchor.scope_cells')
+        required.push('web.poi_discovery')
+        break
+      case 'hybrid_with_discovery':
+        required.push('anchor.scope_cells')
+        required.push('web.tavily')
+        optional.push('web.multi_search')
+        required.push('web.entity_alignment')
+        required.push('web.poi_discovery')
         break
     }
 
@@ -201,9 +230,14 @@ export class RequirementResolver {
         payloadTemplate: { role: 'secondary' },
         dependsOn: [], parallelizable: true,
       },
+      'anchor.scope_cells': {
+        skill: 'spatial_encoder', action: 'search_anchor_cells',
+        payloadTemplate: { top_k: 6 },
+        dependsOn: ['anchor.resolved'], parallelizable: false,
+      },
       'poi.nearby_list': {
         skill: 'postgis', action: 'execute_spatial_sql',
-        payloadTemplate: { template: 'nearby_poi', limit: 10 },
+        payloadTemplate: { template: 'nearby_poi', limit: 30 },
         dependsOn: ['anchor.resolved'], parallelizable: false,
       },
       'poi.nearest_station': {
@@ -272,18 +306,23 @@ export class RequirementResolver {
       },
       'web.multi_search': {
         skill: 'multi_search_engine', action: 'search_multi',
-        payloadTemplate: { engine_type: 'auto', max_engines: 3 },
-        dependsOn: [...new Set(['area.representative_samples', 'area.aoi_context', ...candidateReputationWebDeps])], parallelizable: true,
+        payloadTemplate: { engine_type: 'auto', max_engines: 3, max_results: 24 },
+        dependsOn: [...new Set(['area.representative_samples', 'area.aoi_context', ...candidateReputationWebDeps] as EvidenceAtom[])], parallelizable: true,
       },
       'web.tavily': {
         skill: 'tavily_search', action: 'search_web',
-        payloadTemplate: { search_depth: 'basic', max_results: 10 },
-        dependsOn: [...new Set(['area.representative_samples', 'area.aoi_context', ...candidateReputationWebDeps])], parallelizable: true,
+        payloadTemplate: { search_depth: 'basic', max_results: 24 },
+        dependsOn: [...new Set(['area.representative_samples', 'area.aoi_context', ...candidateReputationWebDeps] as EvidenceAtom[])], parallelizable: true,
       },
       'web.entity_alignment': {
         skill: 'entity_alignment', action: 'align_and_rank',
-        payloadTemplate: { max_results: 20 },
-        dependsOn: ['web.multi_search', 'poi.nearby_list', 'area.representative_samples'], parallelizable: false,
+        payloadTemplate: { max_results: 30 },
+        dependsOn: ['web.tavily', 'web.multi_search', 'poi.nearby_list', 'area.representative_samples'], parallelizable: false,
+      },
+      'web.poi_discovery': {
+        skill: 'web_poi_discovery', action: 'discover_pois',
+        payloadTemplate: { max_results: 24 },
+        dependsOn: ['anchor.resolved', 'anchor.scope_cells'], parallelizable: false,
       },
     }
 

@@ -312,7 +312,7 @@ export class InMemoryLLMProvider implements LLMProvider {
         })
       }
 
-      const missingAreaCalls = [
+      const missingAreaCalls = ([
         ['area_category_histogram', 8],
         ['area_ring_distribution', 8],
         ['area_representative_sample', 18],
@@ -324,7 +324,7 @@ export class InMemoryLLMProvider implements LLMProvider {
               ['area_landuse_context', 6],
             ]
           : []),
-      ].filter(([template]) => !hasTemplateResult(toolResults, template))
+      ] as unknown as readonly [string, number][]).filter(([template]) => !hasTemplateResult(toolResults, template))
 
       if (missingAreaCalls.length > 0) {
         return this.createResponse({

@@ -1,6 +1,10 @@
 import { createDependencyStatus, type DependencyStatus } from './dependencyStatus.js'
 import { requestJson } from './httpClient.js'
 
+export interface DependencyStatusQueryOptions {
+  probe?: boolean
+}
+
 export interface SemanticPoiCandidate {
   id: string
   name: string
@@ -20,7 +24,7 @@ export interface SimilarRegionCandidate {
 export interface FaissIndex {
   searchSemanticPOIs(text: string, topK?: number): Promise<SemanticPoiCandidate[]>
   searchSimilarRegions(text: string, topK?: number): Promise<SimilarRegionCandidate[]>
-  getStatus(): Promise<DependencyStatus>
+  getStatus(options?: DependencyStatusQueryOptions): Promise<DependencyStatus>
 }
 
 const REGION_CATALOG = [
@@ -166,6 +170,34 @@ export class RemoteFirstFaissIndex implements FaissIndex {
       })
   }
 
+  private buildSuccessStatus() {
+    return createDependencyStatus({
+      name: 'spatial_vector',
+      ready: true,
+      mode: 'remote',
+      degraded: false,
+      target: this.baseUrl,
+    })
+  }
+
+  private buildFailureStatus(error: unknown, path: string) {
+    const message = error instanceof Error ? error.message : String(error)
+    const isUnsupportedEndpoint = /remote_request_failed:404\b/u.test(message)
+
+    return createDependencyStatus({
+      name: 'spatial_vector',
+      ready: true,
+      mode: 'fallback',
+      degraded: true,
+      reason: isUnsupportedEndpoint ? 'remote_endpoint_unavailable' : 'remote_request_failed',
+      target: this.baseUrl,
+      details: {
+        message,
+        path,
+      },
+    })
+  }
+
   async searchSemanticPOIs(text: string, topK = 5): Promise<SemanticPoiCandidate[]> {
     if (!this.baseUrl) {
       this.lastStatus = await this.fallback.getStatus()
@@ -181,26 +213,10 @@ export class RemoteFirstFaissIndex implements FaissIndex {
         timeoutMs: this.timeoutMs,
         fetchImpl: this.options.fetchImpl,
       })
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'remote',
-        degraded: false,
-        target: this.baseUrl,
-      })
+      this.lastStatus = this.buildSuccessStatus()
       return response.candidates || []
     } catch (error) {
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'fallback',
-        degraded: true,
-        reason: 'remote_request_failed',
-        target: this.baseUrl,
-        details: {
-          message: error instanceof Error ? error.message : String(error),
-        },
-      })
+      this.lastStatus = this.buildFailureStatus(error, this.semanticPoiPath)
       return this.fallback.searchSemanticPOIs(text, topK)
     }
   }
@@ -220,32 +236,16 @@ export class RemoteFirstFaissIndex implements FaissIndex {
         timeoutMs: this.timeoutMs,
         fetchImpl: this.options.fetchImpl,
       })
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'remote',
-        degraded: false,
-        target: this.baseUrl,
-      })
+      this.lastStatus = this.buildSuccessStatus()
       return response.regions || []
     } catch (error) {
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'fallback',
-        degraded: true,
-        reason: 'remote_request_failed',
-        target: this.baseUrl,
-        details: {
-          message: error instanceof Error ? error.message : String(error),
-        },
-      })
+      this.lastStatus = this.buildFailureStatus(error, this.similarRegionPath)
       return this.fallback.searchSimilarRegions(text, topK)
     }
   }
 
-  async getStatus(): Promise<DependencyStatus> {
-    if (!this.baseUrl) {
+  async getStatus(options: DependencyStatusQueryOptions = {}): Promise<DependencyStatus> {
+    if (options.probe === false || !this.baseUrl) {
       return this.lastStatus
     }
 
@@ -256,25 +256,9 @@ export class RemoteFirstFaissIndex implements FaissIndex {
         timeoutMs: this.timeoutMs,
         fetchImpl: this.options.fetchImpl,
       })
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'remote',
-        degraded: false,
-        target: this.baseUrl,
-      })
+      this.lastStatus = this.buildSuccessStatus()
     } catch (error) {
-      this.lastStatus = createDependencyStatus({
-        name: 'spatial_vector',
-        ready: true,
-        mode: 'fallback',
-        degraded: true,
-        reason: 'remote_request_failed',
-        target: this.baseUrl,
-        details: {
-          message: error instanceof Error ? error.message : String(error),
-        },
-      })
+      this.lastStatus = this.buildFailureStatus(error, this.healthPath)
     }
 
     return this.lastStatus

@@ -1,0 +1,211 @@
+{
+  "id": "2026-04-16-183548",
+  "generated_at": "2026-04-16T10:35:48.8464141Z",
+  "language": "zh",
+  "pages": [
+    {
+      "slug": "1-xiang-mu-gai-shu-geoloom-agent-di-li-zhi-neng-dai-li-xi-tong",
+      "title": "项目概述：GeoLoom Agent 地理智能代理系统",
+      "file": "1-xiang-mu-gai-shu-geoloom-agent-di-li-zhi-neng-dai-li-xi-tong.md",
+      "section": "Get Started",
+      "level": "Beginner"
+    },
+    {
+      "slug": "2-kuai-su-kai-shi-huan-jing-pei-zhi-yu-qi-dong-zhi-nan",
+      "title": "快速开始：环境配置与启动指南",
+      "file": "2-kuai-su-kai-shi-huan-jing-pei-zhi-yu-qi-dong-zhi-nan.md",
+      "section": "Get Started",
+      "level": "Beginner"
+    },
+    {
+      "slug": "3-jia-gou-gai-lan-qian-duan-hou-duan-yu-ai-yin-qing-xie-tong",
+      "title": "架构概览：前端、后端与 AI 引擎协同",
+      "file": "3-jia-gou-gai-lan-qian-duan-hou-duan-yu-ai-yin-qing-xie-tong.md",
+      "section": "Get Started",
+      "level": "Beginner"
+    },
+    {
+      "slug": "4-he-xin-ji-neng-mo-kuai-postgis-kong-jian-bian-ma-yu-yu-yi-xuan-ze",
+      "title": "核心技能模块：PostGIS、空间编码与语义选择",
+      "file": "4-he-xin-ji-neng-mo-kuai-postgis-kong-jian-bian-ma-yu-yu-yi-xuan-ze.md",
+      "section": "Get Started",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "5-llm-ji-cheng-yi-tu-shi-bie-yu-tui-li-yin-qing",
+      "title": "LLM 集成：意图识别与推理引擎",
+      "file": "5-llm-ji-cheng-yi-tu-shi-bie-yu-tui-li-yin-qing.md",
+      "section": "Get Started",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "6-kong-jian-shu-ju-fu-wu-osm-qiao-jie-yu-postgis-cun-chu",
+      "title": "空间数据服务：OSM 桥接与 PostGIS 存储",
+      "file": "6-kong-jian-shu-ju-fu-wu-osm-qiao-jie-yu-postgis-cun-chu.md",
+      "section": "Get Started",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "7-qing-qiu-sheng-ming-zhou-qi-guan-li-cong-yong-hu-shu-ru-dao-liu-shi-xiang-ying",
+      "title": "请求生命周期管理：从用户输入到流式响应",
+      "file": "7-qing-qiu-sheng-ming-zhou-qi-guan-li-cong-yong-hu-shu-ru-dao-liu-shi-xiang-ying.md",
+      "section": "Get Started",
+      "level": "Advanced"
+    },
+    {
+      "slug": "8-zheng-ju-sheng-cheng-yu-ke-shi-hua-kong-jian-zheng-ju-qia-yu-xu-shi-mo-shi",
+      "title": "证据生成与可视化：空间证据卡与叙事模式",
+      "file": "8-zheng-ju-sheng-cheng-yu-ke-shi-hua-kong-jian-zheng-ju-qia-yu-xu-shi-mo-shi.md",
+      "section": "Get Started",
+      "level": "Advanced"
+    },
+    {
+      "slug": "9-qian-duan-jia-gou-vue-3-vite-di-li-ke-shi-hua-zu-jian",
+      "title": "前端架构：Vue 3 + Vite + 地理可视化组件",
+      "file": "9-qian-duan-jia-gou-vue-3-vite-di-li-ke-shi-hua-zu-jian.md",
+      "section": "Get Started",
+      "level": "Advanced"
+    },
+    {
+      "slug": "10-ce-shi-ce-lue-dan-yuan-ce-shi-ji-cheng-ce-shi-yu-yan-wu-ce-shi",
+      "title": "测试策略：单元测试、集成测试与烟雾测试",
+      "file": "10-ce-shi-ce-lue-dan-yuan-ce-shi-ji-cheng-ce-shi-yu-yan-wu-ce-shi.md",
+      "section": "Get Started",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "11-gong-ju-lian-yu-jiao-ben-kai-fa-gou-jian-yu-bu-shu-zi-dong-hua",
+      "title": "工具链与脚本：开发、构建与部署自动化",
+      "file": "11-gong-ju-lian-yu-jiao-ben-kai-fa-gou-jian-yu-bu-shu-zi-dong-hua.md",
+      "section": "Get Started",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "12-pei-zhi-wen-jian-xiang-jie-huan-jing-llm-yu-kong-jian-can-shu",
+      "title": "配置文件详解：环境、LLM 与空间参数",
+      "file": "12-pei-zhi-wen-jian-xiang-jie-huan-jing-llm-yu-kong-jian-can-shu.md",
+      "section": "Get Started",
+      "level": "Beginner"
+    },
+    {
+      "slug": "13-poi-yu-qu-yu-bian-ma-qi-di-li-kong-jian-xiang-liang-hua",
+      "title": "POI 与区域编码器：地理空间向量化",
+      "file": "13-poi-yu-qu-yu-bian-ma-qi-di-li-kong-jian-xiang-liang-hua.md",
+      "section": "Deep Dive",
+      "group": "核心算法与数据编码",
+      "level": "Advanced"
+    },
+    {
+      "slug": "14-faiss-suo-yin-yu-yu-yi-jian-suo-gao-xiao-kong-jian-pi-pei",
+      "title": "FAISS 索引与语义检索：高效空间匹配",
+      "file": "14-faiss-suo-yin-yu-yu-yi-jian-suo-gao-xiao-kong-jian-pi-pei.md",
+      "section": "Deep Dive",
+      "group": "核心算法与数据编码",
+      "level": "Advanced"
+    },
+    {
+      "slug": "15-zha-ge-shu-ju-ti-qu-tiff-chu-li-yu-kong-jian-fen-xi",
+      "title": "栅格数据提取：TIFF 处理与空间分析",
+      "file": "15-zha-ge-shu-ju-ti-qu-tiff-chu-li-yu-kong-jian-fen-xi.md",
+      "section": "Deep Dive",
+      "group": "核心算法与数据编码",
+      "level": "Advanced"
+    },
+    {
+      "slug": "16-di-tu-rong-qi-yu-tu-ceng-guan-li-di-li-ke-shi-hua-he-xin",
+      "title": "地图容器与图层管理：地理可视化核心",
+      "file": "16-di-tu-rong-qi-yu-tu-ceng-guan-li-di-li-ke-shi-hua-he-xin.md",
+      "section": "Deep Dive",
+      "group": "前端交互与状态管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "17-ai-liao-tian-zu-jian-liu-shi-dui-hua-yu-shang-xia-wen-bang-ding",
+      "title": "AI 聊天组件：流式对话与上下文绑定",
+      "file": "17-ai-liao-tian-zu-jian-liu-shi-dui-hua-yu-shang-xia-wen-bang-ding.md",
+      "section": "Deep Dive",
+      "group": "前端交互与状态管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "18-gong-zuo-xian-cheng-bing-xing-ji-suan-yu-shu-ju-jia-zai-you-hua",
+      "title": "工作线程：并行计算与数据加载优化",
+      "file": "18-gong-zuo-xian-cheng-bing-xing-ji-suan-yu-shu-ju-jia-zai-you-hua.md",
+      "section": "Deep Dive",
+      "group": "前端交互与状态管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "19-zhuang-tai-guan-li-hud-tong-zhi-yu-tuan-dui-xie-zuo-zhuang-tai",
+      "title": "状态管理：HUD、通知与团队协作状态",
+      "file": "19-zhuang-tai-guan-li-hud-tong-zhi-yu-tuan-dui-xie-zuo-zhuang-tai.md",
+      "section": "Deep Dive",
+      "group": "前端交互与状态管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "20-zhi-neng-ti-bian-pai-ji-neng-diao-du-yu-ren-wu-zhi-xing",
+      "title": "智能体编排：技能调度与任务执行",
+      "file": "20-zhi-neng-ti-bian-pai-ji-neng-diao-du-yu-ren-wu-zhi-xing.md",
+      "section": "Deep Dive",
+      "group": "后端服务与 API 设计",
+      "level": "Advanced"
+    },
+    {
+      "slug": "21-nlp-fu-wu-ming-ming-shi-ti-shi-bie-yu-di-li-jie-xi",
+      "title": "NLP 服务：命名实体识别与地理解析",
+      "file": "21-nlp-fu-wu-ming-ming-shi-ti-shi-bie-yu-di-li-jie-xi.md",
+      "section": "Deep Dive",
+      "group": "后端服务与 API 设计",
+      "level": "Advanced"
+    },
+    {
+      "slug": "22-api-lu-you-she-ji-restful-yu-sse-liu-shi-chuan-shu",
+      "title": "API 路由设计：RESTful 与 SSE 流式传输",
+      "file": "22-api-lu-you-she-ji-restful-yu-sse-liu-shi-chuan-shu.md",
+      "section": "Deep Dive",
+      "group": "后端服务与 API 设计",
+      "level": "Advanced"
+    },
+    {
+      "slug": "23-nei-cun-yu-chi-jiu-hua-hui-hua-ji-yi-yu-shu-ju-huan-cun",
+      "title": "内存与持久化：会话记忆与数据缓存",
+      "file": "23-nei-cun-yu-chi-jiu-hua-hui-hua-ji-yi-yu-shu-ju-huan-cun.md",
+      "section": "Deep Dive",
+      "group": "后端服务与 API 设计",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "24-lei-xing-xi-tong-typescript-qi-yue-yu-shu-ju-mo-xing",
+      "title": "类型系统：TypeScript 契约与数据模型",
+      "file": "24-lei-xing-xi-tong-typescript-qi-yue-yu-shu-ju-mo-xing.md",
+      "section": "Deep Dive",
+      "group": "开发规范与扩展",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "25-ke-guan-ce-xing-zhi-biao-shou-ji-yu-yao-ce-fu-wu",
+      "title": "可观测性：指标收集与遥测服务",
+      "file": "25-ke-guan-ce-xing-zhi-biao-shou-ji-yu-yao-ce-fu-wu.md",
+      "section": "Deep Dive",
+      "group": "开发规范与扩展",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "26-wai-bu-ji-cheng-searxng-sou-suo-yu-di-san-fang-api",
+      "title": "外部集成：SearXNG 搜索与第三方 API",
+      "file": "26-wai-bu-ji-cheng-searxng-sou-suo-yu-di-san-fang-api.md",
+      "section": "Deep Dive",
+      "group": "开发规范与扩展",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "27-zhong-gou-yu-yan-jin-cong-v2-dao-v4-de-jia-gou-die-dai",
+      "title": "重构与演进：从 V2 到 V4 的架构迭代",
+      "file": "27-zhong-gou-yu-yan-jin-cong-v2-dao-v4-de-jia-gou-die-dai.md",
+      "section": "Deep Dive",
+      "group": "开发规范与扩展",
+      "level": "Advanced"
+    }
+  ]
+}

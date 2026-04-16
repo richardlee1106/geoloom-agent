@@ -1,9 +1,9 @@
 /**
  * 搜索路由器
- * 优先级：Multi Search（DDG主力，免费56%相关性）→ Tavily（后备，精准+答案摘要）
- * 实测数据：
- *   DDG(简单UA+间隔): 平均10条/题，56%相关性，100%成功率，免费
- *   Tavily: 平均5条精准结果+答案摘要，100%答案率，API付费
+ * 优先级：Tavily 主搜索 → Multi Search 兼容兜底
+ * 约束：
+ *   1. 主链路默认使用 Tavily，保证联网搜索来源一致。
+ *   2. Multi Search 仅作为显式兼容或 Tavily 不可用时的回退。
  */
 
 export type SearchSource = 'tavily' | 'multi_search'
@@ -33,26 +33,26 @@ export class SearchRouter {
 
   /**
    * 根据查询内容智能选择搜索源
-   * 优先级：Multi Search(DDG主力) → Tavily(后备)
+   * 优先级：Tavily 主搜索 → Multi Search 兜底
    */
   route(query: string): SearchRoute[] {
     const routes: SearchRoute[] = []
 
-    // 优先级 1：Multi Search（DDG主力，免费56%相关性，10条/题）
-    if (this.options.enableMultiSearch) {
-      routes.push({
-        source: 'multi_search',
-        priority: 1,
-        reason: 'Multi Search 主力（DDG免费，56%相关性，10条/题）',
-      })
-    }
-
-    // 优先级 2：Tavily 后备（精准+答案摘要，API付费）
+    // 优先级 1：Tavily 主搜索（结果更稳定，便于后续 crawl/NER/alignment 串联）
     if (this.options.enableTavily && this.options.tavilyApiKey) {
       routes.push({
         source: 'tavily',
+        priority: 1,
+        reason: 'Tavily 主搜索，供正文抽取与实体对齐主链路使用',
+      })
+    }
+
+    // 优先级 2：Multi Search 兼容兜底
+    if (this.options.enableMultiSearch) {
+      routes.push({
+        source: 'multi_search',
         priority: 2,
-        reason: 'Tavily 后备搜索，精准结果+AI答案摘要',
+        reason: 'Multi Search 兼容兜底，用于 Tavily 不可用时回退',
       })
     }
 

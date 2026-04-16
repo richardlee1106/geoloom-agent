@@ -1,6 +1,6 @@
 /**
  * 本地实验脚本：
- * Tavily + Crawl4AI + LTP NER + 场景画像过滤 + DB 验证
+ * Tavily + Crawl4AI + 正则提取 + 场景画像过滤 + DB 验证
  *
  * 约束：
  * 1. 默认每轮只跑两个问题，避免过度消耗 Tavily 配额。
@@ -151,7 +151,6 @@ const CONFIG = {
   tavilyApiKey: resolveTavilyApiKey(),
   tavilyTimeoutMs: Math.max(5000, Number(process.env.TAVILY_TIMEOUT_MS || '12000')),
   crawl4aiUrl: 'http://localhost:11235/crawl',
-  nerUrl: 'http://localhost:5100/extract',
 };
 
 const LLM_CONFIG = {
@@ -648,31 +647,9 @@ async function fetchContents(searchResults, timeoutMs = 15000) {
   }
 }
 
+// NER 服务已废弃，extractVenuesWithNER 函数已删除
 async function extractVenuesWithNER(contents, query) {
-  try {
-    const resp = await fetch(CONFIG.nerUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: contents.map((item) => ({ title: item.title || '', content: item.content || '' })),
-        query,
-      }),
-    });
-
-    if (!resp.ok) {
-      console.error(`  [NER] HTTP 错误: ${resp.status}`);
-      return { venues: [], elapsedMs: 0 };
-    }
-
-    const result = await resp.json();
-    return {
-      venues: result.venues || [],
-      elapsedMs: result.elapsed_ms || 0,
-    };
-  } catch (error) {
-    console.error(`  [NER] 调用失败: ${error.message}`);
-    return { venues: [], elapsedMs: 0 };
-  }
+  return { venues: [], elapsedMs: 0 };
 }
 
 async function queryDbByCandidate(candidateName, profile, districts, useCategoryFilter) {
@@ -1053,9 +1030,9 @@ async function executeQuestionPipeline(question, queryOverride = null, attempt =
   const nerStart = Date.now();
   const { venues: nerVenues, elapsedMs: nerInternalMs } = await extractVenuesWithNER(contents, effectiveQuery);
   const regexVenues = extractRegexCandidates(contents, profile);
-  const rawVenues = [...nerVenues, ...regexVenues];
+  const rawVenues = [...regexVenues]; // NER 已废弃，仅使用正则提取
   timings.ner = Date.now() - nerStart;
-  console.log(`  [3.NER] 原始候选 ${rawVenues.length} 个，其中正则补充 ${regexVenues.length} 个；LTP内部 ${nerInternalMs}ms，总耗时 ${timings.ner}ms`);
+  console.log(`  [3.提取] 原始候选 ${rawVenues.length} 个（正则提取）；总耗时 ${timings.ner}ms`);
 
   const candidateStart = Date.now();
   let rankedCandidates = rankVenueCandidates(rawVenues, profile, 1);
@@ -1150,7 +1127,7 @@ async function executeQuestionPipeline(question, queryOverride = null, attempt =
   console.log(`\n  ⏱️  各阶段耗时:`);
   console.log(`    搜索:    ${timings.search}ms`);
   console.log(`    抓取:    ${timings.fetch}ms`);
-  console.log(`    NER:     ${timings.ner}ms (LTP内部${nerInternalMs}ms)`);
+  console.log(`    提取:    ${timings.ner}ms`);
   console.log(`    过滤:    ${timings.filter}ms`);
   console.log(`    DB匹配:  ${timings.dbMatch}ms`);
   console.log(`    总计:    ${timings.total}ms`);
@@ -1172,7 +1149,7 @@ async function runTest() {
   const requestedIds = parseRequestedQuestionIds();
   const questions = TEST_QUESTIONS.filter((item) => requestedIds.includes(item.id));
 
-  console.log('🔍 本地实验：Tavily + Crawl4AI + LTP NER + 场景画像过滤 + DB 验证 + Goal-Fit Judge');
+  console.log('🔍 本地实验：Tavily + Crawl4AI + 正则提取 + 场景画像过滤 + DB 验证 + Goal-Fit Judge');
   console.log(`本轮问题: ${questions.map((item) => `Q${item.id}`).join(', ')}`);
   console.log('================================================================================');
 

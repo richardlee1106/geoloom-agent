@@ -79,4 +79,28 @@ describe('AgentMessageCard', () => {
     expect(wrapper.text()).toContain('已完成分析')
     expect(wrapper.text()).toContain('用时 4.2 s')
   })
+
+  it('renders tavily and poi discovery labels in the web search debug card', () => {
+    const message = createMessage()
+    message.webSearchResultCount = 10
+    message.webSearchPagesRead = 10
+    message.webSearchSources = ['tavily', 'poi_discovery']
+    message.webSearchResults = [
+      { title: '光谷步行街牛肉面' },
+      { title: '世界城广场美食街' }
+    ]
+
+    const wrapper = mount(AgentMessageCard, {
+      props: {
+        message,
+        messageHtml: '<p>测试</p>',
+        formattedTime: '14:32',
+        embeddedIntentMode: 'macro',
+        showTagCloud: false,
+      },
+    })
+
+    expect(wrapper.text()).toContain('Tavily')
+    expect(wrapper.text()).toContain('POI发现')
+  })
 })

@@ -26,9 +26,12 @@ describe('Renderer', () => {
       },
     })
 
+    expect(answer).toMatch(/## 推荐结论/)
+    expect(answer).toMatch(/## 就近可选/)
+    expect(answer).toMatch(/## 使用说明/)
     expect(answer).toMatch(/武汉大学/)
     expect(answer).toMatch(/luckin coffee/)
-    expect(answer).toMatch(/800/)
+    expect(answer).toMatch(/800 米/)
   })
 
   it('lists every nearby poi when the result set is still compact', () => {
@@ -53,11 +56,37 @@ describe('Renderer', () => {
       },
     })
 
-    expect(answer).toMatch(/^## 结论/m)
-    expect(answer).toMatch(/## 候选地点/)
-    expect(answer).toMatch(/找到 6 个地铁站相关地点/)
+    expect(answer).toMatch(/^## 推荐结论/m)
+    expect(answer).toMatch(/## 就近可选/)
+    expect(answer).toMatch(/当前共保留 6 个地铁站相关地点/)
     expect(answer).toMatch(/1\. 湖北大学地铁站E口/)
     expect(answer).toMatch(/6\. 秦园路\(地铁站\)/)
+  })
+
+  it('surfaces macro district constraints in soft-scoped nearby markdown', () => {
+    const answer = renderer.render({
+      type: 'poi_list',
+      anchor: {
+        placeName: '汉口',
+        displayName: '汉口',
+        resolvedPlaceName: '汉口',
+      },
+      items: [
+        { name: '老通城', category: '小吃快餐', distance_m: 1800 },
+        { name: '四季美', category: '小吃快餐', distance_m: 2200 },
+      ],
+      meta: {
+        radiusM: 8000,
+        distanceConstraintMode: 'soft',
+        targetCategory: '餐饮美食',
+        scopeLabel: '汉口片区',
+        scopeDistricts: ['江汉区', '江岸区', '硚口区'],
+      },
+    })
+
+    expect(answer).toMatch(/围绕汉口片区/)
+    expect(answer).toMatch(/江汉区、江岸区、硚口区/)
+    expect(answer).toMatch(/片区级结果/)
   })
 
   it('renders transport evidence into a nearest-station sentence', () => {

@@ -22,7 +22,7 @@ export class NLContractCompiler {
         scope,
         depth,
         forbiddenBlocks,
-        estimatedAtomCount: this.estimateAtomCount(depth, needsWebEvidence),
+        estimatedAtomCount: this.estimateAtomCount(depth, webSearchStrategy),
         trackingId: `contract_${Date.now()}`,
         needsWebEvidence,
         webSearchStrategy,
@@ -56,17 +56,32 @@ export class NLContractCompiler {
    * 优先使用 LLM 在意图识别阶段的判断（intent.needsWebSearch），
    * 同时加入确定性兜底规则：当 rawQuery 包含评分/高分/推荐/口碑等关键词时，
    * 即使 LLM 漏判也强制触发 web search
-   * 策略：hybrid（Multi Search 主力 + Tavily 后备）
+   * 策略：默认 Tavily 主搜索；附近候选点评价题坚持 DB-first，只做联网校验，不再把 discovery 当主链路。
    */
   private inferWebEvidence(intent: DeterministicIntent): { needsWebEvidence: boolean, webSearchStrategy: WebSearchStrategy } {
     const rawQuery = intent.rawQuery || ''
-    const webTriggerRe = /高分|评分|评价|口碑|推荐|排名|好不好|体验|营业|价格|人均|新开|最新|动态|趋势|规划|好吃|特色|必吃|必去|网红|人气/u
-    const deterministicTrigger = webTriggerRe.test(rawQuery)
+    const heavyDiscoveryTriggerRe = /高分|评分|评价|口碑|排名|好不好|体验|营业|价格|人均|新开|最新|动态|趋势|规划|榜单|攻略/u
+    const tavilyTriggerRe = /推荐|好吃|特色|必吃|必去|网红|人气/u
+    const heavyDiscoveryTrigger = heavyDiscoveryTriggerRe.test(rawQuery)
+    const deterministicTrigger = heavyDiscoveryTrigger || tavilyTriggerRe.test(rawQuery)
+    const hasConcreteNearbyCategory = intent.queryType === 'nearby_poi'
+      && intent.categoryKey !== 'metro_station'
+      && Boolean(intent.categoryKey || intent.categoryMain || intent.categorySub)
 
-    if (!intent.needsWebSearch && !deterministicTrigger) {
+    if (!intent.needsWebSearch && !deterministicTrigger && !hasConcreteNearbyCategory) {
       return { needsWebEvidence: false, webSearchStrategy: 'none' }
     }
-    return { needsWebEvidence: true, webSearchStrategy: 'hybrid' }
+
+    if (hasConcreteNearbyCategory) {
+      return {
+        needsWebEvidence: true,
+        webSearchStrategy: intent.toolIntent === 'candidate_lookup'
+          ? 'hybrid_with_discovery'
+          : 'hybrid',
+      }
+    }
+
+    return { needsWebEvidence: true, webSearchStrategy: 'tavily' }
   }
 
   private inferForbiddenBlocks(
@@ -75,15 +90,19 @@ export class NLContractCompiler {
     depth: ContractDepth,
   ): string[] {
     const forbidden: string[] = []
-    // 用户没问"机会/投资"，就禁止输出
-    if (!/机会|投资|商机|前景/u.test(rawQuery)) forbidden.push('投资机会')
-    if (!/异常|风险|问题/u.test(rawQuery)) forbidden.push('异常点')
-    if (!/开店|选址|适合/u.test(rawQuery)) forbidden.push('开店建议')
-    if (!/发展|潜力|趋势/u.test(rawQuery)) forbidden.push('发展潜力')
-    // lookup 深度禁止所有分析性输出
+
+    // nearby_poi / nearest_station 等查找类查询不会产出片区分析或选址建议，无需禁止
     if (depth === 'lookup') {
-      forbidden.push('业态分析', '片区总结', '热点分析')
+      return forbidden
     }
+
+    if (!/机会|投资|商机|前景|开店|选址|适合/u.test(rawQuery)) {
+      forbidden.push('投资/开店建议')
+    }
+    if (depth === 'descriptive' && !/异常|风险|问题/u.test(rawQuery)) {
+      forbidden.push('风险推演')
+    }
+
     return [...new Set(forbidden)]
   }
 
@@ -96,7 +115,7 @@ export class NLContractCompiler {
     return `围绕用户问题「${rawQuery}」组织基于证据的回答。`
   }
 
-  private estimateAtomCount(depth: ContractDepth, needsWebEvidence: boolean): number {
+  private estimateAtomCount(depth: ContractDepth, webSearchStrategy: WebSearchStrategy): number {
     let base = 3
     switch (depth) {
       case 'lookup': base = 2; break
@@ -104,7 +123,15 @@ export class NLContractCompiler {
       case 'structural': base = 6; break
       case 'prescriptive': base = 7; break
     }
-    // 联网搜索增加 2-3 个 atom (multi_search + tavily + entity_alignment)
-    return needsWebEvidence ? base + 3 : base
+    const webAtomBudget = webSearchStrategy === 'none'
+      ? 0
+      : webSearchStrategy === 'entity_alignment_only'
+        ? 1
+        : webSearchStrategy === 'poi_discovery'
+          ? 1
+          : webSearchStrategy === 'hybrid_with_discovery'
+            ? 3
+            : 2
+    return base + webAtomBudget
   }
 }

@@ -179,4 +179,38 @@ describe('OpenAICompatibleProvider', () => {
     expect(result.finishReason).toBe('stop')
     expect(result.assistantMessage.content).toBe('编排完成')
   })
+
+  it('does not send enable_thinking for astron direct-output upstreams', async () => {
+    vi.stubEnv('LLM_BASE_URL', 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2')
+    vi.stubEnv('LLM_API_KEY', 'sk-test')
+    vi.stubEnv('LLM_MODEL', 'astron-code-latest')
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: {
+              content: '直接输出',
+              tool_calls: [],
+            },
+          },
+        ],
+      }),
+    }) as typeof fetch
+
+    const provider = new OpenAICompatibleProvider()
+    await provider.complete({
+      messages: [{ role: 'user', content: '请直接回答' }],
+      tools: [],
+    })
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] || []
+    const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+    expect(body.model).toBe('astron-code-latest')
+    expect(body).not.toHaveProperty('enable_thinking')
+    expect(body).not.toHaveProperty('extra_body')
+  })
 })

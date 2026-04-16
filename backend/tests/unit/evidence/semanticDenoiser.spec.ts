@@ -39,6 +39,38 @@ class StubBridge implements PythonBridge {
     throw new Error('not implemented')
   }
 
+  async getCellContext() {
+    return {
+      context: {},
+      models_used: ['stub'],
+    }
+  }
+
+  async searchNearbyCells() {
+    return {
+      anchor_cell_context: {},
+      cells: [],
+      model_route: 'stub',
+      models_used: ['stub'],
+      search_radius_m: null,
+      per_cell_radius_m: null,
+      support_bucket_distribution: [],
+      dominant_buckets: [],
+      scene_tags: [],
+      cell_mix: [],
+      macro_uncertainty: {},
+    }
+  }
+
+  async batchPoiCellContext() {
+    return {
+      anchor_cell_context: {},
+      results: [],
+      model_route: 'stub',
+      models_used: ['stub'],
+    }
+  }
+
   async getStatus() {
     return this.status
   }

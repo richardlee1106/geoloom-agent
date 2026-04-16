@@ -57,6 +57,7 @@ import { NLContractCompiler } from '../contract/NLContractCompiler.js'
 import type { NLContract } from '../contract/types.js'
 import { RequirementResolver } from '../evidence/RequirementResolver.js'
 import { DeterministicEvidenceRuntime } from '../evidence/DeterministicEvidenceRuntime.js'
+import { isSoftScopedNearbyIntent, resolveNearbyMacroScope } from '../evidence/nearbyScope.js'
 import { IntentAlignmentGuard } from './IntentAlignmentGuard.js'
 import type { SkillRegistry } from '../skills/SkillRegistry.js'
 import {
@@ -101,7 +102,7 @@ const PRIMARY_TOOL_ROLE_ALIASES = new Set(['primary', 'anchor', 'main', 'origin'
 const SECONDARY_TOOL_ROLE_ALIASES = new Set(['secondary', 'compare', 'comparison', 'target'])
 const POSTGIS_TEMPLATE_DIR = resolveResourceUrl(import.meta.url, [
   '../skills/postgis/templates/',
-  '../../src/skills/postgis/templates/',
+  '../../../src/skills/postgis/templates/',
 ])
 const POSTGIS_TEMPLATE_FILE_MAP: Record<string, string> = {
   area_category_histogram: 'areaCategoryHistogram.sql',
@@ -704,6 +705,65 @@ function defaultRadiusForQueryType(queryType: DeterministicIntent['queryType']) 
   return 800
 }
 
+function shouldForceDefaultWebEvidence(intent: Pick<
+  DeterministicIntent,
+  'queryType' | 'rawQuery' | 'categoryKey' | 'categoryMain' | 'categorySub' | 'targetCategory'
+>) {
+  if (intent.queryType !== 'nearby_poi') {
+    return false
+  }
+
+  if (intent.categoryKey === 'metro_station') {
+    return false
+  }
+
+  if (intent.categoryMain || intent.categorySub || intent.categoryKey) {
+    return true
+  }
+
+  return /美食|餐饮|餐厅|餐馆|小吃|咖啡|奶茶|甜品|火锅|烧烤|面馆|酒店|宾馆|民宿|景点|景区|公园|绿道|江滩|湿地/u
+    .test(String(intent.rawQuery || ''))
+}
+
+function resolveWebRequirementMode(input: {
+  needsWebEvidence: boolean
+  baseNeedsWebSearch: boolean
+  forcedDefaultWebEvidence: boolean
+}) {
+  if (!input.needsWebEvidence) {
+    return 'local_first'
+  }
+
+  if (input.forcedDefaultWebEvidence && !input.baseNeedsWebSearch) {
+    return 'default_on'
+  }
+
+  return 'required'
+}
+
+function shouldDefaultToCandidateReputation(rawQuery: string) {
+  return /(高分|评分|口碑|推荐|必吃|排行榜|排名|榜单|测评|探店)/u.test(String(rawQuery || ''))
+}
+
+function resolveExpandedNearbyRadiusM(
+  intent: Pick<DeterministicIntent, 'queryType' | 'anchorSource' | 'placeName' | 'categoryKey' | 'radiusM'>,
+) {
+  if (!isSoftScopedNearbyIntent(intent)) {
+    return Math.max(Number(intent.radiusM || 0), 1)
+  }
+  return Math.max(Number(intent.radiusM || 0), 8000)
+}
+
+function shouldRelaxNearbyDistanceConstraint(
+  intent: Pick<DeterministicIntent, 'queryType' | 'anchorSource' | 'placeName' | 'categoryKey' | 'radiusM'>,
+  spatialConstraint?: SpatialAnalysisConstraint | null,
+) {
+  return intent.queryType === 'nearby_poi'
+    && intent.categoryKey !== 'metro_station'
+    && isSoftScopedNearbyIntent(intent)
+    && !spatialConstraint?.areaWkt
+}
+
 function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string): DeterministicIntent {
   const selectedCategories = normalizeSelectedCategories(request.options?.selectedCategories || [])
   const { categoryKey, targetCategory } = inferCategoryFromSelections(selectedCategories)
@@ -723,7 +783,7 @@ function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string)
   }
 
   const needsWebSearch = shouldSearchWeb(rawQuery)
-  const toolIntent = defaultToolIntentForQueryType('nearby_poi', needsWebSearch)
+  const toolIntent = defaultToolIntentForQueryType('nearby_poi', needsWebSearch, rawQuery)
 
   return {
     queryType: 'unsupported',
@@ -1346,12 +1406,19 @@ function readRecentIntentForFollowUp(snapshot: MemorySnapshot) {
       || inferStructuredCategoryKeyFromText(turn.userQuery)
     const categoryMain = readOptionalText((record as Record<string, unknown>).categoryMain)
     const categorySub = readOptionalText((record as Record<string, unknown>).categorySub)
+    const placeName = readOptionalText((record as Record<string, unknown>).placeName)
+    const anchorSource = isSupportedAnchorSource((record as Record<string, unknown>).anchorSource)
+      ? (record as Record<string, unknown>).anchorSource as NonNullable<DeterministicIntent['anchorSource']>
+      : null
     const rawNeedsWebSearch = (record as Record<string, unknown>).needsWebSearch
     const toolIntent = normalizeToolIntentMode((record as Record<string, unknown>).toolIntent)
     const searchIntentHint = readOptionalText((record as Record<string, unknown>).searchIntentHint)
 
     return {
       queryType,
+      rawQuery: turn.userQuery,
+      placeName,
+      anchorSource,
       targetCategory,
       categoryKey,
       categoryMain,
@@ -1387,41 +1454,40 @@ function inheritIntentForEllipticalFollowUp(input: {
   const selectedRegionNames = readRequestRegions(input.request)
     .map((region) => readRegionName(region))
     .filter((name): name is string => Boolean(name))
-  const anchorSource: NonNullable<DeterministicIntent['anchorSource']> = hasMapView
-    ? 'map_view'
-    : hasUserLocation
-      ? 'user_location'
-      : (input.fallbackIntent.anchorSource || 'place')
-  const placeName = anchorSource === 'map_view'
-    ? (selectedRegionNames[0] || '当前区域')
-    : anchorSource === 'user_location'
-      ? null
-      : input.fallbackIntent.placeName
-  const needsClarification = anchorSource === 'place'
-    ? input.fallbackIntent.needsClarification
-    : false
+
+  let clarificationHint = '这轮我没有稳定理解你的自然语言意图。请直接说明你想查附近点位、最近地铁站、区域解读、相似片区，还是双地点对比。'
+  if (hasMapView) {
+    clarificationHint = '这轮我没有稳定理解你的自然语言意图，不过当前地图范围已经拿到了。请重试，或更明确地说明你想做区域解读、附近查询、相似片区，还是双地点对比。'
+  } else if (hasUserLocation) {
+    clarificationHint = '这轮我没有稳定理解你的自然语言意图，不过当前位置已经拿到了。请重试，或更明确地说明你想查附近点位、最近地铁站，还是做区域解读。'
+  } else if (selectedRegionNames.length >= 2) {
+    clarificationHint = `这轮我没有稳定理解你的自然语言意图，不过你当前选中了 ${selectedRegionNames.slice(0, 2).join(' 和 ')}。请重试，或明确说明你是想比较它们、解读其中一个，还是查询周边点位。`
+  }
+
   const needsWebSearch = recentIntent.needsWebSearch ?? input.fallbackIntent.needsWebSearch
   const toolIntent = recentIntent.toolIntent
-    || defaultToolIntentForQueryType(input.fallbackIntent.queryType, Boolean(needsWebSearch))
+    || defaultToolIntentForQueryType(
+      input.fallbackIntent.queryType,
+      Boolean(needsWebSearch),
+      recentIntent.rawQuery || input.fallbackIntent.rawQuery,
+    )
 
   return {
     ...input.fallbackIntent,
-    placeName,
-    anchorSource,
+    placeName: recentIntent.placeName || input.fallbackIntent.placeName,
+    anchorSource: recentIntent.anchorSource || input.fallbackIntent.anchorSource,
     targetCategory: recentIntent.targetCategory || input.fallbackIntent.targetCategory,
     categoryKey: recentIntent.categoryKey || input.fallbackIntent.categoryKey,
     categoryMain: recentIntent.categoryMain || input.fallbackIntent.categoryMain,
     categorySub: recentIntent.categorySub || input.fallbackIntent.categorySub,
-    needsClarification,
-    clarificationHint: needsClarification ? input.fallbackIntent.clarificationHint : null,
+    needsClarification: false,
+    clarificationHint: null,
     needsWebSearch,
     toolIntent,
     searchIntentHint: recentIntent.searchIntentHint || input.fallbackIntent.searchIntentHint || buildDefaultSearchIntentHint({
       queryType: input.fallbackIntent.queryType,
       toolIntent,
       targetCategory: recentIntent.targetCategory || input.fallbackIntent.targetCategory,
-      categoryMain: recentIntent.categoryMain || input.fallbackIntent.categoryMain,
-      categorySub: recentIntent.categorySub || input.fallbackIntent.categorySub,
       needsWebSearch: Boolean(needsWebSearch),
     }),
   } satisfies DeterministicIntent
@@ -1437,9 +1503,15 @@ function intentModeFromQueryType(queryType: DeterministicIntent['queryType']): D
   return queryType === 'nearby_poi' ? 'deterministic_visible_loop' : 'agent_full_loop'
 }
 
-function defaultToolIntentForQueryType(queryType: DeterministicIntent['queryType'], needsWebSearch = false): ToolIntentMode | null {
+function defaultToolIntentForQueryType(
+  queryType: DeterministicIntent['queryType'],
+  needsWebSearch = false,
+  rawQuery = '',
+): ToolIntentMode | null {
   if (queryType === 'nearby_poi') {
-    return needsWebSearch ? 'candidate_reputation' : 'candidate_lookup'
+    return needsWebSearch && shouldDefaultToCandidateReputation(rawQuery)
+      ? 'candidate_reputation'
+      : 'candidate_lookup'
   }
   if (queryType === 'nearest_station') {
     return 'nearest_transit'
@@ -1495,6 +1567,10 @@ function buildDefaultSearchIntentHint(input: {
     return [categoryLabel || '地点', '评分', '推荐']
       .filter(Boolean)
       .join(' ')
+  }
+
+  if (input.toolIntent === 'candidate_lookup') {
+    return categoryLabel || null
   }
 
   if (input.toolIntent === 'area_insight') {
@@ -1796,7 +1872,14 @@ export class GeoLoomAgent {
         intent.queryVec = categoryMatch.queryVec
       }
     }
-    intent.toolIntent = intent.toolIntent || defaultToolIntentForQueryType(intent.queryType, Boolean(intent.needsWebSearch))
+    const baseNeedsWebSearch = Boolean(intent.needsWebSearch)
+    const forcedDefaultWebEvidence = !baseNeedsWebSearch && shouldForceDefaultWebEvidence(intent)
+    intent.needsWebSearch = baseNeedsWebSearch || forcedDefaultWebEvidence
+    intent.toolIntent = intent.toolIntent || defaultToolIntentForQueryType(
+      intent.queryType,
+      Boolean(intent.needsWebSearch),
+      intent.rawQuery,
+    )
     intent.searchIntentHint = intent.searchIntentHint || buildDefaultSearchIntentHint({
       queryType: intent.queryType,
       toolIntent: intent.toolIntent,
@@ -1811,6 +1894,12 @@ export class GeoLoomAgent {
     const contract = contractCompiler.compileFromIntent(intent, contextualUserText)
     const requirementResolver = new RequirementResolver()
     const requirements = requirementResolver.resolve({ contract, intent })
+    const webEvidencePlanned = Boolean(intent.needsWebSearch) || contract.meta.needsWebEvidence
+    const webRequirementMode = resolveWebRequirementMode({
+      needsWebEvidence: webEvidencePlanned,
+      baseNeedsWebSearch,
+      forcedDefaultWebEvidence,
+    })
     logger.info('nl_contract', {
       question: contextualUserText,
       scope: contract.meta.scope,
@@ -1875,6 +1964,9 @@ export class GeoLoomAgent {
       needsClarification: intent.needsClarification,
       clarificationHint: intent.clarificationHint,
       needsWebSearch: Boolean(intent.needsWebSearch),
+      webEvidencePlanned,
+      webSearchStrategy: contract.meta.webSearchStrategy,
+      webRequirementMode,
       intentSource: intentResolution.source,
       parserModel,
       parserProvider,
@@ -1889,7 +1981,11 @@ export class GeoLoomAgent {
         previewAnchorLabel ? `，锚点是「${previewAnchorLabel}」` : '',
         intent.targetCategory ? `，目标类别是「${intent.targetCategory}」` : '',
         `，来源是 ${parserProvider === 'embedding' ? 'Embedding' : parserProvider === 'llm' ? 'LLM' : '规则'}${intentResolution.confidence != null ? `（${Math.round(intentResolution.confidence * 100)}%）` : ''}`,
-        intent.needsWebSearch ? '，需要联网补充证据。' : '，先基于本地空间证据。',
+        webRequirementMode === 'required'
+          ? '，需要联网补充证据。'
+          : webRequirementMode === 'default_on'
+            ? '，默认联网补充证据。'
+            : '，先基于本地空间证据。',
       ].join(''),
     })
 
@@ -2063,6 +2159,21 @@ export class GeoLoomAgent {
     // 阶段 0：证据采集计时结束
     const evidenceRuntimeMs = Date.now() - evidenceStartedAt
 
+    // resolve_anchor 返回 unresolved（无坐标）时，fallback 到 viewport center
+    if (hasCoordinates(requestMapViewAnchor) && state.anchors.primary) {
+      const primary = state.anchors.primary as ResolvedAnchor
+      if (!Number.isFinite(primary.lon) || !Number.isFinite(primary.lat)) {
+        console.log(`[AnchorFallback] resolve_anchor 未命中坐标，fallback 到 viewport center`)
+        state.anchors.primary = {
+          ...requestMapViewAnchor,
+          place_name: primary.place_name || requestMapViewAnchor.place_name,
+          display_name: primary.display_name || requestMapViewAnchor.display_name,
+          resolved_place_name: primary.resolved_place_name || primary.place_name || requestMapViewAnchor.resolved_place_name,
+          source: 'map_view_fallback',
+        }
+      }
+    }
+
     const primaryAnchor = state.anchors.primary
     const secondaryAnchor = state.anchors.secondary
     const evidenceView = await this.buildEvidenceView(intent, state, primaryAnchor, secondaryAnchor)
@@ -2116,9 +2227,12 @@ export class GeoLoomAgent {
       this.resolveEvidenceCount(evidenceView),
     )
     const llmAnswer = String(execution.assistantMessage?.content || '').trim()
+    const shouldSkipFinalSynthesis = requirements.recommendedTrack === 'fast'
+      && ['nearby_poi', 'nearest_station'].includes(intent.queryType)
+      && renderedEvidenceCount > 0
     // 阶段 0：合成回答计时开始
     const synthesisStartedAt = Date.now()
-    const synthesizedAnswer = decision.status === 'allow'
+    const synthesizedAnswer = decision.status === 'allow' && !shouldSkipFinalSynthesis
       ? await this.synthesizeGroundedAnswer({
         provider: this.provider,
         contract,
@@ -2245,6 +2359,9 @@ export class GeoLoomAgent {
         categoryMain: intent.categoryMain,
         categorySub: intent.categorySub,
         needsWebSearch: Boolean(intent.needsWebSearch),
+        webEvidencePlanned,
+        webSearchStrategy: contract.meta.webSearchStrategy,
+        webRequirementMode,
         toolIntent: intent.toolIntent || null,
         searchIntentHint: intent.searchIntentHint || null,
         intentSource: intentResolution.source,
@@ -2358,6 +2475,10 @@ export class GeoLoomAgent {
         targetCategory: input.intent.targetCategory,
         categoryMain: input.intent.categoryMain,
         categorySub: input.intent.categorySub,
+        needsWebSearch: Boolean(input.intent.needsWebSearch),
+        webEvidencePlanned: Boolean(input.intent.needsWebSearch),
+        webSearchStrategy: null,
+        webRequirementMode: input.intent.needsWebSearch ? 'required' : 'local_first',
         parserModel: input.parserModel || null,
         parserProvider: input.parserProvider || null,
       },
@@ -2440,11 +2561,11 @@ export class GeoLoomAgent {
           }
         }
 
-        if (embResult.confidence >= 0.65 && embResult.queryType !== 'unsupported') {
+        if (embResult.confidence >= 0.5 && embResult.queryType !== 'unsupported') {
           const intent = { ...input.fallbackIntent }
           intent.queryType = embResult.queryType
           intent.needsWebSearch = embResult.needsWebSearch || intent.needsWebSearch
-          intent.toolIntent = defaultToolIntentForQueryType(intent.queryType, Boolean(intent.needsWebSearch))
+          intent.toolIntent = defaultToolIntentForQueryType(intent.queryType, Boolean(intent.needsWebSearch), intent.rawQuery)
           intent.searchIntentHint = buildDefaultSearchIntentHint({
             queryType: intent.queryType,
             toolIntent: intent.toolIntent,
@@ -2460,10 +2581,17 @@ export class GeoLoomAgent {
           if (!intent.placeName && input.rawQuery) {
             const placeMatch = input.rawQuery.match(/^(.+?)(?:附近|周边|这附近|周围|旁边)/)
               || input.rawQuery.match(/^(.+?)(?:有什么|有没有|哪有|哪有|找)/)
+              // 支持"汉口美食推荐""光谷咖啡店推荐"等 地名+品类+推荐/排行 模式
+              || input.rawQuery.match(/^([\u4e00-\u9fa5]{2,8}?)(?:美食|餐厅|咖啡|咖啡店|奶茶|小吃|火锅|烧烤|酒店|宾馆|住宿|商场|超市|公园|景点|健身房|影院|药店|便利店|书店|花店|面包|甜品|酒吧|KTV|网吧|洗浴|理发|美容|宠物|医院|诊所|学校|幼儿园|银行|邮局|加油站|停车场|充电站|充电桩|洗车|汽车|房产|租房|中介|装修|家具|家电|数码|手机|电脑|服装|鞋|箱包|珠宝|眼镜|钟表|礼品|玩具|母婴|运动|户外|乐器|书画|古玩|收藏)(?:推荐|排行|排名|榜单|口碑|评价|高分|好评|必吃|必去|网红|人气|特色|好吃|哪家好|哪里好|怎么样|哪个好)/)
             if (placeMatch) {
               const candidate = placeMatch[1].replace(/^(这|那|我|当前|附近)/, '').trim()
               if (candidate.length >= 2 && candidate.length <= 10) {
                 intent.placeName = candidate
+                // 提取到明确地名时，anchorSource 必须同步切换为 place，
+                // 否则后续 handle() 会用 viewport center 作为锚点
+                if (intent.anchorSource === 'map_view') {
+                  intent.anchorSource = 'place'
+                }
               }
             }
           }
@@ -2590,7 +2718,7 @@ export class GeoLoomAgent {
           : (!placeName || Boolean(hint.needsClarification))
     const needsWebSearch = Boolean(hint.needsWebSearch)
     const toolIntent = normalizeToolIntentMode(hint.toolIntent)
-      || defaultToolIntentForQueryType(hint.queryType, needsWebSearch)
+      || defaultToolIntentForQueryType(hint.queryType, needsWebSearch, input.fallbackIntent.rawQuery)
     const searchIntentHint = readOptionalText(hint.searchIntentHint)
       || buildDefaultSearchIntentHint({
         queryType: hint.queryType,
@@ -3298,10 +3426,18 @@ export class GeoLoomAgent {
 
     // 语义重排序：对 nearby_poi 查询结果融合距离 + 语义分数
     if (rows.length > 0 && this.poiEmbeddingCache && intent.queryType === 'nearby_poi') {
+      const openNearbyScope = shouldRelaxNearbyDistanceConstraint(intent, spatialConstraint || state.spatialConstraint)
+      const prefersSpatialSpread = Number(intent.radiusM || 0) >= 1400 && intent.categoryKey !== 'metro_station'
+      const useViewportWideSampling = (spatialConstraint || state.spatialConstraint)?.scope === 'viewport' && Boolean((spatialConstraint || state.spatialConstraint)?.areaWkt) && intent.anchorSource === 'map_view'
       const rankResult = await this.poiEmbeddingCache.semanticRank(
         rows as import('../catalog/poiEmbeddingCache.js').PoiRow[],
         intent.rawQuery,
-        { maxDistanceM: intent.radiusM || 3000, queryVec: intent.queryVec },
+        {
+          maxDistanceM: openNearbyScope ? resolveExpandedNearbyRadiusM(intent) : useViewportWideSampling ? 50000 : (intent.radiusM || 3000),
+          queryVec: intent.queryVec,
+          semanticWeight: useViewportWideSampling ? 0.82 : openNearbyScope ? 0.72 : (prefersSpatialSpread ? 0.62 : 0.5),
+          distanceWeight: useViewportWideSampling ? 0.18 : openNearbyScope ? 0.28 : (prefersSpatialSpread ? 0.38 : 0.5),
+        },
       )
       if (rankResult.usedSemanticRank) {
         // 截断到原始 limit
@@ -3339,10 +3475,19 @@ export class GeoLoomAgent {
     anchor: ResolvedAnchor
     spatialConstraint?: SpatialAnalysisConstraint | null
   }) {
+    const relaxNearbyDistanceConstraint = shouldRelaxNearbyDistanceConstraint(input.intent, input.spatialConstraint)
     const pointGeography = `ST_SetSRID(ST_MakePoint(${formatNumericLiteral(input.anchor.lon)}, ${formatNumericLiteral(input.anchor.lat)}), 4326)::geography`
-    const areaGeometry = input.spatialConstraint?.areaWkt
-      ? `ST_GeomFromText('${escapeSqlLiteral(input.spatialConstraint.areaWkt)}', 4326)`
-      : `ST_Buffer(${pointGeography}, ${String(Math.max(input.intent.radiusM, 1))})::geometry`
+    const nearbyRadiusM = relaxNearbyDistanceConstraint
+      ? resolveExpandedNearbyRadiusM(input.intent)
+      : Math.max(input.intent.radiusM, 1)
+    // 当 anchorSource='place'（明确地名如汉口）时，不用 viewport 多边形裁剪，
+    // 因为 viewport 可能和地名区域不重叠（如 viewport 在武昌但搜汉口美食），
+    // 改为用 anchor 坐标 + 扩大半径搜索
+    const useViewportPolygon = input.spatialConstraint?.areaWkt
+      && input.intent.anchorSource !== 'place'
+    const areaGeometry = useViewportPolygon
+      ? `ST_GeomFromText('${escapeSqlLiteral(input.spatialConstraint!.areaWkt!)}', 4326)`
+      : `ST_Buffer(${pointGeography}, ${String(nearbyRadiusM)})::geometry`
 
     return {
       pointGeography,
@@ -3466,6 +3611,7 @@ export class GeoLoomAgent {
     templateName?: string,
     spatialConstraint?: SpatialAnalysisConstraint | null,
   ) {
+    const relaxNearbyDistanceConstraint = shouldRelaxNearbyDistanceConstraint(intent, spatialConstraint)
     const resolvedTemplateName = this.resolvePostgisTemplateName(intent, templateName)
     if (POSTGIS_TEMPLATE_FILE_MAP[resolvedTemplateName]) {
       const areaTemplateSql = this.buildAreaInsightTemplateSQL({
@@ -3486,11 +3632,21 @@ export class GeoLoomAgent {
       anchor,
       spatialConstraint,
     })
+    const expandedNearbyCandidatePool = intent.queryType === 'nearby_poi'
+      && categoryKey !== 'metro_station'
     const effectiveLimit = categoryKey === 'metro_station' && intent.queryType === 'nearby_poi'
       ? Math.max(limit, 12)
       : this.poiEmbeddingCache && intent.queryType === 'nearby_poi'
-        ? Math.max(limit * 3, 30)  // 语义重排序时扩大 3x 候选
-        : Math.max(limit, 1)
+        ? Math.min(
+          Math.max(
+            limit * (relaxNearbyDistanceConstraint ? 6 : expandedNearbyCandidatePool ? 4 : 3),
+            relaxNearbyDistanceConstraint ? 120 : (expandedNearbyCandidatePool ? 42 : 30),
+          ),
+          180,
+        )
+        : relaxNearbyDistanceConstraint && intent.queryType === 'nearby_poi'
+          ? Math.min(Math.max(limit * 4, 96), 160)
+          : Math.max(limit, 1)
     const baseSelect = [
       'SELECT id, name, category_main, category_sub, longitude, latitude,',
       `  ST_Distance(geom::geography, ${spatialFragments.pointGeography}) AS distance_m`,
@@ -3498,14 +3654,44 @@ export class GeoLoomAgent {
       `WHERE ${spatialFragments.areaFilter}`,
     ]
 
+    const nearbyMacroScope = resolveNearbyMacroScope({
+      intent,
+      rawQuery: intent.rawQuery,
+      resolvedPlaceName: anchor.resolved_place_name || anchor.place_name,
+    })
     const categoryFilters = this.buildCategoryFilters(categoryKey, spatialConstraint?.selectedCategories || [], intent.categoryMain, intent.categorySub)
     const filters: string[] = [...categoryFilters.where]
+    if (nearbyMacroScope?.districtIds.length) {
+      filters.push(
+        `AND EXISTS (
+  SELECT 1
+  FROM districts d
+  WHERE d.id IN (${nearbyMacroScope.districtIds.join(', ')})
+    AND ST_Intersects(pois.geom, d.geom)
+)`
+      )
+    }
+    const isViewportScope = spatialConstraint?.scope === 'viewport' && Boolean(spatialConstraint?.areaWkt)
+    // 仅当锚点是 map_view（viewport 中心）时才用随机排序覆盖全视野
+    // 如果 anchorSource 是 'place'（明确地名），保持 distance 排序
+    const useViewportWideSampling = isViewportScope && intent.anchorSource === 'map_view'
+
     if (resolvedTemplateName === 'nearest_station' || intent.queryType === 'nearest_station' || categoryKey === 'metro_station') {
       return [
         ...baseSelect,
         ...filters,
         'ORDER BY distance_m ASC',
         `LIMIT ${effectiveLimit}`,
+      ].join('\n')
+    }
+
+    // viewport 中心锚点搜索：不用中心点半径排序，用随机采样保证全视野覆盖
+    if (useViewportWideSampling) {
+      return [
+        ...baseSelect,
+        ...filters,
+        'ORDER BY RANDOM()',
+        `LIMIT ${Math.min(effectiveLimit * 2, 360)}`,
       ].join('\n')
     }
 
@@ -3668,31 +3854,17 @@ export class GeoLoomAgent {
         alignment_summary?: Record<string, unknown>
       } | undefined
 
-      if (areaAlignmentResult?.ranked_results && areaAlignmentResult.ranked_results.length > 0) {
-        // 用对齐结果替换 items，使 Renderer 和前端 POI 列表展示对齐后的 POI
-        view.items = areaAlignmentResult.ranked_results.map((r, idx) => ({
-          name: r.name,
-          distance_m: r.distance_m ?? null,
-          category: r.category ?? null,
-          score: r.fusionScore,
-          rank: idx + 1,
-          meta: {
-            verification: r.verification,
-            fusionScore: r.fusionScore,
-          },
-        }))
-        // 同步更新 representativeSamples，使 Renderer 的「代表性样本」行展示对齐 POI
-        view.representativeSamples = areaAlignmentResult.ranked_results.slice(0, 5).map((r, idx) => ({
-          name: r.name,
-          distance_m: r.distance_m ?? null,
-          category: r.category ?? null,
-          score: r.fusionScore,
-          rank: idx + 1,
-          meta: {
-            verification: r.verification,
-            fusionScore: r.fusionScore,
-          },
-        }))
+      const areaAlignedItems = this.buildDualVerifiedAlignmentItems(
+        intent,
+        areaAlignmentResult?.ranked_results as Record<string, unknown>[] | undefined,
+        this.buildEvidenceItemAuthorityKeys(normalizePoiRows(representativeRows)),
+      )
+      if (areaAlignedItems.length > 0) {
+        // 仅当存在真实双重验证项时才替换，避免 local_only/web_only 伪装成已对齐结果
+        view.items = areaAlignedItems
+        view.representativeSamples = areaAlignedItems.slice(0, 5)
+      }
+      if (areaAlignmentResult?.alignment_summary) {
         view.meta.entity_alignment = areaAlignmentResult.alignment_summary
       }
 
@@ -3715,24 +3887,25 @@ export class GeoLoomAgent {
       alignment_summary?: Record<string, unknown>
     } | undefined
 
-    console.log(`[诊断:buildEvidenceView] alignmentTrace存在=${!!alignmentTrace}, ranked_results长度=${alignmentResult?.ranked_results?.length ?? 'N/A'}, latestPostgisRows长度=${latestPostgisRows?.rows?.length ?? 'N/A'}`)
-    let items: EvidenceItem[]
-    if (alignmentResult?.ranked_results && alignmentResult.ranked_results.length > 0) {
-      // 使用融合排序后的结果，保留验证状态标注
-      items = alignmentResult.ranked_results.map((r, idx) => ({
-        name: r.name,
-        distance_m: r.distance_m ?? null,
-        category: r.category ?? null,
-        score: r.fusionScore,
-        rank: idx + 1,
-        meta: {
-          verification: r.verification,
-          fusionScore: r.fusionScore,
-        },
-      }))
-    } else {
-      items = normalizePoiRows(latestLookupRows?.rows || latestPostgisRows?.rows || [])
-    }
+    const localNearbyItems = normalizePoiRows(latestLookupRows?.rows || latestPostgisRows?.rows || [])
+    const dualVerifiedAlignmentItems = this.buildDualVerifiedAlignmentItems(
+      intent,
+      alignmentResult?.ranked_results as Record<string, unknown>[] | undefined,
+      this.buildEvidenceItemAuthorityKeys(localNearbyItems),
+    )
+    const poiDiscoveryResult = this.readLatestPoiDiscoveryResult(state.toolCalls)
+    const discoveryVerifiedItems = this.buildPoiDiscoveryVerifiedItems(poiDiscoveryResult)
+    const discoveryDbOnlyItems = this.buildPoiDiscoveryDbOnlyItems(poiDiscoveryResult)
+    const latestPoiDiscoveryDbMatchCount = this.readLatestPoiDiscoveryDbMatchCount(state.toolCalls)
+    const shouldFallbackToLocalNearbyRows = intent.queryType === 'nearby_poi'
+      && intent.toolIntent === 'candidate_reputation'
+      && latestPoiDiscoveryDbMatchCount === 0
+    console.log(`[诊断:buildEvidenceView] alignmentTrace存在=${!!alignmentTrace}, ranked_results长度=${alignmentResult?.ranked_results?.length ?? 'N/A'}, dual_verified_usable=${dualVerifiedAlignmentItems.length}, latestPostgisRows长度=${latestPostgisRows?.rows?.length ?? 'N/A'}, discovery_db_match_count=${latestPoiDiscoveryDbMatchCount}, fallback_to_local=${shouldFallbackToLocalNearbyRows}`)
+    const supportingNearbyItems = this.mergeEvidenceItems(discoveryVerifiedItems, localNearbyItems)
+    const rankedLocalItems = dualVerifiedAlignmentItems.length > 0 && !shouldFallbackToLocalNearbyRows
+      ? this.mergeEvidenceItems(dualVerifiedAlignmentItems, supportingNearbyItems)
+      : supportingNearbyItems
+    const items = this.mergeEvidenceItems(rankedLocalItems, discoveryDbOnlyItems)
 
     const view = this.evidenceFactory.create({
       intent,
@@ -3740,8 +3913,25 @@ export class GeoLoomAgent {
       rows: latestLookupRows?.rows || latestPostgisRows?.rows || [],
       items,
     })
+    const nearbyMacroScope = resolveNearbyMacroScope({
+      intent,
+      rawQuery: intent.rawQuery,
+      resolvedPlaceName: fallbackAnchor.resolved_place_name || fallbackAnchor.place_name,
+    })
+    if (nearbyMacroScope) {
+      view.meta.scopeLabel = nearbyMacroScope.label
+      view.meta.scopeDistricts = nearbyMacroScope.districts
+      view.meta.scopeAlias = nearbyMacroScope.alias
+    }
     if (alignmentResult?.alignment_summary) {
       view.meta.entity_alignment = alignmentResult.alignment_summary
+    }
+    if (poiDiscoveryResult) {
+      view.meta.poi_discovery = {
+        dbMatchCount: latestPoiDiscoveryDbMatchCount,
+        verifiedCount: discoveryVerifiedItems.length,
+        dbOnlyCount: discoveryDbOnlyItems.length,
+      }
     }
     if (semanticEvidence) {
       view.semanticEvidence = semanticEvidence
@@ -3750,6 +3940,266 @@ export class GeoLoomAgent {
       view.semanticHints = semanticHints
     }
     return view
+  }
+
+  private buildDualVerifiedAlignmentItems(
+    intent: DeterministicIntent,
+    rankedResults: Record<string, unknown>[] | undefined,
+    authoritativeLocalPoiKeys?: Set<string>,
+  ): EvidenceItem[] {
+    if (!Array.isArray(rankedResults) || rankedResults.length === 0) {
+      return []
+    }
+
+    const expectedMain = String(
+      intent.categoryMain
+      || this.resolveCategoryMainFromCategoryKey(intent.categoryKey || '')
+      || '',
+    ).trim()
+    const expectedSub = String(intent.categorySub || '').trim()
+
+    const isCategoryCompatible = (result: Record<string, unknown>) => {
+      if (!expectedMain && !expectedSub) {
+        return true
+      }
+
+      const localPoi = result.localPoi && typeof result.localPoi === 'object'
+        ? result.localPoi as Record<string, unknown>
+        : null
+      // 无 localPoi 时无法做类别核验，保守放行（仍需 dual_verified）
+      if (!localPoi) {
+        return true
+      }
+
+      const localMain = String(localPoi.categoryMain || localPoi.category_main || '').trim()
+      const localSub = String(localPoi.categorySub || localPoi.category_sub || localPoi.category || '').trim()
+
+      if (expectedMain && localMain && localMain !== expectedMain) {
+        return false
+      }
+      if (expectedSub && expectedSub !== expectedMain && localSub && localSub !== expectedSub) {
+        return false
+      }
+      return true
+    }
+
+    return rankedResults
+      .filter((result) => {
+        const verification = String(result?.verification || '').trim().toLowerCase()
+        return verification === 'dual_verified'
+      })
+      .filter(isCategoryCompatible)
+      .filter((result) => this.isAlignmentLocalPoiAuthoritative(result, authoritativeLocalPoiKeys))
+      .map((result, idx) => {
+        const localPoi = result.localPoi && typeof result.localPoi === 'object'
+          ? result.localPoi as Record<string, unknown>
+          : null
+        const name = String(localPoi?.name || result.name || '').trim() || '未命名地点'
+        const distanceValue = Number(localPoi?.distance_m)
+        const category = String(
+          localPoi?.category
+          || localPoi?.categorySub
+          || localPoi?.category_sub
+          || localPoi?.categoryMain
+          || localPoi?.category_main
+          || result.category
+          || '',
+        ).trim()
+        const fusionScore = Number(result.fusionScore)
+        const topLevelDistance = Number(result.distance_m)
+
+        return {
+          id: (localPoi?.id as string | number | null | undefined) ?? null,
+          name,
+          categoryMain: String(localPoi?.categoryMain || localPoi?.category_main || '').trim() || null,
+          categorySub: String(localPoi?.categorySub || localPoi?.category_sub || '').trim() || null,
+          longitude: Number.isFinite(Number(localPoi?.longitude ?? localPoi?.lon))
+            ? Number(localPoi?.longitude ?? localPoi?.lon)
+            : undefined,
+          latitude: Number.isFinite(Number(localPoi?.latitude ?? localPoi?.lat))
+            ? Number(localPoi?.latitude ?? localPoi?.lat)
+            : undefined,
+          coordSys: String(localPoi?.coordSys || localPoi?.coord_sys || DEFAULT_POI_COORD_SYS).trim().toLowerCase() || DEFAULT_POI_COORD_SYS,
+          distance_m: Number.isFinite(distanceValue)
+            ? distanceValue
+            : (Number.isFinite(topLevelDistance) ? topLevelDistance : null),
+          category: category || null,
+          score: Number.isFinite(fusionScore) ? fusionScore : null,
+          rank: idx + 1,
+          meta: {
+            verification: 'dual_verified',
+            fusionScore: Number.isFinite(fusionScore) ? fusionScore : null,
+            source: 'entity_alignment',
+            webTitle: String((result.webItem as Record<string, unknown> | undefined)?.title || '').trim() || null,
+          },
+        }
+      })
+  }
+
+  private buildEvidenceItemAuthorityKeys(items: EvidenceItem[] = []) {
+    const keys = new Set<string>()
+    for (const item of items) {
+      this.pushLocalPoiAuthorityKeys(keys, item.id, item.name)
+    }
+    return keys
+  }
+
+  private isAlignmentLocalPoiAuthoritative(
+    result: Record<string, unknown>,
+    authoritativeLocalPoiKeys?: Set<string>,
+  ) {
+    if (!authoritativeLocalPoiKeys || authoritativeLocalPoiKeys.size === 0) {
+      return true
+    }
+
+    const localPoi = result.localPoi && typeof result.localPoi === 'object'
+      ? result.localPoi as Record<string, unknown>
+      : null
+    if (!localPoi) {
+      return false
+    }
+
+    const candidateKeys = new Set<string>()
+    this.pushLocalPoiAuthorityKeys(candidateKeys, localPoi.id, localPoi.name)
+    for (const key of candidateKeys) {
+      if (authoritativeLocalPoiKeys.has(key)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  private pushLocalPoiAuthorityKeys(keys: Set<string>, id: unknown, name: unknown) {
+    if (id !== null && id !== undefined && String(id).trim()) {
+      keys.add(`id:${String(id).trim()}`)
+    }
+
+    const normalizedName = String(name || '').trim().toLowerCase()
+    if (normalizedName) {
+      keys.add(`name:${normalizedName}`)
+    }
+  }
+
+  private readLatestPoiDiscoveryDbMatchCount(toolCalls: ToolExecutionTrace[]) {
+    const result = this.readLatestPoiDiscoveryResult(toolCalls)
+    const dbMatchCount = Number(result?.dbMatchCount)
+    if (Number.isFinite(dbMatchCount)) {
+      return dbMatchCount
+    }
+    return Array.isArray(result?.verifiedDbPois) ? result.verifiedDbPois.length : null
+  }
+
+  private readLatestPoiDiscoveryResult(toolCalls: ToolExecutionTrace[]) {
+    const discoveryTrace = [...toolCalls]
+      .reverse()
+      .find((trace) => trace.skill === 'web_poi_discovery' && trace.action === 'discover_pois' && trace.status === 'done')
+    return discoveryTrace?.result as {
+      verifiedDbPois?: Array<Record<string, unknown>>
+      dbOnlyPois?: Array<Record<string, unknown>>
+      dbMatchCount?: number
+    } | undefined
+  }
+
+  private buildPoiDiscoveryVerifiedItems(result?: {
+    verifiedDbPois?: Array<Record<string, unknown>>
+  }) {
+    return Array.isArray(result?.verifiedDbPois)
+      ? result.verifiedDbPois.flatMap((entry) => {
+          const poi = entry.poi && typeof entry.poi === 'object'
+            ? entry.poi as Record<string, unknown>
+            : null
+          if (!poi) {
+            return []
+          }
+          const name = String(poi.name || '').trim()
+          if (!name) {
+            return []
+          }
+          return [{
+            id: (poi.id as string | number | null | undefined) ?? null,
+            name,
+            category: String(poi.categorySub || poi.categoryMain || '').trim() || null,
+            categoryMain: String(poi.categoryMain || '').trim() || null,
+            categorySub: String(poi.categorySub || '').trim() || null,
+            longitude: Number.isFinite(Number(poi.longitude)) ? Number(poi.longitude) : undefined,
+            latitude: Number.isFinite(Number(poi.latitude)) ? Number(poi.latitude) : undefined,
+            score: Math.max(Number(entry.matchScore) || 0, Number(entry.confidence) || 0, Number(poi.poiScore) || 0),
+            meta: {
+              source: 'poi_discovery',
+              verification: 'verified',
+              mention: String(entry.mention || '').trim() || null,
+              matchType: String(entry.matchType || '').trim() || null,
+              poiScore: Number.isFinite(Number(poi.poiScore)) ? Number(poi.poiScore) : null,
+            },
+          } satisfies EvidenceItem]
+        })
+      : []
+  }
+
+  private buildPoiDiscoveryDbOnlyItems(result?: {
+    dbOnlyPois?: Array<Record<string, unknown>>
+  }) {
+    return Array.isArray(result?.dbOnlyPois)
+      ? result.dbOnlyPois.flatMap((poi) => {
+          const name = String(poi.name || '').trim()
+          if (!name) {
+            return []
+          }
+          return [{
+            id: (poi.id as string | number | null | undefined) ?? null,
+            name,
+            category: String(poi.categorySub || poi.categoryMain || '').trim() || null,
+            categoryMain: String(poi.categoryMain || '').trim() || null,
+            categorySub: String(poi.categorySub || '').trim() || null,
+            longitude: Number.isFinite(Number(poi.longitude)) ? Number(poi.longitude) : undefined,
+            latitude: Number.isFinite(Number(poi.latitude)) ? Number(poi.latitude) : undefined,
+            score: Number.isFinite(Number(poi.poiScore)) ? Number(poi.poiScore) : null,
+            meta: {
+              source: 'poi_discovery',
+              verification: 'db_only',
+              poiScore: Number.isFinite(Number(poi.poiScore)) ? Number(poi.poiScore) : null,
+            },
+          } satisfies EvidenceItem]
+        })
+      : []
+  }
+
+  private mergeEvidenceItems(primaryItems: EvidenceItem[], fallbackItems: EvidenceItem[], limit = 30) {
+    const merged: EvidenceItem[] = []
+    const seen = new Set<string>()
+
+    const pushItem = (item: EvidenceItem) => {
+      const key = item.id != null
+        ? `id:${String(item.id)}`
+        : `name:${String(item.name || '').trim().toLowerCase()}`
+      if (!key || seen.has(key)) {
+        return
+      }
+      seen.add(key)
+      merged.push(item)
+    }
+
+    primaryItems.forEach(pushItem)
+    fallbackItems.forEach(pushItem)
+
+    return merged.slice(0, Math.max(limit, 1))
+  }
+
+  private resolveCategoryMainFromCategoryKey(categoryKey: string) {
+    switch (categoryKey) {
+      case 'metro_station':
+        return '交通设施服务'
+      case 'coffee':
+      case 'food':
+        return '餐饮美食'
+      case 'hotel':
+        return '住宿服务'
+      case 'supermarket':
+        return '购物服务'
+      default:
+        return null
+    }
   }
 
   private applyRegionEncodingToView(view: EvidenceView, result: unknown) {
@@ -3977,8 +4427,11 @@ export class GeoLoomAgent {
   }) {
     const answer = String(input.answer || '').trim()
     const renderedAnswer = String(input.renderedAnswer || '').trim()
+    const structuredQuery = ['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.queryType)
+    const answerHasSectionHeadings = /(^|\n)#{2,3}\s/u.test(answer)
+    const renderedHasSectionHeadings = /(^|\n)#{2,3}\s/u.test(renderedAnswer)
 
-    if (looksLikeMarkdownAnswer(answer)) {
+    if (looksLikeMarkdownAnswer(answer) && (!structuredQuery || answerHasSectionHeadings || !renderedHasSectionHeadings)) {
       return {
         answer,
         usedRenderedAnswer: false,
@@ -4000,8 +4453,16 @@ export class GeoLoomAgent {
     }
 
     if (['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.queryType)) {
+      // 将纯文本答案转为格式化的 Markdown 列表，确保每行都有换行
+      const answerLines = answer.split(/\n/).map((line) => line.trim()).filter(Boolean)
+      if (answerLines.length > 1) {
+        return {
+          answer: `## 结论\n${answerLines.map((line) => `- ${line}`).join('\n')}`,
+          usedRenderedAnswer: false,
+        }
+      }
       return {
-        answer: `## 结论\n- ${answer}`,
+        answer: `## 结论\n\n${answer}`,
         usedRenderedAnswer: false,
       }
     }
@@ -4111,21 +4572,16 @@ export class GeoLoomAgent {
     const alignmentMeta = view.meta.entity_alignment as Record<string, unknown> | undefined
     if (alignmentMeta) {
       const dualCount = Number(alignmentMeta.dual_verified || 0)
-      const localOnlyCount = Number(alignmentMeta.local_only || 0)
-      const webOnlyCount = Number(alignmentMeta.web_only || 0)
-      const embedMs = Number(alignmentMeta.embed_recall_ms || 0)
-      const rerankMs = Number(alignmentMeta.rerank_ms || 0)
-      lines.push(`联网对齐: 双重验证 ${dualCount} 个、仅本地 ${localOnlyCount} 个、仅联网 ${webOnlyCount} 个${embedMs > 0 ? `、Embedding ${embedMs}ms` : ''}${rerankMs > 0 ? `、Reranker ${rerankMs}ms` : ''}`)
+      lines.push(`联网对齐: 已验证 ${dualCount} 个`)
       // 列出对齐后的 POI 名称（最高优先级证据）
       const alignedItems = (view.items || []).filter(
-        (item) => (item.meta as Record<string, unknown>)?.verification
+        (item) => (item.meta as Record<string, unknown>)?.verification === 'dual_verified'
       )
       const dualNames = alignedItems
-        .filter((item) => (item.meta as Record<string, unknown>)?.verification === 'dual_verified')
         .slice(0, 5)
-        .map((item) => `${item.name}${item.distance_m != null ? `(${Math.round(Number(item.distance_m))}m)` : ''}`)
+        .map((item) => item.name)
       if (dualNames.length > 0) {
-        lines.push(`双重验证样本: ${dualNames.join('、')}`)
+        lines.push(`验证样本: ${dualNames.join('、')}`)
       }
     }
 
@@ -4145,13 +4601,19 @@ export class GeoLoomAgent {
       lines.push(`查询锚点: ${anchorName}`)
     }
 
+    const scopeLabel = String(input.view.meta.scopeLabel || '').trim()
+    const scopeDistricts = Array.isArray(input.view.meta.scopeDistricts)
+      ? input.view.meta.scopeDistricts.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    if (scopeLabel) {
+      lines.push(`范围约束: ${scopeLabel}${scopeDistricts.length > 0 ? `（${scopeDistricts.join('、')}）` : ''}`)
+    }
+
     const localItems = (input.view.items || [])
       .slice(0, 6)
       .map((item) => {
         const category = String(item.category || item.categorySub || item.categoryMain || '').trim()
-        const distance = Number(item.distance_m)
-        const distanceLabel = Number.isFinite(distance) ? `${Math.round(distance)}m` : ''
-        return [item.name, category, distanceLabel].filter(Boolean).join(' · ')
+        return [item.name, category].filter(Boolean).join('（') + (category ? '）' : '')
       })
       .filter(Boolean)
     if (localItems.length > 0) {
@@ -4161,16 +4623,11 @@ export class GeoLoomAgent {
     const alignmentMeta = input.view.meta.entity_alignment as Record<string, unknown> | undefined
     if (alignmentMeta) {
       const dualCount = Number(alignmentMeta.dual_verified || 0)
-      const localOnlyCount = Number(alignmentMeta.local_only || 0)
-      const webOnlyCount = Number(alignmentMeta.web_only || 0)
-      lines.push(`实体对齐: 双重验证 ${dualCount} 个、仅本地 ${localOnlyCount} 个、仅联网 ${webOnlyCount} 个`)
+      lines.push(`实体对齐: 已验证 ${dualCount} 个`)
       const alignedSamples = (input.view.items || [])
-        .filter((item) => (item.meta as Record<string, unknown> | undefined)?.verification)
+        .filter((item) => (item.meta as Record<string, unknown> | undefined)?.verification === 'dual_verified')
         .slice(0, 4)
-        .map((item) => {
-          const verification = String((item.meta as Record<string, unknown> | undefined)?.verification || '').trim()
-          return `${item.name}${verification ? `(${verification})` : ''}`
-        })
+        .map((item) => item.name)
       if (alignedSamples.length > 0) {
         lines.push(`对齐样本: ${alignedSamples.join('、')}`)
       }
@@ -4244,7 +4701,7 @@ export class GeoLoomAgent {
     const answerStyle = input.intent.queryType === 'nearest_station'
       ? '先直接给出最近结果，再补一句距离或类别依据。'
       : input.intent.queryType === 'nearby_poi'
-        ? '先直接回答最值得关注的对象，再带出 2-4 个证据样本。'
+        ? '必须输出结构化 Markdown，优先使用 ## 推荐结论 / ## 就近可选 / ## 联网补充（仅在有稳定补充证据时） / ## 使用说明。不要使用 --- 分割线。列表项必须用 - 开头并单独一行，禁止 # - 连写。先直接回答最值得关注的对象，再带出 2-4 个证据样本。'
         : '写成 1-2 段自然中文，不要写成日志或执行列表。'
 
     const synthesisPrompt = [
@@ -4253,15 +4710,18 @@ export class GeoLoomAgent {
       `问题模式：${questionMode}`,
       `范围：${scopeSummary}`,
       forbiddenClause,
-      '请把下面证据整理成用户可直接阅读的最终中文回答。',
+      '请只基于下面证据写最终回答，并整理成用户可直接阅读的 Markdown。',
       '铁律：',
       '1. 忠于用户原始提问。用户问的是什么，你就仅仅回答什么。',
       '2. 先给直接结论，再给必要证据。',
       '3. 写成自然中文，不要写成日志、探针列表或系统回放。',
       '4. 如果底层数据没有呈现，直接回答"未包含相关数据"，绝不推演。',
       '5. 如果联网搜索没有命中稳定结果，要明确说联网未提供稳定补充证据，不要编造口碑。',
-      '6. 如果本地结果与联网结果做了实体对齐，优先写双重验证对象。',
+      '6. 禁止在括号中标注验证状态、距离米数、置信度等内部调试信息（如"✓双重验证""约97米"），用户只看店名和品类。',
       '7. 附近检索和最近地铁站问题必须先回答具体对象，不要扩展成片区分析。',
+      input.intent.queryType === 'nearby_poi'
+        ? '8. 附近检索题默认用二级标题分段，不要把结论、候选地点和说明揉成一段。'
+        : '',
       input.intent.queryType === 'area_overview'
         ? (explicitAreaSubject
             ? `必须直接写"${explicitAreaSubject}"，不要只写"当前区域"。`
@@ -4278,7 +4738,7 @@ export class GeoLoomAgent {
         messages: [
           {
             role: 'system',
-            content: '你是一个绝对客观的观察器界面，没有人类感情，不是规划师也不是分析专家。你负责把已验证空间证据写成最终中文回答。禁止脱离证据自由发挥。',
+            content: '你是一个严格基于证据的空间问答助手。你的任务是把已验证空间证据整理成简洁、结构化、可直接阅读的中文 Markdown 回答。禁止脱离证据自由发挥。',
           },
           {
             role: 'user',

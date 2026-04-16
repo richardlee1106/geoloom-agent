@@ -1,5 +1,5 @@
 import type { RegressionProviderMode } from '../helpers/chatRegressionHarness.js'
-import areaInsightGoldenCases from '../../fixtures/areaInsightGoldenCases.json'
+import areaInsightGoldenCases from '../../fixtures/areaInsightGoldenCases.json' with { type: 'json' }
 
 export interface Phase83RegressionFixture {
   id: string

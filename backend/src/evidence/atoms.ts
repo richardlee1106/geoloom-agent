@@ -6,6 +6,7 @@
 export type EvidenceAtom =
   | 'anchor.resolved'
   | 'anchor.secondary_resolved'
+  | 'anchor.scope_cells'
   | 'poi.nearby_list'
   | 'poi.nearest_station'
   | 'area.category_histogram'
@@ -22,6 +23,7 @@ export type EvidenceAtom =
   | 'web.multi_search'
   | 'web.tavily'
   | 'web.entity_alignment'
+  | 'web.poi_discovery'
 
 /**
  * 每个 Atom 对应的工具调用参数

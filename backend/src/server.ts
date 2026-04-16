@@ -26,6 +26,7 @@ import { createSemanticSelectorSkill } from './skills/semantic_selector/Semantic
 import { createMultiSearchEngineSkill } from './skills/multi_search_engine/MultiSearchEngineSkill.js'
 import { createTavilySearchSkill } from './skills/tavily_search/TavilySearchSkill.js'
 import { createEntityAlignmentSkill } from './skills/entity_alignment/EntityAlignmentSkill.js'
+import { createWebPoiDiscoverySkill } from './skills/web_poi_discovery/index.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
 import { CategoryEmbeddingIndex } from './catalog/categoryEmbeddingIndex.js'
 import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
@@ -94,7 +95,7 @@ registry.register(
               WHEN category_sub IN ('地铁站', '公交车站', '火车站', '高铁站') THEN 0
               ELSE 1
             END`
-          : '0'
+          : '0::int'
       const candidateLimit = placeKind === 'education' ? 160 : 80
 
       const exactClauses = searchTerms.map((_, index) => `name = $${index + 1}`).join(' OR ')
@@ -154,6 +155,20 @@ registry.register(createEntityAlignmentSkill({
   bridge: jinaBridge,
   query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
 }))
+
+// Web POI Discovery Skill V2：Tavily Search + Extract + LLM mention提取 + shortlist匹配
+// mention 提取用专属小模型（MENTION_LLM_*），降级到主 LLM（LLM_*）
+if (process.env.TAVILY_API_KEY) {
+  registry.register(createWebPoiDiscoverySkill({
+    tavilyApiKey: process.env.TAVILY_API_KEY,
+    llmBaseUrl: process.env.MENTION_LLM_BASE_URL || process.env.LLM_BASE_URL,
+    llmApiKey: process.env.MENTION_LLM_API_KEY || process.env.LLM_API_KEY,
+    llmModel: process.env.MENTION_LLM_MODEL || process.env.LLM_MODEL,
+    query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+  }))
+} else {
+  console.warn('[WebPoiDiscovery] TAVILY_API_KEY 未设置，跳过注册')
+}
 
 // 品类 Embedding 索引：启动时从 PostGIS 加载品类并预计算 embedding
 const categoryIndex = new CategoryEmbeddingIndex()
@@ -237,7 +252,9 @@ const shutdown = async () => {
 process.on('SIGINT', () => void shutdown())
 process.on('SIGTERM', () => void shutdown())
 
-app.listen({ port, host }).catch(async (error) => {
+app.listen({ port, host }).then(() => {
+  console.log(`[Server] listening at http://${host}:${port}`)
+}).catch(async (error) => {
   console.error(error)
   await shutdown()
   process.exit(1)

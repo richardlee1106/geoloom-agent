@@ -70,6 +70,51 @@ describe('RemoteFirstFaissIndex', () => {
     })
   })
 
+  it('preserves the last fallback status until an explicit health probe succeeds', async () => {
+    let searchAttempts = 0
+    const index = new RemoteFirstFaissIndex({
+      baseUrl: 'http://vector.test',
+      fetchImpl: vi.fn(async (input: string | URL | Request) => {
+        const url = String(input)
+        if (url.endsWith('/health')) {
+          return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
+        }
+
+        searchAttempts += 1
+        if (searchAttempts === 1) {
+          return new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 })
+        }
+
+        return new Response(JSON.stringify({
+          candidates: [
+            { id: 'poi_remote_001', name: '远程咖啡馆', category: '咖啡', score: 0.97 },
+          ],
+        }), { status: 200 })
+      }),
+      fallback: new LocalFaissIndex(),
+    })
+
+    const firstCandidates = await index.searchSemanticPOIs('武汉大学附近咖啡店', 3)
+    expect(firstCandidates.length).toBeGreaterThan(0)
+
+    await expect(index.getStatus({ probe: false })).resolves.toMatchObject({
+      name: 'spatial_vector',
+      mode: 'fallback',
+      degraded: true,
+      reason: 'remote_endpoint_unavailable',
+      details: {
+        path: '/search/semantic-pois',
+      },
+    })
+
+    await expect(index.getStatus()).resolves.toMatchObject({
+      name: 'spatial_vector',
+      mode: 'remote',
+      degraded: false,
+      target: 'http://vector.test',
+    })
+  })
+
   it('recovers status after a transient vector-service failure', async () => {
     let searchAttempts = 0
     const index = new RemoteFirstFaissIndex({

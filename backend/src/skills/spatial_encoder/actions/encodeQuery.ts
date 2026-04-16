@@ -26,7 +26,7 @@ export async function encodeQueryAction(
   semantic_evidence: SemanticEvidenceStatus
 }>> {
   const encoded = await deps.bridge.encodeText(payload.text)
-  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus())
+  const semanticEvidence = toSemanticEvidenceStatus(await deps.bridge.getStatus({ probe: false }))
   const embeddingId = `query_${randomUUID()}`
   const vectorRef = `vector:query:${embeddingId}`
   deps.store.set(vectorRef, {

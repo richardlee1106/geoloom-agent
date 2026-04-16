@@ -1,6 +1,6 @@
 /**
  * 多搜索引擎 Skill
- * 主力引擎：DuckDuckGo（免费，56%相关性，10条/题）
+ * 兼容搜索引擎：DuckDuckGo（保留给显式降级/兼容路径）
  * 实测：简单 UA + 2秒间隔 → 100%成功率
  * 缓存：10分钟 TTL，max 200 条
  */
@@ -133,6 +133,7 @@ export function createMultiSearchEngineSkill(
           },
           engine_type: { type: 'string', description: '引擎类型：auto/domestic/international', default: 'auto' },
           max_engines: { type: 'number', description: '最大引擎数', default: maxEngines },
+          max_results: { type: 'number', description: '最大结果数', default: 24 },
         },
         required: ['query'],
       },
@@ -151,7 +152,7 @@ export function createMultiSearchEngineSkill(
 
   return {
     name: 'multi_search_engine',
-    description: '多搜索引擎（DDG主力，免费56%相关性）',
+    description: '多搜索引擎兼容路径（DDG）',
     capabilities: ['search_multi'],
     actions,
     async getStatus() {
@@ -169,6 +170,7 @@ export function createMultiSearchEngineSkill(
         ? p.queries.map((item) => String(item || '').trim()).filter(Boolean)
         : []
       const fallbackQuery = String(p.query || '').trim()
+      const maxResults = Math.max(1, Math.min(Number(p.max_results || 24), 50))
       const effectiveQueries = [...new Set([...(queries.length > 0 ? queries : []), ...(fallbackQuery ? [fallbackQuery] : [])])]
         .slice(0, 3)
       if (effectiveQueries.length === 0) {
@@ -195,7 +197,7 @@ export function createMultiSearchEngineSkill(
         }
       }
 
-      const merged = [...mergedMap.values()].slice(0, 10)
+      const merged = [...mergedMap.values()].slice(0, maxResults)
       const summary = merged.length > 0
         ? `DDG 返回 ${merged.length} 条结果（${effectiveQueries.length} 个查询）`
         : 'DDG 无结果'

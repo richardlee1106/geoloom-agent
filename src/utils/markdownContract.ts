@@ -49,8 +49,18 @@ function normalizeHeadingLine(line = ''): string {
   return cleanedTitle ? splitHeadingAndBody(level, cleanedTitle) : `${level}`
 }
 
+/** 将内联的 ## 标题和 - 列表项前插入换行，使 marked 能正确解析 */
+function insertBreaksBeforeInlineMarkdown(text: string): string {
+  // 内联 ## / ### 标题前插入换行（前面不是换行符的情况）
+  let out = text.replace(/([^\n])\s*(#{2,6}\s)/g, '$1\n\n$2')
+  // 内联 - 列表项前插入换行（- 前面不是换行符，且 - 后面有空格或中文）
+  out = out.replace(/([^\n\s])\s*([-*])\s+(?=[\u4e00-\u9fff\w])/g, '$1\n$2 ')
+  return out
+}
+
 export function normalizeMarkdownForRender(markdown = ''): string {
-  const lines = String(markdown || '').split(/\r?\n/)
+  const withBreaks = insertBreaksBeforeInlineMarkdown(String(markdown || ''))
+  const lines = withBreaks.split(/\r?\n/)
   return lines
     .map((line) => normalizeHeadingLine(line))
     .join('\n')

@@ -289,6 +289,45 @@ function extractPoiAddress(poi: PoiLike = {}): string {
   )
 }
 
+function extractPoiVerification(poi: PoiLike = {}): string {
+  const meta = poi.meta && typeof poi.meta === 'object' ? poi.meta as AnyRecord : {}
+  const properties = poi.properties && typeof poi.properties === 'object' ? poi.properties as AnyRecord : {}
+  return pickText(
+    poi.verification,
+    meta.verification,
+    properties.verification
+  ).toLowerCase()
+}
+
+function extractPoiSource(poi: PoiLike = {}): string {
+  const meta = poi.meta && typeof poi.meta === 'object' ? poi.meta as AnyRecord : {}
+  const properties = poi.properties && typeof poi.properties === 'object' ? poi.properties as AnyRecord : {}
+  return pickText(
+    poi.source,
+    meta.source,
+    properties.source
+  ).toLowerCase()
+}
+
+function looksLikeWebArticleTitle(name: string): boolean {
+  const text = normalizeWhitespace(name)
+  if (!text) return true
+  if (/今日头条|小红书|知乎|大众点评|美团|携程|马蜂窝/u.test(text)) return true
+  return /攻略|必去|值得|逛吃|旅行|旅游|盘点|合集|榜单|十大/u.test(text)
+}
+
+function isRenderablePoiCandidate(poi: PoiLike = {}): boolean {
+  const verification = extractPoiVerification(poi)
+  const source = extractPoiSource(poi)
+  const name = extractPoiName(poi)
+
+  if (verification === 'web_only') return false
+  if (source === 'multi_search' || source === 'tavily' || source === 'web_only') return false
+  if (looksLikeWebArticleTitle(name)) return false
+
+  return true
+}
+
 function extractPoiCoordinates(poi: PoiLike = {}): [number, number] | null {
   const geometry = poi.geometry && typeof poi.geometry === 'object' ? poi.geometry : {}
   const coordinates = Array.isArray(geometry.coordinates) ? geometry.coordinates : null
@@ -399,6 +438,7 @@ function buildCandidatesFromPois(pois: PoiLike[] = []): StageOneCandidate[] {
   const candidates: StageOneCandidate[] = []
   for (let index = 0; index < pois.length; index += 1) {
     const poi = pois[index]
+    if (!isRenderablePoiCandidate(poi)) continue
     const name = extractPoiName(poi)
     const category = extractPoiCategory(poi)
     if (isWeakName(name, category)) continue

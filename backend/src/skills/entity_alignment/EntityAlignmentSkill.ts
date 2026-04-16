@@ -356,6 +356,113 @@ function expandWebResults(webResults: WebSearchItem[]): WebSearchItem[] {
   return expanded
 }
 
+function dedupeLocalPois(localPois: LocalPoiItem[]): LocalPoiItem[] {
+  const seen = new Set<string>()
+  const deduped: LocalPoiItem[] = []
+
+  for (const poi of localPois) {
+    const key = poi.id != null
+      ? `id:${String(poi.id)}`
+      : `name:${cleanPoiName(poi.name || '')}:${String(poi.categoryMain || poi.category || '')}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(poi)
+  }
+
+  return deduped
+}
+
+function resolveCategoryMainHint(categoryKey?: string | null, categoryMain?: string | null) {
+  if (categoryMain) return categoryMain
+  if (categoryKey === 'food' || categoryKey === 'coffee') return '餐饮美食'
+  if (categoryKey === 'hotel') return '住宿服务'
+  if (categoryKey === 'metro_station') return '交通设施服务'
+  return null
+}
+
+async function recallLocalPoisFromWebResults(
+  webResults: WebSearchItem[],
+  input: {
+    query: NonNullable<CreateEntityAlignmentSkillOptions['query']>
+    categoryKey?: string | null
+    categoryMain?: string | null
+    categorySub?: string | null
+  },
+): Promise<LocalPoiItem[]> {
+  const candidateNames = [...new Set(
+    webResults
+      .flatMap((item) => extractPoiNamesFromSingleResult(item))
+      .map((name) => String(name || '').trim())
+      .filter((name) => name.length >= 2 && name.length <= 24),
+  )].slice(0, 24)
+
+  if (candidateNames.length === 0) {
+    return []
+  }
+
+  const categoryMainHint = resolveCategoryMainHint(input.categoryKey, input.categoryMain)
+  const concurrency = Math.min(4, candidateNames.length)
+  let cursor = 0
+  const recalled: LocalPoiItem[] = []
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (cursor < candidateNames.length) {
+      const currentIndex = cursor++
+      const candidateName = candidateNames[currentIndex]
+      if (!candidateName) break
+
+      let sql = `
+        SELECT id, name, category_main, category_sub, longitude, latitude
+        FROM pois
+        WHERE (name = $1 OR name ILIKE $2 OR name ILIKE $3)
+      `
+      const params: unknown[] = [candidateName, `${candidateName}%`, `%${candidateName}%`]
+
+      if (categoryMainHint) {
+        sql += ` AND category_main = $4`
+        params.push(categoryMainHint)
+      }
+
+      if (input.categorySub) {
+        sql += categoryMainHint ? ` AND category_sub = $5` : ` AND category_sub = $4`
+        params.push(input.categorySub)
+      }
+
+      sql += `
+        ORDER BY
+          CASE
+            WHEN name = $1 THEN 0
+            WHEN name ILIKE $2 THEN 1
+            ELSE 2
+          END,
+          LENGTH(name)
+        LIMIT 8
+      `
+
+      try {
+        const result = await input.query(sql, params, 2000)
+        for (const row of result.rows || []) {
+          recalled.push({
+            id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : null,
+            name: String(row.name || ''),
+            category: String(row.category_sub || row.category_main || ''),
+            categoryMain: row.category_main ? String(row.category_main) : null,
+            categorySub: row.category_sub ? String(row.category_sub) : null,
+            longitude: Number.isFinite(Number(row.longitude)) ? Number(row.longitude) : undefined,
+            latitude: Number.isFinite(Number(row.latitude)) ? Number(row.latitude) : undefined,
+            distance_m: null,
+          })
+        }
+      } catch {
+        continue
+      }
+    }
+  })
+
+  await Promise.all(workers)
+  return dedupeLocalPois(recalled)
+}
+
 // ── 核心对齐算法 ──
 
 /** 匹配置信度阈值（降低以提升召回率） */
@@ -849,7 +956,7 @@ const entityAlignmentActions: Record<string, SkillActionDefinition> = {
         },
         max_results: {
           type: 'number',
-          description: '最大返回结果数（默认 20）',
+          description: '最大返回结果数（默认 30）',
         },
       },
     },
@@ -900,11 +1007,33 @@ export function createEntityAlignmentSkill(options: CreateEntityAlignmentSkillOp
         web_results: WebSearchItem[]
         local_pois: LocalPoiItem[]
         max_results?: number
+        category_key?: string | null
+        category_main?: string | null
+        category_sub?: string | null
+        search_driven_local_recall?: boolean
+        disable_distance_bias?: boolean
       }
 
       const webResults = Array.isArray(input.web_results) ? input.web_results : []
-      const localPois = Array.isArray(input.local_pois) ? input.local_pois : []
-      const maxResults = input.max_results || 20
+      const originalLocalPois = Array.isArray(input.local_pois) ? input.local_pois : []
+      const maxResults = input.max_results || 30
+      const searchDrivenLocalRecall = input.search_driven_local_recall === true
+      const disableDistanceBias = input.disable_distance_bias === true
+      const recalledLocalPois = searchDrivenLocalRecall && dbQuery
+        ? await recallLocalPoisFromWebResults(webResults, {
+            query: dbQuery,
+            categoryKey: input.category_key,
+            categoryMain: input.category_main,
+            categorySub: input.category_sub,
+          })
+        : []
+      const localPois = dedupeLocalPois([
+        ...originalLocalPois,
+        ...recalledLocalPois,
+      ]).map((poi) => ({
+        ...poi,
+        distance_m: disableDistanceBias ? null : poi.distance_m,
+      }))
 
       // ── 阶段 1：确定性实体对齐 ──
       const deterministicStart = Date.now()
@@ -1016,6 +1145,7 @@ export function createEntityAlignmentSkill(options: CreateEntityAlignmentSkillOp
           alignment_summary: {
             total_web_results: webResults.length,
             total_local_pois: localPois.length,
+            search_recalled_local_pois: recalledLocalPois.length,
             matched_count: matched.length,
             unmatched_web_count: unmatchedWeb.length,
             unmatched_local_count: finalUnmatchedLocal.length,

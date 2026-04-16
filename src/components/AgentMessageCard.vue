@@ -3,14 +3,16 @@
     <header class="agent-card-header">
       <div class="agent-card-title">
         <span class="agent-name">GeoLoom Agent</span>
-        <span class="agent-state" :class="`is-${snapshot.summary.tone}`">{{ snapshot.summary.label }}</span>
-        <span v-if="webSearchBadge" class="agent-web-badge" :class="`is-${webSearchBadge.tone}`">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-          <span>{{ webSearchBadge.label }}</span>
-        </span>
-        <span v-if="snapshot.summary.elapsedLabel" class="agent-elapsed">{{ snapshot.summary.elapsedLabel }}</span>
+        <div class="agent-card-badges">
+          <span class="agent-state" :class="`is-${snapshot.summary.tone}`">{{ snapshot.summary.label }}</span>
+          <span v-if="webSearchBadge" class="agent-web-badge" :class="`is-${webSearchBadge.tone}`">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+            <span>{{ webSearchBadge.label }}</span>
+          </span>
+          <span v-if="snapshot.summary.elapsedLabel" class="agent-elapsed">{{ snapshot.summary.elapsedLabel }}</span>
+        </div>
       </div>
-      <span class="agent-time">{{ formattedTime }}</span>
+      <span v-if="formattedTime" class="agent-time">{{ formattedTime }}</span>
     </header>
 
     <section class="agent-process">
@@ -177,7 +179,74 @@ function formatQueryType(value) {
 function formatWebSource(value) {
   if (value === 'tavily') return 'Tavily'
   if (value === 'multi_search') return '多引擎'
+  if (value === 'poi_discovery') return 'POI发现'
   return pickText(value)
+}
+
+function formatWebSearchStrategy(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'hybrid') return 'Hybrid'
+  if (normalized === 'hybrid_with_discovery') return 'Hybrid+发现'
+  if (normalized === 'local_first') return '本地优先'
+  return formatWebSource(value)
+}
+
+function formatWebRequirementLabel(intent = {}) {
+  const normalized = String(intent.webRequirementMode || '').trim().toLowerCase()
+  if (normalized === 'required') return '强依赖'
+  if (normalized === 'default_on') return '默认开启'
+  if (normalized === 'local_first') return '本地优先'
+  if (intent.needsWebSearch === true) return '需要'
+  if (intent.webEvidencePlanned === true) return '默认开启'
+  return '非必需'
+}
+
+function summarizeSpatialEncoderTrace(call) {
+  if (!call || typeof call !== 'object') return ''
+  const action = pickText(call.action)
+  const result = call.result && typeof call.result === 'object' ? call.result : {}
+  const semanticEvidence = result.semantic_evidence && typeof result.semantic_evidence === 'object'
+    ? result.semantic_evidence
+    : {}
+  const modelRoute = pickText(result.model_route, semanticEvidence.mode)
+  const modelsUsed = Array.isArray(result.models_used)
+    ? result.models_used.map((item) => pickText(item)).filter(Boolean).join('+')
+    : ''
+  const routeParts = []
+  if (modelRoute) routeParts.push(`路由：${modelRoute}`)
+  if (modelsUsed) routeParts.push(`模型：${modelsUsed}`)
+  const routeLabel = routeParts.join(' · ')
+
+  if (action === 'inspect_anchor_cell') {
+    const context = result.context && typeof result.context === 'object' ? result.context : {}
+    const cellLabel = pickText(context.cell_id, context.cellId, context.name, context.label, context.town_name, context.scene_label)
+    return `锚点格网：${cellLabel || '已读取'}${routeLabel ? ` · ${routeLabel}` : ''}`
+  }
+
+  if (action === 'search_anchor_cells') {
+    const cellCount = Array.isArray(result.cells) ? result.cells.length : 0
+    const sceneTags = Array.isArray(result.scene_tags)
+      ? result.scene_tags.map((item) => pickText(item)).filter(Boolean).slice(0, 2).join('、')
+      : ''
+    const buckets = Array.isArray(result.dominant_buckets)
+      ? result.dominant_buckets.map((item) => pickText(item)).filter(Boolean).slice(0, 2).join('、')
+      : ''
+    const parts = [`邻域格网：${cellCount} 个`]
+    if (sceneTags) parts.push(`场景 ${sceneTags}`)
+    if (buckets) parts.push(`桶 ${buckets}`)
+    if (routeLabel) parts.push(routeLabel)
+    return parts.join(' · ')
+  }
+
+  if (action === 'annotate_poi_cells') {
+    const results = Array.isArray(result.results) ? result.results : []
+    const annotatedCount = results.filter((item) => item && typeof item === 'object' && item.cell_context).length
+    const parts = [`POI格网标注：${annotatedCount || results.length} 个`]
+    if (routeLabel) parts.push(routeLabel)
+    return parts.join(' · ')
+  }
+
+  return ''
 }
 
 const debugCards = computed(() => {
@@ -215,7 +284,9 @@ const debugCards = computed(() => {
     if (categoryLabel) {
       lines.push(`类别：${categoryLabel}`)
     }
-    lines.push(`联网：${intent.needsWebSearch === true ? '需要' : '非必需'}`)
+    const webRequirementLabel = formatWebRequirementLabel(intent)
+    const webStrategyLabel = formatWebSearchStrategy(intent.webSearchStrategy)
+    lines.push(`联网：${webRequirementLabel}${webStrategyLabel ? ` · ${webStrategyLabel}` : ''}`)
     cards.push({ key: 'intent', title: 'NL 理解', lines: lines.slice(0, 5) })
   }
 
@@ -256,6 +327,24 @@ const debugCards = computed(() => {
       lines.push(`样本：${label}${verification ? ` · ${verification}` : ''}`)
     })
     cards.push({ key: 'alignment', title: '实体对齐', lines: lines.slice(0, 4) })
+  }
+
+  const toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : []
+  const spatialByAction = new Map()
+  toolCalls.forEach((call) => {
+    if (!call || typeof call !== 'object') return
+    if (pickText(call.skill) !== 'spatial_encoder') return
+    const action = pickText(call.action)
+    if (!action) return
+    spatialByAction.set(action, call)
+  })
+  const spatialLines = [
+    summarizeSpatialEncoderTrace(spatialByAction.get('inspect_anchor_cell')),
+    summarizeSpatialEncoderTrace(spatialByAction.get('search_anchor_cells')),
+    summarizeSpatialEncoderTrace(spatialByAction.get('annotate_poi_cells')),
+  ].filter(Boolean)
+  if (spatialLines.length > 0) {
+    cards.push({ key: 'spatial_encoder', title: '空间编码器', lines: spatialLines.slice(0, 4) })
   }
 
   return cards
@@ -315,11 +404,12 @@ const webSearchBadge = computed(() => {
     const sourceLabels = sources.map(s => {
       if (s === 'tavily') return 'Tavily'
       if (s === 'multi_search') return '多引擎'
+      if (s === 'poi_discovery') return 'POI发现'
       return s
     }).join('+')
     return {
       tone: 'success',
-      label: `${resultCount > 0 ? `命中 ${resultCount} 条结果` : `已阅读 ${pagesRead} 个网页`}${sourceLabels ? ` · ${sourceLabels}` : ''}`,
+      label: `${sourceLabels || '联网'} · ${resultCount > 0 ? `${resultCount}条` : `${pagesRead}页`}`,
     }
   }
 
@@ -354,9 +444,9 @@ const processSummaryDetail = computed(() => {
 .agent-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 16px;
   background:
@@ -380,27 +470,45 @@ const processSummaryDetail = computed(() => {
 
 .agent-card-header,
 .agent-card-title,
+.agent-card-badges,
 .process-leading,
 .process-actions,
 .timeline-head,
-.timeline-title-row {
+  .timeline-title-row {
   display: flex;
   align-items: center;
 }
 
-.agent-card-header,
 .timeline-head {
   justify-content: space-between;
 }
 
+.agent-card-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .agent-card-title {
-  gap: 10px;
+  flex: 1 1 320px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-card-badges {
+  gap: 8px;
+  row-gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .agent-name {
   font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: rgba(244, 247, 255, 0.96);
 }
 
@@ -442,6 +550,7 @@ const processSummaryDetail = computed(() => {
 .agent-elapsed {
   font-size: 12px;
   color: rgba(196, 205, 223, 0.78);
+  white-space: nowrap;
 }
 
 .agent-web-badge {
@@ -454,6 +563,7 @@ const processSummaryDetail = computed(() => {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+  max-width: 100%;
 }
 
 .agent-web-badge.is-running {
@@ -469,6 +579,8 @@ const processSummaryDetail = computed(() => {
 .agent-time {
   font-size: 12px;
   color: rgba(182, 189, 203, 0.74);
+  flex-shrink: 0;
+  padding-top: 2px;
 }
 
 .agent-answer {
@@ -491,14 +603,117 @@ const processSummaryDetail = computed(() => {
   margin-bottom: 0;
 }
 
+.agent-answer :deep(p + p),
+.agent-answer :deep(p + ul),
+.agent-answer :deep(p + ol),
+.agent-answer :deep(ul + p),
+.agent-answer :deep(ol + p) {
+  margin-top: 12px;
+}
+
+.agent-answer :deep(h2),
+.agent-answer :deep(h3),
+.agent-answer :deep(h4) {
+  margin: 18px 0 10px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.agent-answer :deep(h2:first-child),
+.agent-answer :deep(h3:first-child),
+.agent-answer :deep(h4:first-child) {
+  margin-top: 0;
+}
+
+.agent-answer :deep(h2) {
+  font-size: 17px;
+  color: rgba(130, 210, 255, 0.96);
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agent-answer :deep(h3) {
+  font-size: 15px;
+  color: rgba(246, 249, 255, 0.98);
+}
+
+.agent-answer :deep(h4) {
+  font-size: 14px;
+  color: rgba(220, 228, 242, 0.94);
+}
+
+.agent-answer :deep(ul),
+.agent-answer :deep(ol) {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.agent-answer :deep(ul) {
+  list-style: none;
+  padding-left: 16px;
+}
+
+.agent-answer :deep(ul > li) {
+  position: relative;
+  padding-left: 14px;
+}
+
+.agent-answer :deep(ul > li::before) {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(130, 210, 255, 0.7);
+}
+
+.agent-answer :deep(li + li) {
+  margin-top: 6px;
+}
+
+.agent-answer :deep(strong) {
+  color: rgba(246, 249, 255, 0.98);
+  font-weight: 600;
+}
+
+.agent-answer :deep(em) {
+  color: rgba(180, 215, 255, 0.9);
+  font-style: italic;
+}
+
+.agent-answer :deep(code) {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 185, 120, 0.92);
+  font-size: 0.9em;
+}
+
+.agent-answer :deep(blockquote) {
+  margin: 12px 0;
+  padding: 8px 14px;
+  border-left: 3px solid rgba(130, 210, 255, 0.4);
+  background: rgba(255, 255, 255, 0.02);
+  color: rgba(205, 213, 227, 0.86);
+}
+
+.agent-answer :deep(hr) {
+  border: 0;
+  height: 1px;
+  margin: 14px 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .pending-answer {
   color: rgba(189, 198, 215, 0.82);
 }
 
 .agent-debug-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
 }
 
 .agent-debug-card {
@@ -782,6 +997,10 @@ const processSummaryDetail = computed(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
+  }
+
+  .agent-card-title {
+    flex-basis: 100%;
   }
 
   .agent-process-toggle {

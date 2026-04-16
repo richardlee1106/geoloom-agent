@@ -41,6 +41,15 @@ function buildMarkdownNumberedSection(title: string, lines: Array<unknown>) {
   return [`## ${title}`, ...cleaned.map((line, index) => `${index + 1}. ${line}`)].join('\n')
 }
 
+function buildMarkdownParagraphSection(title: string, paragraphs: Array<unknown>) {
+  const cleaned = paragraphs
+    .map((paragraph) => trimClause(paragraph))
+    .filter(Boolean)
+
+  if (cleaned.length === 0) return ''
+  return [`## ${title}`, ...cleaned].join('\n\n')
+}
+
 function humanizeCategoryLabel(label: unknown) {
   const normalized = String(label || '').trim()
   if (!normalized) return '未分类'
@@ -287,44 +296,18 @@ function buildAlignmentSection(
   summary: Record<string, unknown>,
 ) {
   const dualVerified = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'dual_verified')
-  const localOnly = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'local_only')
-  const webOnly = items.filter((item) => (item.meta as Record<string, unknown>)?.verification === 'web_only')
 
   const lines: string[] = []
 
   // 双重验证样本（最高可信度）
   if (dualVerified.length > 0) {
-    const names = dualVerified.slice(0, 5).map((item) => {
-      const dist = item.distance_m != null ? `，约${formatDistance(item.distance_m)}` : ''
-      const cat = item.category ? `（${humanizeCategoryLabel(item.category)}）` : ''
-      return `${item.name}${cat}${dist}`
-    })
-    lines.push(`双重验证（本地+联网）：${names.join('、')}`)
+    const names = dualVerified.slice(0, 5).map((item) => item.name)
+    lines.push(`已验证推荐：${names.join('、')}`)
   }
 
-  // 仅本地
-  if (localOnly.length > 0) {
-    const names = localOnly.slice(0, 3).map((item) => item.name)
-    lines.push(`仅本地数据：${names.join('、')}`)
-  }
+  if (lines.length === 0) return ''
 
-  // 仅联网
-  if (webOnly.length > 0) {
-    const names = webOnly.slice(0, 3).map((item) => item.name)
-    lines.push(`仅联网数据：${names.join('、')}`)
-  }
-
-  // 摘要统计
-  const totalWeb = Number(summary.total_web_results || 0)
-  const totalLocal = Number(summary.total_local_pois || 0)
-  const matchedCount = Number(summary.matched_count || 0)
-  const embedMs = Number(summary.embed_recall_ms || 0)
-  const rerankMs = Number(summary.rerank_ms || 0)
-  if (totalWeb > 0 || totalLocal > 0) {
-    lines.push(`对齐统计：联网 ${totalWeb} 条、本地 ${totalLocal} 个、匹配 ${matchedCount} 对${embedMs > 0 ? `、Embedding ${embedMs}ms` : ''}${rerankMs > 0 ? `、Reranker ${rerankMs}ms` : ''}`)
-  }
-
-  return buildMarkdownSection('联网验证样本', lines)
+  return buildMarkdownSection('联网验证', lines)
 }
 
 function inferAreaQuestionMode(view: EvidenceView) {
@@ -615,10 +598,23 @@ export class Renderer {
     }
 
     const radiusM = Number(view.meta.radiusM || 800)
+    const distanceConstraintMode = String(view.meta.distanceConstraintMode || 'hard')
     const targetCategory = String(view.meta.targetCategory || '相关地点')
+    const scopeLabel = String(view.meta.scopeLabel || '').trim()
+    const scopeDistricts = Array.isArray(view.meta.scopeDistricts)
+      ? view.meta.scopeDistricts.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const scopeText = distanceConstraintMode === 'soft'
+      ? scopeLabel
+        ? `围绕${scopeLabel}`
+        : `围绕${anchorName}这类片区语义`
+      : `在 ${radiusM} 米范围内`
 
     if (view.items.length === 0) {
-      return buildMarkdownSection('结论', [`以${anchorName}为锚点，在 ${radiusM} 米范围内暂未找到${targetCategory === '相关地点' ? '' : targetCategory}结果`])
+      return buildMarkdownParagraphSection(
+        '推荐结论',
+        [`以${anchorName}为锚点，${scopeText}暂未找到${targetCategory === '相关地点' ? '' : targetCategory}结果。`],
+      )
     }
 
     const hasAlignment = (view.items || []).some(
@@ -631,14 +627,25 @@ export class Renderer {
 
     const lines = visibleItems
       .map((item, index) => {
-        const verification = (item.meta as Record<string, unknown>)?.verification as string | undefined
-        const badge = verification === 'dual_verified' ? '✓双重验证' : verification === 'web_only' ? '联网' : verification === 'local_only' ? '本地' : ''
-        const badgeText = badge ? `，${badge}` : ''
-        return `${item.name}（${item.category || '未分类'}，约${formatDistance(item.distance_m)}${badgeText}）`
+        return `${item.name}（${item.category || '未分类'}，约${formatDistance(item.distance_m)}）`
       })
 
     const hiddenCount = Math.max(view.items.length - visibleItems.length, 0)
-    const tail = hiddenCount > 0 ? `其余 ${hiddenCount} 个结果可在地图和标签云里继续查看` : ''
+    const highlightNames = visibleItems.slice(0, 3).map((item) => item.name).filter(Boolean)
+    const usageNotes: string[] = []
+    if (scopeDistricts.length > 0) {
+      usageNotes.push(`本轮已按 ${scopeDistricts.join('、')} 做范围约束，避免结果越到其他片区。`)
+    }
+    if (distanceConstraintMode === 'soft') {
+      usageNotes.push(scopeLabel
+        ? `这是 ${scopeLabel} 的片区级结果，不等于围绕单个站点的步行圈。`
+        : '这是片区级 nearby 结果，不等于围绕单个锚点的步行圈。')
+    } else {
+      usageNotes.push(`候选地点按距离从近到远排序，默认范围是 ${radiusM} 米。`)
+    }
+    if (hiddenCount > 0) {
+      usageNotes.push(`其余 ${hiddenCount} 个结果可在地图和标签云里继续查看。`)
+    }
 
     // 如果有联网对齐结果，追加 alignment section
     const alignmentSummary = view.meta.entity_alignment as Record<string, unknown> | undefined
@@ -650,9 +657,14 @@ export class Renderer {
       : ''
 
     return [
-      buildMarkdownSection('结论', [`以${anchorName}为锚点，在 ${radiusM} 米范围内找到 ${view.items.length} 个${targetCategory === '相关地点' ? '相关地点' : `${targetCategory}相关地点`}`]),
-      buildMarkdownNumberedSection('候选地点', lines),
-      buildMarkdownSection('补充说明', [tail]),
+      buildMarkdownParagraphSection('推荐结论', [
+        highlightNames.length > 0
+          ? `以${anchorName}为锚点，${scopeText}当前更值得先看 ${highlightNames.join('、')}。`
+          : `以${anchorName}为锚点，${scopeText}找到 ${view.items.length} 个${targetCategory === '相关地点' ? '相关地点' : `${targetCategory}相关地点`}。`,
+        `当前共保留 ${view.items.length} 个${targetCategory === '相关地点' ? '相关地点' : `${targetCategory}相关地点`}，优先展示距离和证据更靠前的候选。`,
+      ]),
+      buildMarkdownNumberedSection('就近可选', lines),
+      buildMarkdownSection('使用说明', usageNotes),
     ]
       .filter(Boolean)
       .join('\n\n') + alignmentTail

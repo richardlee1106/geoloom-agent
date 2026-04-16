@@ -134,4 +134,37 @@ describe('buildPlaceTags', () => {
 
     expect(emptyCategoryTag.score).toBeLessThanOrEqual(categorizedTag.score)
   })
+
+  it('drops web_only article titles before building tag cloud labels', () => {
+    const pois = [
+      {
+        id: 'web-1',
+        name: '武汉武昌最好玩的30个景点一定要去玩一次 - 今日头条',
+        meta: { verification: 'web_only', source: 'entity_alignment' }
+      },
+      createPoi({
+        id: 2,
+        name: '光谷步行街牛肉面',
+        category: '面馆',
+        score: 0.91,
+        lon: 114.399,
+        lat: 30.505
+      })
+    ]
+
+    const tags = buildPlaceTags(pois, {
+      topK: 20,
+      intentMeta: {
+        queryType: 'poi_search',
+        intentMode: 'local_search',
+        queryPlan: {
+          semantic_query: '光谷附近美食',
+          anchor: '光谷',
+          categories: ['餐饮美食']
+        }
+      }
+    })
+
+    expect(tags.map((tag) => tag.name)).toEqual(['光谷步行街牛肉面'])
+  })
 })

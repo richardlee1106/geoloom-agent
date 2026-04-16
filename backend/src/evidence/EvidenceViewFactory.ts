@@ -61,6 +61,7 @@ export class EvidenceViewFactory {
     return buildPOIListView({
       anchor: input.anchor,
       rows: input.rows || [],
+      items: input.items || [],
       intent: input.intent,
     })
   }

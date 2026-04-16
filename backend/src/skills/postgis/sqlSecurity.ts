@@ -21,6 +21,13 @@ export function createPostgisCatalog(): PostgisCatalog {
         'brand_category',
         'geom',
       ],
+      districts: [
+        'id',
+        'name',
+        'eng_name',
+        'area_sqm',
+        'geom',
+      ],
       aois: [
         'id',
         'osm_id',

@@ -5,7 +5,7 @@
 
 export type ContractScope = 'viewport' | 'place' | 'user_location' | 'drawn_region'
 export type ContractDepth = 'lookup' | 'descriptive' | 'structural' | 'prescriptive'
-export type WebSearchStrategy = 'none' | 'tavily' | 'multi_search' | 'hybrid' | 'entity_alignment_only'
+export type WebSearchStrategy = 'none' | 'tavily' | 'multi_search' | 'hybrid' | 'entity_alignment_only' | 'poi_discovery' | 'hybrid_with_discovery'
 
 export interface NLContractMeta {
   scope: ContractScope

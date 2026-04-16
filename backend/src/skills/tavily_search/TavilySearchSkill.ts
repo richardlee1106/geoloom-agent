@@ -1,6 +1,6 @@
 /**
  * Tavily 搜索 Skill
- * 后备搜索引擎：精准结果 + AI 答案摘要，100%答案率，API付费
+ * 默认联网搜索引擎：精准结果 + AI 答案摘要
  * 缓存：10分钟 TTL，max 100 条
  */
 import crypto from 'node:crypto'
@@ -81,7 +81,7 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
   const actions: Record<string, SkillActionDefinition> = {
     search_web: {
       name: 'search_web',
-      description: 'Tavily 搜索引擎（后备，精准+答案摘要）',
+      description: 'Tavily 搜索引擎（默认，精准+答案摘要）',
       inputSchema: {
         type: 'object',
         properties: {
@@ -92,7 +92,7 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
             items: { type: 'string' },
           },
           search_depth: { type: 'string', description: '搜索深度：basic/advanced', default: 'basic' },
-          max_results: { type: 'number', description: '最大结果数', default: 10 },
+          max_results: { type: 'number', description: '最大结果数', default: 24 },
         },
         required: ['query'],
       },
@@ -108,7 +108,7 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
 
   return {
     name: 'tavily_search',
-    description: 'Tavily 搜索（后备，精准+AI答案摘要，API付费）',
+    description: 'Tavily 搜索（默认，精准+AI答案摘要）',
     capabilities: ['search_web'],
     actions,
     async getStatus() {
@@ -143,7 +143,7 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
       }
 
       const searchDepth = String(p.search_depth || 'basic')
-      const maxResults = Number(p.max_results || 10)
+      const maxResults = Math.max(1, Math.min(Number(p.max_results || 24), 50))
 
       // 缓存检查
       const cacheQuery = effectiveQueries.join(' || ')
@@ -155,8 +155,13 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
 
       let answer = ''
       const mergedMap = new Map<string, TavilyResult>()
-      for (const query of effectiveQueries) {
-        const response = await fetchTavily(query, options.apiKey, searchDepth, maxResults, timeoutMs)
+      const responses = await Promise.all(
+        effectiveQueries.map(async (query) => ({
+          query,
+          response: await fetchTavily(query, options.apiKey, searchDepth, maxResults, timeoutMs),
+        })),
+      )
+      for (const { query, response } of responses) {
         console.log(`[诊断:Tavily] query="${query}", results=${response.results.length}, hasAnswer=${!!response.answer}`)
         if (!answer && response.answer) {
           answer = response.answer

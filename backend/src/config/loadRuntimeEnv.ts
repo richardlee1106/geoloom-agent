@@ -16,7 +16,13 @@ export interface LoadRuntimeEnvResult {
 }
 
 function defaultAppDir() {
-  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const thisFile = fileURLToPath(import.meta.url)
+  const thisDir = dirname(thisFile)
+  // src/config → 向上两级 = backend
+  // dist/src/config → 向上两级 = backend/dist，需要再向上一级 = backend
+  const upTwo = resolve(thisDir, '..', '..')
+  const isDist = upTwo.endsWith('dist') || upTwo.endsWith('\\dist') || upTwo.endsWith('/dist')
+  return isDist ? resolve(upTwo, '..') : upTwo
 }
 
 function readEnvFile(filepath: string) {

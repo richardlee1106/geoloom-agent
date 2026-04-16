@@ -177,7 +177,17 @@ export class SQLSandbox {
   }
 
   private extractFunctions(sql: string) {
-    const ignoredNames = new Set(['select', 'from', 'where', 'limit', 'and', 'or', 'over'])
+    const ignoredNames = new Set([
+      'select',
+      'from',
+      'where',
+      'limit',
+      'and',
+      'or',
+      'over',
+      'exists',
+      'in',
+    ])
     return [...new Set(
       [...sql.matchAll(/\b([a-z_][a-z0-9_]*)\s*\(/gi)]
         .map((match) => match[1].toLowerCase())

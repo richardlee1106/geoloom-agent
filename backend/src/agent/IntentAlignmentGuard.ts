@@ -55,7 +55,7 @@ export class IntentAlignmentGuard {
     }
 
     // 完全没有空间上下文 — 检测是否提到了具体地点名称
-    const isExplicitPlaceQuery = /[\u4e00-\u9fa5]{2,}(?:\u9644\u8fd1|\u5468\u8fb9|\u65c1\u8fb9|\u6700\u8fd1|\u5730\u94c1\u7ad9)|\u6bd4\u8f83|\u5728[\u4e00-\u9fa5]{2,}|\u53bb[\u4e00-\u9fa5]{2,}/.test(input.rawQuery)
+    const isExplicitPlaceQuery = /[\u4e00-\u9fa5]{2,}(?:\u9644\u8fd1|\u5468\u8fb9|\u65c1\u8fb9|\u6700\u8fd1|\u5730\u94c1\u7ad9|\u6709\u54ea\u4e9b|\u6709\u4ec0\u4e48|\u6709\u6ca1\u6709|\u54ea\u6709|\u54ea\u91cc\u6709)|\u6bd4\u8f83|\u5728[\u4e00-\u9fa5]{2,}|\u53bb[\u4e00-\u9fa5]{2,}|\u627e[\u4e00-\u9fa5]{2,}/.test(input.rawQuery)
     if (isExplicitPlaceQuery) {
       return { needsClarification: false, reason: null, param: null, resolvedScope: { kind: 'ambiguous', hasExplicitBounds: false } }
     }
