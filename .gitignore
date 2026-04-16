@@ -27,3 +27,7 @@ backend/data/memory/*
 output/playwright/
 .DS_Store
 Thumbs.db
+
+# llama-cpp large files (deprecated, switched to Jina API)
+bin/ggml-cuda.dll
+bin/llama-cuda.zip
