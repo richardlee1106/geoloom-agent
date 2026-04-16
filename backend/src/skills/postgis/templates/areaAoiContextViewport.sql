@@ -6,6 +6,8 @@ WITH tiled_aoi AS (
     code,
     population,
     area_sqm,
+    ST_X(ST_Centroid(geom)) AS longitude,
+    ST_Y(ST_Centroid(geom)) AS latitude,
     GREATEST(
       0,
       LEAST(
@@ -49,6 +51,8 @@ SELECT
   code,
   population,
   area_sqm,
+  longitude,
+  latitude,
   tile_x,
   tile_y,
   anchor_priority

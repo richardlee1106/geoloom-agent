@@ -64,7 +64,8 @@ export class SQLSandbox {
         errors.push('Only one SQL statement is allowed')
       } else {
         const statement = ast[0] as { type?: string }
-        if (statement.type !== 'select') {
+        // WITH ... SELECT 被 pgsql-ast-parser 解析为 type='with'，属于合法只读查询
+        if (statement.type !== 'select' && statement.type !== 'with') {
           errors.push(`Only SELECT statements are allowed, received ${statement.type || 'unknown'}`)
         }
       }
@@ -80,7 +81,8 @@ export class SQLSandbox {
       errors.push('Mutation statements are not allowed')
     }
 
-    if (/\bselect\s+\*/.test(lowerSql)) {
+    // 仅拦截直接查真实表的 SELECT *，CTE 子查询中的 * 不拦截
+    if (/\bselect\s+\*/.test(lowerSql) && !/\bwith\b/.test(lowerSql)) {
       errors.push('Wildcard column selection is not allowed')
     }
 
@@ -173,7 +175,13 @@ export class SQLSandbox {
       ...sql.matchAll(/\bfrom\s+(?![a-z_][a-z0-9_]*\s*\()([a-z_][a-z0-9_]*)/g),
       ...sql.matchAll(/\bjoin\s+(?![a-z_][a-z0-9_]*\s*\()([a-z_][a-z0-9_]*)/g),
     ]
-    return [...new Set(matches.map((match) => match[1]))]
+    // 提取 CTE 定义的临时表名，这些不应检查白名单
+    // 匹配 WITH name AS ( 和逗号分隔的后续 CTE: ), name AS (
+    const cteNames = new Set([
+      ...sql.matchAll(/\bwith\s+([a-z_][a-z0-9_]*)\s+as\s*\(/gi),
+      ...sql.matchAll(/\),\s*([a-z_][a-z0-9_]*)\s+as\s*\(/gi),
+    ].map((m) => m[1].toLowerCase()))
+    return [...new Set(matches.map((match) => match[1]))].filter((t) => !cteNames.has(t))
   }
 
   private extractFunctions(sql: string) {
@@ -187,6 +195,14 @@ export class SQLSandbox {
       'over',
       'exists',
       'in',
+      'as',
+      'with',
+      'case',
+      'when',
+      'then',
+      'else',
+      'end',
+      'not',
     ])
     return [...new Set(
       [...sql.matchAll(/\b([a-z_][a-z0-9_]*)\s*\(/gi)]

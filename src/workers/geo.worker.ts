@@ -136,7 +136,7 @@ function runGeoLayout(
 
   const resolvedConfig = resolveConfig(config)
   const canvas = new OffscreenCanvas(width, height)
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
   if (!ctx) {
     console.warn('[GeoWorker] 无法创建 2D 上下文')

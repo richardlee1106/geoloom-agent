@@ -82,13 +82,13 @@
             
             <div v-if="!aiResponse && !isGenerating" class="empty-state">
               <div class="empty-icon">💬</div>
-              <p>当前为前端展示模式，后端接入中。点击下方按钮查看叙事规范模板。</p>
+              <p>点击下方按钮，按当前视口生成第一版区域导览骨架。</p>
             </div>
 
             
             <div v-if="isGenerating" class="loading-state">
               <div class="loader-spinner-mini"></div>
-              <span>正在加载叙事规范模板...</span>
+              <span>正在生成区域导览骨架...</span>
             </div>
           </div>
 
@@ -101,7 +101,7 @@
               >
                 <el-icon v-if="isGenerating" class="is-loading"><Loading /></el-icon>
                 <el-icon v-else><MagicStick /></el-icon>
-                {{ isGenerating ? '模板加载中...' : '查看叙事规范模板' }}
+                {{ isGenerating ? '导览生成中...' : '生成导览骨架' }}
               </button>
               <button 
                 v-if="narrativeSteps.length > 0" 
@@ -162,6 +162,7 @@ import { ElIcon } from 'element-plus/es/components/icon/index';
 import { marked } from 'marked';
 import { ArrowLeft, Close, Hide, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
 import { fromLonLat, toLonLat } from 'ol/proj';
+import { sendChatMessageStream } from '../utils/aiService';
 import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../utils/narrativeTextTemplate';
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
 
@@ -261,15 +262,116 @@ const aiPanelRef = ref(null);
 const subtitlePosition = ref({ x: 0, y: 0 }); 
 const subtitleSafeZone = ref({ left: 0, top: 0, right: 0, bottom: 0 }); 
 const activeRegionIndex = ref(-1); 
+const currentViewport = ref(null);
 
 let frameId = null;
 let boundaryDashStart = 0;
 let boundaryDashTotal = 0;
 const BOUNDARY_DASH_DURATION = 3.6;
+const NARRATIVE_DEFAULT_QUERY = '请按导览顺序介绍当前区域，挑出最值得讲的代表节点。';
 
 function getElapsedClockTime() {
   if (!clock.value) return 0;
   return clock.value.getElapsedTime();
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function readViewportFromMap(olMap) {
+  if (!olMap?.getView || !olMap?.getSize) return null;
+  const size = olMap.getSize();
+  if (!size) return null;
+  const extent = olMap.getView().calculateExtent(size);
+  const bl = toLonLat([extent[0], extent[1]]);
+  const tr = toLonLat([extent[2], extent[3]]);
+  return [bl[0], bl[1], tr[0], tr[1]];
+}
+
+function buildViewportCenter(viewport) {
+  if (!Array.isArray(viewport) || viewport.length < 4) return null;
+  return {
+    lon: (Number(viewport[0]) + Number(viewport[2])) / 2,
+    lat: (Number(viewport[1]) + Number(viewport[3])) / 2,
+  };
+}
+
+function buildPoiFeaturesFromPayload(items) {
+  return asArray(items).map((item, index) => {
+    const record = asObject(item) || {};
+    if (record.type === 'Feature' && record.geometry?.type === 'Point' && Array.isArray(record.geometry.coordinates)) {
+      return record;
+    }
+    const geometry = asObject(record.geometry);
+    const coordinates = Array.isArray(geometry?.coordinates)
+      ? geometry.coordinates
+      : (Number.isFinite(Number(record.longitude)) && Number.isFinite(Number(record.latitude))
+        ? [Number(record.longitude), Number(record.latitude)]
+        : null);
+    if (!coordinates) return null;
+    return {
+      type: 'Feature',
+      properties: {
+        id: record.id || `narrative-${index}`,
+        name: String(record.name || record.label || ''),
+        名称: String(record.name || record.label || ''),
+      },
+      geometry: {
+        type: 'Point',
+        coordinates,
+      },
+    };
+  }).filter(Boolean);
+}
+
+function applyNarrativeResult(payload) {
+  const root = asObject(payload) || {};
+  const results = asObject(root.results) || {};
+  const narrativeTour = asObject(results.narrative_tour) || {};
+  const steps = asArray(narrativeTour.narrative_steps);
+  const boundary = narrativeTour.boundary || results.boundary || null;
+  const pois = asArray(results.pois);
+  const clusters = asObject(results.spatial_clusters);
+
+  if (typeof root.answer === 'string' && root.answer.trim()) {
+    aiResponse.value = root.answer;
+  }
+  if (steps.length > 0) {
+    narrativeSteps.value = steps;
+  }
+  if (boundary && typeof boundary === 'object' && !Array.isArray(boundary)) {
+    boundaryData.value = boundary;
+  }
+  if (pois.length > 0) {
+    poiFeatures.value = buildPoiFeaturesFromPayload(pois);
+  }
+  if (clusters?.hotspots) {
+    spatialClusters.value = asArray(clusters.hotspots);
+  }
+}
+
+function handleNarrativeMeta(type, data) {
+  if (type === 'refined_result') {
+    applyNarrativeResult(data);
+    return;
+  }
+  if (type === 'boundary' && data && typeof data === 'object' && !Array.isArray(data)) {
+    boundaryData.value = data;
+    return;
+  }
+  if (type === 'pois') {
+    poiFeatures.value = buildPoiFeaturesFromPayload(data);
+    return;
+  }
+  if (type === 'spatial_clusters') {
+    const payload = asObject(data);
+    spatialClusters.value = asArray(payload?.hotspots);
+  }
 }
 
 const NARRATIVE_TEMPLATE_CONTENT = `${NARRATIVE_UI_ONLY_NOTICE}
@@ -288,6 +390,19 @@ watch(aiResponse, () => {
       scriptContentRef.value.scrollTop = scriptContentRef.value.scrollHeight;
     }
   });
+});
+
+watch(boundaryData, (nextBoundary) => {
+  if (!scene.value) return;
+  if (!nextBoundary) {
+    if (boundaryMesh.value) {
+      scene.value.remove(boundaryMesh.value);
+      boundaryMesh.value.geometry.dispose();
+      boundaryMesh.value = null;
+    }
+    return;
+  }
+  nextTick(() => updateBoundaryLine());
 });
 
 const initThree = async () => {
@@ -561,16 +676,24 @@ const updateBoundaryLine = () => {
 
 const onMapReady = async (olMap) => {
   mapInstance.value = olMap;
+  currentViewport.value = readViewportFromMap(olMap);
   await initThree();
   window.addEventListener('resize', handleResize);
 };
 
-const onMapMove = () => {
-  
+const onMapMove = (viewport) => {
+  currentViewport.value = Array.isArray(viewport) ? viewport : currentViewport.value;
 };
 
 const handleGenerate = async () => {
   if (isGenerating.value) return;
+
+  const viewport = Array.isArray(currentViewport.value) ? currentViewport.value : readViewportFromMap(mapInstance.value);
+  const center = buildViewportCenter(viewport);
+  if (!viewport || !center) {
+    aiResponse.value = '请先把地图移动到要解说的区域，再生成导览骨架。';
+    return;
+  }
 
   isGenerating.value = true;
   narrativeSteps.value = [];
@@ -583,10 +706,35 @@ const handleGenerate = async () => {
   fuzzyRegions.value = [];
   clearClusterBoundaries();
   clearFuzzyRegions();
-  aiResponse.value = NARRATIVE_TEMPLATE_CONTENT;
+  aiResponse.value = '';
 
   await nextTick();
-  isGenerating.value = false;
+
+  try {
+    const fullAnswer = await sendChatMessageStream(
+      [{ role: 'user', content: NARRATIVE_DEFAULT_QUERY }],
+      (chunk) => {
+        aiResponse.value += chunk;
+      },
+      {
+        surface: 'narrative',
+        spatialContext: {
+          viewport,
+          center,
+        },
+      },
+      [],
+      handleNarrativeMeta,
+    );
+
+    if (!aiResponse.value && fullAnswer) {
+      aiResponse.value = fullAnswer;
+    }
+  } catch (error) {
+    aiResponse.value = `导览生成失败：${error?.message || String(error || '未知错误')}`;
+  } finally {
+    isGenerating.value = false;
+  }
 };
 
 const drawFuzzyRegions = async (regions) => {

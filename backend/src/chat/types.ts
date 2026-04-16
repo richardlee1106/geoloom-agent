@@ -5,9 +5,12 @@ export interface ChatMessageV4 {
   content: unknown
 }
 
+export type ChatSurface = 'default' | 'narrative'
+
 export interface ChatRequestOptionsV4 {
   requestId?: string
   sessionId?: string
+  surface?: ChatSurface
   spatialContext?: Record<string, unknown>
   regions?: unknown[]
   selectedCategories?: unknown[]

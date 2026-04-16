@@ -3,8 +3,10 @@ import { loadRuntimeEnv } from './config/loadRuntimeEnv.js'
 loadRuntimeEnv()
 
 import { SessionManager } from './agent/SessionManager.js'
+import { SurfaceChatRuntime } from './chat/SurfaceChatRuntime.js'
 import { createApp } from './app.js'
 import { GeoLoomAgent } from './agent/GeoLoomAgent.js'
+import { NarrativeRuntime } from './narrative/NarrativeRuntime.js'
 import { RemoteFirstFaissIndex } from './integration/faissIndex.js'
 import { RemoteFirstOSMBridge } from './integration/osmBridge.js'
 import { PostgisPool } from './integration/postgisPool.js'
@@ -221,7 +223,7 @@ intentClassifier.build().catch((err) => {
   console.warn(`[EmbeddingIntentClassifier] 构建失败: ${err instanceof Error ? err.message : String(err)}`)
 })
 
-const chat = new GeoLoomAgent({
+const defaultChat = new GeoLoomAgent({
   registry,
   version,
   memory,
@@ -230,6 +232,15 @@ const chat = new GeoLoomAgent({
   bridge: jinaBridge,
   poiEmbeddingCache,
   intentClassifier,
+})
+const narrativeChat = new NarrativeRuntime({
+  registry,
+  version,
+})
+
+const chat = new SurfaceChatRuntime({
+  defaultRuntime: defaultChat,
+  narrativeRuntime: narrativeChat,
 })
 
 const app = createApp({
