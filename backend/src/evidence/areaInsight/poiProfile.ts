@@ -138,6 +138,8 @@ export function buildPoiProfileInputFromEvidence(input: {
     hotspotLabel: input.view.hotspots?.[0]?.label || null,
     surroundingCategories,
     aoiContext: input.view.aoiContext || [],
+    lon: Number.isFinite(Number(input.item.longitude)) ? Number(input.item.longitude) : null,
+    lat: Number.isFinite(Number(input.item.latitude)) ? Number(input.item.latitude) : null,
   }
 }
 

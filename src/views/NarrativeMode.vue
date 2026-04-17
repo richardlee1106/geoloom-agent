@@ -19,9 +19,6 @@
     />
 
     
-    <canvas ref="canvasRef" class="effect-canvas"></canvas>
-
-    
     <div class="narrative-ui">
       
       <div v-if="isPlaying && narrativeSteps.length > 0" class="progress-ring-container">
@@ -73,7 +70,10 @@
                   <div class="step-dot"></div>
                   <div class="step-info">
                     <div class="step-label">STEP {{ index + 1 }}</div>
-                    <div class="step-title">{{ step.focus === 'overview' ? '区域全景' : step.focus }}</div>
+                    <div class="step-title">
+                      {{ step.focus === 'overview' ? '区域全景' : step.focus }}
+                    </div>
+                    <div v-if="step.tagline && step.focus !== 'overview'" class="step-tagline">{{ step.tagline }}</div>
                   </div>
                 </div>
               </div>
@@ -119,23 +119,30 @@
       </transition>
 
       
-      <transition name="up">
-        <div v-if="isPlaying && currentVoiceText" class="subtitle-card">
-          <div class="card-glow"></div>
-          <div class="district-name-container">
-            <span class="district-prefix">NOW FOCUSING</span>
-            <h2 class="district-name-text">{{ currentNarrativeFocus }}</h2>
-          </div>
-          <div class="narrative-text-container">
-            <p class="narrative-text">
-              {{ typedText }}<span class="typing-cursor"></span>
-            </p>
-          </div>
-          
-          
-          <div class="card-controls">
-            <div class="voice-visualizer">
-              <div v-for="i in 5" :key="i" class="audio-bar" :style="{ animationDelay: (i * 0.2) + 's' }"></div>
+      <transition name="narrator-slide">
+        <div v-if="isPlaying && currentVoiceText" class="narrator-panel">
+          <div class="narrator-accent-line"></div>
+          <div class="narrator-inner">
+            <div class="narrator-header">
+              <span class="narrator-eyebrow">当前镜头</span>
+              <h2 class="narrator-focus">{{ currentNarrativeFocus }}</h2>
+            </div>
+            <div class="narrator-body">
+              <p class="narrator-text">
+                {{ typedText }}<span class="typing-cursor"></span>
+              </p>
+              <div v-if="currentTagline" class="narrator-tagline">
+                <span>{{ currentTagline }}</span>
+              </div>
+              <div v-if="currentWebFactHint" class="narrator-fact">
+                <span class="fact-badge">{{ currentWebFactHint }}</span>
+              </div>
+            </div>
+            <div class="narrator-footer">
+              <div class="voice-visualizer">
+                <div v-for="i in 5" :key="i" class="audio-bar" :style="{ animationDelay: (i * 0.2) + 's' }"></div>
+              </div>
+              <div class="narrator-step-badge">{{ currentStepIndex + 1 }} / {{ narrativeSteps.length }}</div>
             </div>
           </div>
         </div>
@@ -161,33 +168,29 @@ import { ElButton } from 'element-plus/es/components/button/index';
 import { ElIcon } from 'element-plus/es/components/icon/index';
 import { marked } from 'marked';
 import { ArrowLeft, Close, Hide, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
+import Feature from 'ol/Feature';
+import Polygon from 'ol/geom/Polygon';
+import MultiPolygon from 'ol/geom/MultiPolygon';
+import { Vector as VectorLayer } from 'ol/layer';
 import { fromLonLat, toLonLat } from 'ol/proj';
+import VectorSource from 'ol/source/Vector';
+import { Fill, Stroke, Style } from 'ol/style';
 import { sendChatMessageStream } from '../utils/aiService';
 import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../utils/narrativeTextTemplate';
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
+import { useProjection } from '../composables/map/useProjection';
+
+// 底图为高德 GCJ02，后端 AOI/landuse boundary 全部为 WGS84（OSM），
+// 必须先做 WGS84→GCJ02 偏移转换再 fromLonLat 投影到 EPSG:3857，
+// 否则在武汉经纬度会产生约 500m 的系统性偏移（东南向）。
+const { wgs84ToGcj02 } = useProjection();
 
 const MapContainer = defineAsyncComponent(() => import('../components/MapContainer.vue'));
 
-let THREE = null;
-let threeRuntimePromise = null;
-
-async function ensureThreeRuntime() {
-  if (THREE) return THREE;
-  if (!threeRuntimePromise) {
-    threeRuntimePromise = import('three').then((mod) => {
-      THREE = mod;
-      return THREE;
-    }).finally(() => {
-      threeRuntimePromise = null;
-    });
-  }
-  return threeRuntimePromise;
-}
 
 
 const router = useRouter();
 const mapRef = ref(null);
-const canvasRef = ref(null);
 const poiFeatures = ref([]);
 const narrativeSteps = ref([]);
 const aiResponse = ref(''); 
@@ -216,6 +219,55 @@ const progressOffset = computed(() => {
   return 125.6 * (1 - progress);
 });
 
+const overviewBoundarySource = new VectorSource();
+const overviewBoundaryLayer = new VectorLayer({
+  source: overviewBoundarySource,
+  updateWhileAnimating: true,
+  updateWhileInteracting: true,
+  renderBuffer: 256,
+  zIndex: 920,
+  style: [
+    new Style({
+      stroke: new Stroke({ color: 'rgba(56, 189, 248, 0.24)', width: 10 }),
+      fill: new Fill({ color: 'rgba(56, 189, 248, 0.04)' })
+    }),
+    new Style({
+      stroke: new Stroke({ color: 'rgba(56, 189, 248, 0.95)', width: 3, lineDash: [12, 10] }),
+      fill: new Fill({ color: 'rgba(56, 189, 248, 0.08)' })
+    })
+  ]
+});
+const narrativeNodeBoundarySource = new VectorSource();
+const narrativeNodeBoundaryLayer = new VectorLayer({
+  source: narrativeNodeBoundarySource,
+  updateWhileAnimating: true,
+  updateWhileInteracting: true,
+  renderBuffer: 256,
+  zIndex: 930,
+  style: [
+    new Style({
+      stroke: new Stroke({ color: 'rgba(0, 212, 255, 0.2)', width: 12 }),
+      fill: new Fill({ color: 'rgba(0, 212, 255, 0.03)' })
+    }),
+    new Style({
+      stroke: new Stroke({ color: 'rgba(0, 212, 255, 0.96)', width: 3.5 }),
+      fill: new Fill({ color: 'rgba(0, 212, 255, 0.06)' })
+    })
+  ]
+});
+
+const currentTagline = computed(() => {
+  if (currentStepIndex.value < 0) return null;
+  const step = narrativeSteps.value[currentStepIndex.value];
+  return step?.tagline || null;
+});
+
+const currentWebFactHint = computed(() => {
+  if (currentStepIndex.value < 0) return null;
+  const step = narrativeSteps.value[currentStepIndex.value];
+  return step?.webFactHint || null;
+});
+
 
 let typeInterval = null;
 const typeText = (text) => {
@@ -240,20 +292,8 @@ watch(currentVoiceText, (newVal) => {
 });
 
 
-const scene = shallowRef(null);
-const camera = shallowRef(null);
-const renderer = shallowRef(null);
-const clock = shallowRef(null);
-const boundaryMesh = shallowRef(null);
-const boundaryMaterial = shallowRef(null);
-const maskMesh = shallowRef(null); 
 const mapInstance = shallowRef(null);
-const spatialClusters = ref([]); 
-const vernacularRegions = ref([]); 
-const fuzzyRegions = ref([]); 
-const clusterBoundaries = ref([]); 
-const fuzzyRegionMeshes = ref([]); 
-const isDrawingCluster = ref(false); 
+const fuzzyRegions = ref([]);
 const currentSubtitle = ref(''); 
 const subtitleHistory = ref([]); 
 const isSubtitleVisible = ref(false); 
@@ -261,19 +301,11 @@ const subtitleContainerRef = ref(null);
 const aiPanelRef = ref(null); 
 const subtitlePosition = ref({ x: 0, y: 0 }); 
 const subtitleSafeZone = ref({ left: 0, top: 0, right: 0, bottom: 0 }); 
-const activeRegionIndex = ref(-1); 
 const currentViewport = ref(null);
+let narrativeBoundaryLayerAttached = false;
 
-let frameId = null;
-let boundaryDashStart = 0;
-let boundaryDashTotal = 0;
-const BOUNDARY_DASH_DURATION = 3.6;
 const NARRATIVE_DEFAULT_QUERY = '请按导览顺序介绍当前区域，挑出最值得讲的代表节点。';
 
-function getElapsedClockTime() {
-  if (!clock.value) return 0;
-  return clock.value.getElapsedTime();
-}
 
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -281,6 +313,123 @@ function asObject(value) {
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+
+function pickBoundaryGeometry(...values) {
+  for (const value of values) {
+    const record = asObject(value);
+    if (record?.type === 'Polygon' || record?.type === 'MultiPolygon') {
+      return record;
+    }
+    const featureGeometry = asObject(record?.geometry);
+    if (record?.type === 'Feature' && (featureGeometry?.type === 'Polygon' || featureGeometry?.type === 'MultiPolygon')) {
+      return featureGeometry;
+    }
+    if (Array.isArray(value) && value.length >= 3 && value.every((pt) => Array.isArray(pt) && pt.length >= 2)) {
+      return {
+        type: 'Polygon',
+        coordinates: [value],
+      };
+    }
+  }
+  return null;
+}
+
+function resolveBoundaryGeometry(boundary) {
+  const record = asObject(boundary);
+  const layers = asObject(record?.layers);
+  const transition = asObject(record?.transition || layers?.transition);
+  const outer = asObject(record?.outer || layers?.outer);
+  const core = asObject(record?.core || layers?.core);
+  return pickBoundaryGeometry(
+    record,
+    record?.representative_geojson,
+    transition?.geojson,
+    transition?.boundary,
+    outer?.geojson,
+    outer?.boundary,
+    core?.geojson,
+    core?.boundary,
+    record?.boundary_geojson,
+    record?.boundary,
+    record?.boundary_ring,
+  );
+}
+
+function normalizeBoundaryPoint(point) {
+  if (!Array.isArray(point) || point.length < 2) return null;
+  const lon = Number(point[0]);
+  const lat = Number(point[1]);
+  return Number.isFinite(lon) && Number.isFinite(lat) ? [lon, lat] : null;
+}
+
+function normalizeClosedBoundaryRing(ringCandidate) {
+  const ring = asArray(ringCandidate)
+    .map((point) => normalizeBoundaryPoint(point))
+    .filter(Boolean);
+  if (ring.length < 3) return [];
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  if (!last || first[0] !== last[0] || first[1] !== last[1]) {
+    ring.push([first[0], first[1]]);
+  }
+  return ring.length >= 4 ? ring : [];
+}
+
+function toOlRingCoordinates(ringCandidate) {
+  // 后端返回的 boundary 坐标均为 WGS84（aois/landuse OSM 源），
+  // 必须先 wgs84→gcj02 再 fromLonLat，否则与高德 GCJ02 底图错位 ~500m。
+  return normalizeClosedBoundaryRing(ringCandidate)
+    .map(([lon, lat]) => wgs84ToGcj02(lon, lat))
+    .map(([lon, lat]) => fromLonLat([lon, lat]));
+}
+
+function toOlBoundaryGeometry(boundary) {
+  const geometry = resolveBoundaryGeometry(boundary);
+  if (!geometry || typeof geometry !== 'object') return null;
+  const coords = geometry.coordinates;
+  if (!Array.isArray(coords) || coords.length === 0) return null;
+  if (geometry.type === 'Polygon') {
+    const polygonCoords = coords
+      .map((ring) => toOlRingCoordinates(ring))
+      .filter((ring) => Array.isArray(ring) && ring.length >= 4);
+    return polygonCoords.length ? new Polygon(polygonCoords) : null;
+  }
+  if (geometry.type === 'MultiPolygon') {
+    const multiPolygonCoords = coords
+      .map((polygon) => asArray(polygon)
+        .map((ring) => toOlRingCoordinates(ring))
+        .filter((ring) => Array.isArray(ring) && ring.length >= 4))
+      .filter((polygon) => Array.isArray(polygon) && polygon.length > 0);
+    return multiPolygonCoords.length ? new MultiPolygon(multiPolygonCoords) : null;
+  }
+  return null;
+}
+
+function ensureNarrativeBoundaryLayers() {
+  if (!mapInstance.value || narrativeBoundaryLayerAttached) return;
+  mapInstance.value.addLayer(overviewBoundaryLayer);
+  mapInstance.value.addLayer(narrativeNodeBoundaryLayer);
+  narrativeBoundaryLayerAttached = true;
+}
+
+function syncBoundaryLayer(source, boundary) {
+  source.clear();
+  if (!mapInstance.value) return;
+  ensureNarrativeBoundaryLayers();
+  const geometry = toOlBoundaryGeometry(boundary);
+  if (!geometry) return;
+  source.addFeature(new Feature({ geometry }));
+}
+
+function cleanupNarrativeBoundaryLayers() {
+  overviewBoundarySource.clear();
+  narrativeNodeBoundarySource.clear();
+  if (!mapInstance.value || !narrativeBoundaryLayerAttached) return;
+  mapInstance.value.removeLayer(overviewBoundaryLayer);
+  mapInstance.value.removeLayer(narrativeNodeBoundaryLayer);
+  narrativeBoundaryLayerAttached = false;
 }
 
 function readViewportFromMap(olMap) {
@@ -344,14 +493,15 @@ function applyNarrativeResult(payload) {
   if (steps.length > 0) {
     narrativeSteps.value = steps;
   }
-  if (boundary && typeof boundary === 'object' && !Array.isArray(boundary)) {
+  if (resolveBoundaryGeometry(boundary)) {
     boundaryData.value = boundary;
   }
   if (pois.length > 0) {
     poiFeatures.value = buildPoiFeaturesFromPayload(pois);
   }
-  if (clusters?.hotspots) {
-    spatialClusters.value = asArray(clusters.hotspots);
+  const nextFuzzyRegions = asArray(results.fuzzy_regions || results.fuzzyRegions);
+  if (nextFuzzyRegions.length > 0) {
+    fuzzyRegions.value = nextFuzzyRegions;
   }
 }
 
@@ -360,7 +510,7 @@ function handleNarrativeMeta(type, data) {
     applyNarrativeResult(data);
     return;
   }
-  if (type === 'boundary' && data && typeof data === 'object' && !Array.isArray(data)) {
+  if (type === 'boundary' && resolveBoundaryGeometry(data)) {
     boundaryData.value = data;
     return;
   }
@@ -368,9 +518,8 @@ function handleNarrativeMeta(type, data) {
     poiFeatures.value = buildPoiFeaturesFromPayload(data);
     return;
   }
-  if (type === 'spatial_clusters') {
-    const payload = asObject(data);
-    spatialClusters.value = asArray(payload?.hotspots);
+  if (type === 'fuzzy_regions') {
+    fuzzyRegions.value = asArray(data);
   }
 }
 
@@ -393,292 +542,19 @@ watch(aiResponse, () => {
 });
 
 watch(boundaryData, (nextBoundary) => {
-  if (!scene.value) return;
-  if (!nextBoundary) {
-    if (boundaryMesh.value) {
-      scene.value.remove(boundaryMesh.value);
-      boundaryMesh.value.geometry.dispose();
-      boundaryMesh.value = null;
-    }
-    return;
-  }
-  nextTick(() => updateBoundaryLine());
+  syncBoundaryLayer(overviewBoundarySource, nextBoundary);
 });
 
-const initThree = async () => {
-  await ensureThreeRuntime();
-  if (!canvasRef.value) return;
-  if (!clock.value) {
-    clock.value = new THREE.Clock();
-  }
-
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  const s = new THREE.Scene();
-  const r = new THREE.WebGLRenderer({
-    canvas: canvasRef.value,
-    alpha: true,
-    antialias: true
-  });
-  r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  r.setSize(width, height);
-
-  const c = new THREE.OrthographicCamera(0, width, 0, height, 0.1, 1000);
-  c.position.z = 10;
-
-  scene.value = s;
-  camera.value = c;
-  renderer.value = r;
-
-  
-  const maskGeo = new THREE.PlaneGeometry(width * 2, height * 2);
-  const maskMat = new THREE.ShaderMaterial({
-    uniforms: {
-      uResolution: { value: new THREE.Vector2(width, height) },
-      uFocus: { value: new THREE.Vector2(width / 2, height / 2) },
-      uRadius: { value: 0.35 },
-      uOpacity: { value: 0.6 }
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform vec2 uResolution;
-      uniform vec2 uFocus;
-      uniform float uRadius;
-      uniform float uOpacity;
-      varying vec2 vUv;
-      void main() {
-        vec2 st = gl_FragCoord.xy / uResolution;
-        vec2 focus = uFocus / uResolution;
-        float d = distance(st, focus);
-        float mask = smoothstep(uRadius, uRadius + 0.2, d);
-        gl_FragColor = vec4(0.0, 0.0, 0.0, mask * uOpacity);
-      }
-    `,
-    transparent: true,
-    depthTest: false
-  });
-  const m = new THREE.Mesh(maskGeo, maskMat);
-  m.position.set(width / 2, height / 2, 1);
-  s.add(m);
-  maskMesh.value = m;
-
-  animate();
-};
-
-const handleResize = () => {
-  if (!camera.value || !renderer.value) return;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  camera.value.right = width;
-  camera.value.bottom = height;
-  camera.value.updateProjectionMatrix();
-
-  renderer.value.setSize(width, height);
-  if (maskMesh.value) {
-    maskMesh.value.geometry.dispose();
-    maskMesh.value.geometry = new THREE.PlaneGeometry(width * 2, height * 2);
-    maskMesh.value.position.set(width / 2, height / 2, 1);
-    maskMesh.value.material.uniforms.uResolution.value.set(width, height);
-    maskMesh.value.material.uniforms.uFocus.value.set(width / 2, height / 2);
-  }
-};
-
-const cleanupThree = () => {
-  if (frameId) cancelAnimationFrame(frameId);
-  window.removeEventListener('resize', handleResize);
-  if (renderer.value) renderer.value.dispose();
-  if (scene.value) {
-    scene.value.traverse((child) => {
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.dispose());
-        } else {
-          child.material.dispose();
-        }
-      }
-    });
-  }
-};
-
-
-
-
-const syncThreeWithMap = () => {
-  if (!mapInstance.value || !scene.value || !camera.value) return;
-  
-  
-  if (boundaryData.value && boundaryMesh.value) {
-    const ring = boundaryData.value.coordinates[0];
-    const positions = boundaryMesh.value.geometry.attributes.position;
-    const array = positions.array;
-    let needsUpdate = false;
-    
-    
-    
-    
-    ring.forEach((coord, i) => {
-      
-      
-      const pixel = mapInstance.value.getPixelFromCoordinate(fromLonLat(coord));
-      if (pixel) {
-        
-        array[i * 3] = pixel[0];     
-        array[i * 3 + 1] = window.innerHeight - pixel[1]; 
-        array[i * 3 + 2] = 0;        
-      }
-    });
-    
-    positions.needsUpdate = true;
-    
-    
-    if (boundaryMesh.value) {
-      boundaryMesh.value.computeLineDistances();
-      const lineDistance = boundaryMesh.value.geometry.attributes.lineDistance;
-      if (lineDistance && lineDistance.array && lineDistance.array.length > 0) {
-        const total = lineDistance.array[lineDistance.array.length - 1];
-        if (Number.isFinite(total) && total > 0) {
-          boundaryDashTotal = total;
-          if (boundaryMaterial.value?.uniforms) {
-            boundaryMaterial.value.uniforms.uDashSize.value = total;
-            boundaryMaterial.value.uniforms.uTotalSize.value = total * 2.0;
-            const elapsed = getElapsedClockTime() - boundaryDashStart;
-            const t = (elapsed % BOUNDARY_DASH_DURATION) / BOUNDARY_DASH_DURATION;
-            boundaryMaterial.value.uniforms.uDashOffset.value = total * (1.0 - t);
-          }
-        }
-      }
-    }
-
-    
-    
-    let centerX = 0, centerY = 0;
-    let count = 0;
-    ring.forEach(coord => {
-      const pixel = mapInstance.value.getPixelFromCoordinate(fromLonLat(coord));
-      if(pixel) {
-        centerX += pixel[0];
-        centerY += pixel[1];
-        count++;
-      }
-    });
-    
-    if (count > 0 && maskMesh.value) {
-      maskMesh.value.material.uniforms.uFocus.value.set(
-        centerX / count, 
-        window.innerHeight - (centerY / count) 
-      );
-    }
-  }
-};
-
-const animate = () => {
-  frameId = requestAnimationFrame(animate);
-  
-  if (renderer.value && scene.value && camera.value) {
-    const time = getElapsedClockTime();
-    
-    
-    syncThreeWithMap();
-    
-    
-    syncClusterBoundaries();
-
-    
-    if (maskMesh.value) {
-      maskMesh.value.material.uniforms.uOpacity.value = 0.6 + 0.1 * Math.sin(time * 0.8);
-    }
-    
-    renderer.value.render(scene.value, camera.value);
-  }
-};
-
-
-const updateBoundaryLine = () => {
-  if (!boundaryData.value || !scene.value) return;
-
-  if (boundaryMesh.value) {
-    scene.value.remove(boundaryMesh.value);
-    boundaryMesh.value.geometry.dispose();
-  }
-
-  
-  const ring = boundaryData.value.coordinates[0];
-  const points = ring.map(() => new THREE.Vector3(0, 0, 0)); 
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  
-  
-  if (!boundaryMaterial.value) {
-    boundaryMaterial.value = new THREE.ShaderMaterial({
-      uniforms: {
-        uColor: { value: new THREE.Color('#38bdf8') },
-        uDashOffset: { value: 0 },
-        uDashSize: { value: 1 },
-        uTotalSize: { value: 2 },
-        uOpacity: { value: 0.95 }
-      },
-      vertexShader: `
-        attribute float lineDistance;
-        varying float vLineDistance;
-        void main() {
-          vLineDistance = lineDistance;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 uColor;
-        uniform float uDashOffset;
-        uniform float uDashSize;
-        uniform float uTotalSize;
-        uniform float uOpacity;
-        varying float vLineDistance;
-        void main() {
-          float d = mod(vLineDistance + uDashOffset, uTotalSize);
-          if (d > uDashSize) discard;
-          gl_FragColor = vec4(uColor, uOpacity);
-        }
-      `,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthTest: false
-    });
-  }
-
-  const mesh = new THREE.LineLoop(geometry, boundaryMaterial.value);
-  mesh.computeLineDistances();
-  boundaryDashStart = getElapsedClockTime();
-  const lineDistance = mesh.geometry.attributes.lineDistance;
-  if (lineDistance && lineDistance.array && lineDistance.array.length > 0) {
-    boundaryDashTotal = lineDistance.array[lineDistance.array.length - 1];
-    if (boundaryMaterial.value?.uniforms) {
-      boundaryMaterial.value.uniforms.uDashSize.value = boundaryDashTotal;
-      boundaryMaterial.value.uniforms.uTotalSize.value = boundaryDashTotal * 2.0;
-      boundaryMaterial.value.uniforms.uDashOffset.value = boundaryDashTotal;
-    }
-  }
-  
-  mesh.frustumCulled = false; 
-  boundaryMesh.value = mesh;
-  scene.value.add(mesh);
-  
-  
-  syncThreeWithMap();
-};
 
 
 const onMapReady = async (olMap) => {
   mapInstance.value = olMap;
   currentViewport.value = readViewportFromMap(olMap);
-  await initThree();
-  window.addEventListener('resize', handleResize);
+  ensureNarrativeBoundaryLayers();
+  syncBoundaryLayer(overviewBoundarySource, boundaryData.value);
+  if (currentStepIndex.value >= 0 && narrativeSteps.value[currentStepIndex.value]) {
+    await renderNarrativeNodeBoundary(narrativeSteps.value[currentStepIndex.value]);
+  }
 };
 
 const onMapMove = (viewport) => {
@@ -695,17 +571,21 @@ const handleGenerate = async () => {
     return;
   }
 
+  // 把当前视口写入 localStorage，供 /narrative/probe 诊断页面复用
+  try {
+    localStorage.setItem('narrativeLastViewport', JSON.stringify(viewport));
+  } catch (e) {
+    console.warn('failed to persist narrativeLastViewport', e);
+  }
+
   isGenerating.value = true;
   narrativeSteps.value = [];
   currentStepIndex.value = -1;
   currentVoiceText.value = '';
   boundaryData.value = null;
   poiFeatures.value = [];
-  spatialClusters.value = [];
-  vernacularRegions.value = [];
   fuzzyRegions.value = [];
-  clearClusterBoundaries();
-  clearFuzzyRegions();
+  await renderNarrativeNodeBoundary(null);
   aiResponse.value = '';
 
   await nextTick();
@@ -737,473 +617,31 @@ const handleGenerate = async () => {
   }
 };
 
-const drawFuzzyRegions = async (regions) => {
-  if (!regions || regions.length === 0 || !scene.value) return;
-  
-  console.log(`[Narrative] 绘制模糊区域: ${regions.length} 个区域`);
-  
-  
-  clearFuzzyRegions();
-  
-  
-  for (let i = 0; i < regions.length; i++) {
-    const region = regions[i];
-    if (!region.layers) continue;
-    
-    const regionMeshGroup = {
-      id: region.id,
-      name: region.name,
-      core: null,
-      transition: null,
-      outer: null
-    };
-    
-    
-    if (region.layers.outer?.boundary) {
-      regionMeshGroup.outer = createAuroraBoundary(
-        region.layers.outer.boundary,
-        i,
-        'outer',
-        { r: 0.0, g: 0.8, b: 1.0 }, 
-        0.15 
-      );
-      if (regionMeshGroup.outer) {
-        scene.value.add(regionMeshGroup.outer);
-      }
-    }
-    
-    
-    if (region.layers.transition?.boundary) {
-      regionMeshGroup.transition = createAuroraBoundary(
-        region.layers.transition.boundary,
-        i,
-        'transition',
-        { r: 0.5, g: 0.3, b: 1.0 }, 
-        0.35 
-      );
-      if (regionMeshGroup.transition) {
-        scene.value.add(regionMeshGroup.transition);
-      }
-    }
-    
-    
-    if (region.layers.core?.boundary) {
-      regionMeshGroup.core = createAuroraBoundary(
-        region.layers.core.boundary,
-        i,
-        'core',
-        { r: 0.0, g: 0.95, b: 1.0 }, 
-        0.85 
-      );
-      if (regionMeshGroup.core) {
-        scene.value.add(regionMeshGroup.core);
-      }
-    }
-    
-    fuzzyRegionMeshes.value.push(regionMeshGroup);
-  }
-  
-  
-  startAuroraAnimation();
-};
 
-
-const createAuroraBoundary = (boundary, regionIndex, layerType, color, baseAlpha) => {
-  if (!boundary || boundary.length < 3) return null;
-  
-  
-  const points = boundary.map(() => new THREE.Vector3(0, 0, 0));
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  
-  
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0 },
-      uBaseColor: { value: new THREE.Color(color.r, color.g, color.b) },
-      uColorStart: { value: new THREE.Color(0.0, 0.95, 1.0) }, 
-      uColorEnd: { value: new THREE.Color(0.6, 0.3, 1.0) },    
-      uProgress: { value: 0 },
-      uRegionIndex: { value: regionIndex },
-      uLayerType: { value: layerType === 'core' ? 0 : layerType === 'transition' ? 1 : 2 },
-      uBaseAlpha: { value: baseAlpha },
-      uIsActive: { value: 0 } 
-    },
-    vertexShader: `
-      attribute float vertexProgress;
-      varying vec2 vUv;
-      varying float vProgress;
-      
-      void main() {
-        vUv = uv;
-        vProgress = vertexProgress;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      uniform vec3 uBaseColor;
-      uniform vec3 uColorStart;
-      uniform vec3 uColorEnd;
-      uniform float uProgress;
-      uniform float uRegionIndex;
-      uniform int uLayerType;
-      uniform float uBaseAlpha;
-      uniform float uIsActive;
-      
-      varying vec2 vUv;
-      varying float vProgress;
-      
-      void main() {
-        
-        float speed = uLayerType == 0 ? 3.0 : uLayerType == 1 ? 2.0 : 1.0;
-        float flow = fract(vUv.x * 4.0 - uTime * speed + uRegionIndex * 0.3);
-        
-        
-        
-        vec3 gradientColor = mix(uColorStart, uColorEnd, 0.5 + 0.5 * sin(flow * 3.14 + vUv.x));
-        
-        
-        vec3 finalColor = mix(uBaseColor, gradientColor, 0.6);
-        
-        
-        if (uIsActive > 0.5) {
-          finalColor = mix(finalColor, vec3(1.0, 0.9, 0.3), 0.6); 
-        }
-        
-        
-        float beam = smoothstep(0.0, 0.2, sin(flow * 3.14159)); 
-        finalColor += vec3(1.0) * beam * 0.5;
-
-        
-        float alpha = uBaseAlpha;
-        
-        
-        if (vUv.x > uProgress) {
-          alpha *= 0.1; 
-        } else {
-          
-          float pulse = 0.8 + 0.2 * sin(uTime * 4.0 + vUv.x * 10.0);
-          alpha *= pulse;
-        }
-        
-        gl_FragColor = vec4(finalColor, alpha);
-      }
-    `,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthTest: false,
-    side: THREE.DoubleSide
-  });
-  
-  
-  const count = points.length;
-  const progressArray = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    progressArray[i] = i / (count - 1);
-  }
-  geometry.setAttribute('vertexProgress', new THREE.BufferAttribute(progressArray, 1));
-  
-  const mesh = new THREE.LineLoop(geometry, material);
-  mesh.frustumCulled = false;
-  mesh.userData = { 
-    boundary, 
-    regionIndex, 
-    layerType,
-    isFuzzyRegion: true 
-  };
-  
-  return mesh;
-};
-
-
-let auroraAnimationId = null;
-let drawStartTime = null; 
-const DRAW_DURATION = 2500; 
-
-const startAuroraAnimation = () => {
-  if (auroraAnimationId) cancelAnimationFrame(auroraAnimationId);
-  
-  drawStartTime = performance.now(); 
-  
-  const animate = () => {
-    auroraAnimationId = requestAnimationFrame(animate);
-    
-    const time = getElapsedClockTime();
-    const elapsed = performance.now() - drawStartTime;
-    const drawProgress = Math.min(elapsed / DRAW_DURATION, 1); 
-    
-    
-    fuzzyRegionMeshes.value.forEach((regionGroup, regionIdx) => {
-      
-      const regionDelay = regionIdx * 400; 
-      const localElapsed = Math.max(0, elapsed - regionDelay);
-      const localProgress = Math.min(localElapsed / DRAW_DURATION, 1);
-      
-      ['outer', 'transition', 'core'].forEach((layerType, layerIdx) => {
-        const mesh = regionGroup[layerType];
-        if (mesh && mesh.material.uniforms) {
-          mesh.material.uniforms.uTime.value = time;
-          
-          
-          const layerDelay = layerIdx * 200; 
-          const layerLocalElapsed = Math.max(0, localElapsed - layerDelay);
-          const layerProgress = Math.min(layerLocalElapsed / (DRAW_DURATION * 0.8), 1);
-          
-          mesh.material.uniforms.uProgress.value = layerProgress;
-        }
-      });
-    });
-  };
-  
-  animate();
-};
-
-
-
-const clearFuzzyRegions = () => {
-  fuzzyRegionMeshes.value.forEach(regionGroup => {
-    ['outer', 'transition', 'core'].forEach(layerType => {
-      const mesh = regionGroup[layerType];
-      if (mesh && scene.value) {
-        scene.value.remove(mesh);
-        mesh.geometry.dispose();
-        mesh.material.dispose();
-      }
-    });
-  });
-  fuzzyRegionMeshes.value = [];
-  
-  if (auroraAnimationId) {
-    cancelAnimationFrame(auroraAnimationId);
-    auroraAnimationId = null;
-  }
-};
-
-
-const highlightFuzzyRegion = (regionIndex) => {
-  activeRegionIndex.value = regionIndex;
-  
-  fuzzyRegionMeshes.value.forEach((regionGroup, idx) => {
-    const isActive = idx === regionIndex;
-    
-    ['outer', 'transition', 'core'].forEach(layerType => {
-      const mesh = regionGroup[layerType];
-      if (mesh && mesh.material.uniforms) {
-        mesh.material.uniforms.uIsActive.value = isActive ? 1 : 0;
-      }
-    });
-  });
-};
-
-
-const drawClusterBoundaries = async (clusters) => {
-  if (!clusters || clusters.length === 0 || !scene.value) return;
-  
-  isDrawingCluster.value = true;
-  clusterBoundaries.value = [];
-  
-  
-  clusterBoundaries.value.forEach(mesh => {
-    if (mesh && scene.value) {
-      scene.value.remove(mesh);
-      mesh.geometry.dispose();
-    }
-  });
-  
-  
-  for (let i = 0; i < clusters.length; i++) {
-    const cluster = clusters[i];
-    if (!cluster.boundary || cluster.boundary.length < 3) continue;
-    
-    const boundaryMesh = await createFlowingBoundary(cluster.boundary, i);
-    if (boundaryMesh) {
-      clusterBoundaries.value.push(boundaryMesh);
-      scene.value.add(boundaryMesh);
-    }
-  }
-  
-  isDrawingCluster.value = false;
-};
-
-
-const createFlowingBoundary = (boundary, index) => {
-  if (!boundary || boundary.length < 3) return null;
-  
-  
-  const points = boundary.map(() => new THREE.Vector3(0, 0, 0));
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  
-  
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0 },
-      uColorStart: { value: new THREE.Color('#00f2ff') }, 
-      uColorEnd: { value: new THREE.Color('#a855f7') },   
-      uProgress: { value: 0 }, 
-      uIndex: { value: index } 
-    },
-    vertexShader: `
-      attribute float progress;
-      varying vec2 vUv;
-      varying float vProgress;
-      
-      void main() {
-        vUv = uv;
-        vProgress = progress;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      uniform vec3 uColorStart;
-      uniform vec3 uColorEnd;
-      uniform float uProgress;
-      uniform float uIndex;
-      
-      varying vec2 vUv;
-      varying float vProgress;
-      
-      void main() {
-        
-        float flow = fract(vUv.x * 3.0 - uTime * 2.0 + uIndex * 0.5);
-        
-        
-        vec3 color = mix(uColorStart, uColorEnd, flow);
-        
-        
-        float alpha = 0.0;
-        if (vUv.x <= uProgress) {
-          
-          alpha = 0.8 + 0.2 * sin(flow * 3.14159 * 2.0);
-        } else if (vUv.x <= uProgress + 0.05) {
-          
-          alpha = 0.8 * (1.0 - (vUv.x - uProgress) / 0.05);
-        }
-        
-        
-        float glow = 0.5 + 0.5 * sin(uTime * 3.0 + vUv.x * 10.0);
-        color = mix(color, vec3(1.0), glow * 0.2);
-        
-        gl_FragColor = vec4(color, alpha);
-      }
-    `,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthTest: false,
-    side: THREE.DoubleSide
-  });
-  
-  
-  const count = points.length;
-  const progressArray = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    progressArray[i] = i / (count - 1);
-  }
-  geometry.setAttribute('progress', new THREE.BufferAttribute(progressArray, 1));
-  
-  const mesh = new THREE.LineLoop(geometry, material);
-  mesh.frustumCulled = false;
-  mesh.userData = { boundary, isClusterBoundary: true };
-  
-  return mesh;
-};
-
-
-const syncClusterBoundaries = () => {
-  if (!mapInstance.value || !scene.value) return;
-  
-  clusterBoundaries.value.forEach(mesh => {
-    if (!mesh || !mesh.userData.boundary) return;
-    
-    const boundary = mesh.userData.boundary;
-    const positions = mesh.geometry.attributes.position;
-    const array = positions.array;
-    
-    boundary.forEach((coord, i) => {
-      const pixel = mapInstance.value.getPixelFromCoordinate(fromLonLat(coord));
-      if (pixel) {
-        array[i * 3] = pixel[0];
-        array[i * 3 + 1] = window.innerHeight - pixel[1];
-        array[i * 3 + 2] = 0;
-      }
-    });
-    
-    positions.needsUpdate = true;
-    
-    
-    if (mesh.material.uniforms) {
-      mesh.material.uniforms.uTime.value = getElapsedClockTime();
-    }
-  });
-};
-
-
-const playClusterAnimation = async (clusters) => {
-  if (!clusters || clusters.length === 0) return;
-  
-  
-  await drawClusterBoundaries(clusters);
-  
-  
-  const duration = 2000; 
-  const startTime = Date.now();
-  
-  return new Promise((resolve) => {
-    const animate = () => {
-      const elapsed = Date.now() - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      
-      
-      clusterBoundaries.value.forEach((mesh, index) => {
-        if (mesh && mesh.material.uniforms) {
-          
-          const delay = index * 300;
-          const localProgress = Math.max(0, Math.min((elapsed - delay) / duration, 1));
-          mesh.material.uniforms.uProgress.value = localProgress;
-        }
-      });
-      
-      if (progress < 1 || clusterBoundaries.value.some(m => m.material.uniforms.uProgress.value < 1)) {
-        requestAnimationFrame(animate);
-      } else {
-        resolve();
-      }
-    };
-    animate();
-  });
-};
-
-
-const clearClusterBoundaries = () => {
-  clusterBoundaries.value.forEach(mesh => {
-    if (mesh && scene.value) {
-      scene.value.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
-    }
-  });
-  clusterBoundaries.value = [];
+/**
+ * 渲染当前节点的模糊边界。空心单线描边，覆盖式更新（不累积）。
+ * 支持 MultiPolygon 多环渲染（如武汉大学有多个分离校区）。
+ */
+const renderNarrativeNodeBoundary = async (boundary) => {
+  syncBoundaryLayer(narrativeNodeBoundarySource, boundary);
 };
 
 const playNarrative = async () => {
   if (narrativeSteps.value.length === 0 || isPlaying.value) return;
   
   isPlaying.value = true;
-  
-  
-  if (fuzzyRegionMeshes.value.length > 0) {
-    startAuroraAnimation(); 
-  }
+  // 播放节点导览时，隐藏 viewport 外框，避免和节点边界视觉冲突
+  boundaryData.value = null;
   
   for (let i = 0; i < narrativeSteps.value.length; i++) {
     currentStepIndex.value = i;
     const step = narrativeSteps.value[i];
     currentVoiceText.value = step.voice_text;
+
+    // 渲染该节点的模糊边界（overview 步骤会 boundary=null，自动清空上一个节点的光带）
+    await renderNarrativeNodeBoundary(step);
     
     
-    if (step.region_index !== undefined && step.region_index >= 0) {
-      highlightFuzzyRegion(step.region_index);
-    }
     
     if (step.focus !== 'overview') {
       let targetCoords = null;
@@ -1223,8 +661,6 @@ const playNarrative = async () => {
         
         if (targetRegion && targetRegion.center) {
           targetCoords = [targetRegion.center.lon, targetRegion.center.lat];
-          const idx = fuzzyRegions.value.indexOf(targetRegion);
-          if (idx >= 0) highlightFuzzyRegion(idx);
         }
       }
       
@@ -1249,7 +685,6 @@ const playNarrative = async () => {
         mapInstance.value.getView().animate({ zoom: 14, duration: 1500 });
       }
       
-      highlightFuzzyRegion(-1);
     }
 
     await new Promise(resolve => setTimeout(resolve, step.duration || 5000));
@@ -1258,16 +693,15 @@ const playNarrative = async () => {
   isPlaying.value = false;
   currentStepIndex.value = -1;
   currentVoiceText.value = '';
-  highlightFuzzyRegion(-1); 
+  // 清理残留节点光带
+  await renderNarrativeNodeBoundary(null);
 };
 
 
 const goBack = () => router.push('/');
 
 onBeforeUnmount(() => {
-  cleanupThree();
-  clearClusterBoundaries();
-  clearFuzzyRegions();
+  cleanupNarrativeBoundaryLayers();
 });
 
 </script>
@@ -1346,15 +780,6 @@ onBeforeUnmount(() => {
     filter: brightness(0.6) grayscale(0.2) contrast(1.1);
 }
 
-.effect-canvas {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 5;
-    pointer-events: none;
-}
 
 
 .narrative-ui {
@@ -1369,7 +794,7 @@ onBeforeUnmount(() => {
 
 .progress-ring-container {
     position: fixed;
-    bottom: 32px;
+    top: 32px;
     left: 40px;
     width: 56px;
     height: 56px;
@@ -1518,8 +943,26 @@ onBeforeUnmount(() => {
 .modern-step-item.finished .step-dot { background: #7b2cbf; }
 
 .step-label { font-size: 9px; color: rgba(255, 255, 255, 0.5); font-weight: 700; letter-spacing: 1px; margin-bottom: 2px; }
-.step-title { font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500; transition: all 0.3s ease; }
+.step-title { font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500; transition: all 0.3s ease; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .modern-step-item.active .step-title { color: #fff; font-weight: 600; }
+
+.step-tagline {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(255,255,255,0.42);
+}
+
+.fact-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(0,212,255,0.12);
+    color: rgba(0,212,255,0.85);
+    border: 1px solid rgba(0,212,255,0.25);
+    letter-spacing: 0.3px;
+}
 
 
 .panel-footer {
@@ -1565,63 +1008,120 @@ onBeforeUnmount(() => {
 .btn-play-narrative.playing { background: rgba(255,255,255,0.1); box-shadow: none; color: rgba(255, 255, 255, 0.5); cursor: not-allowed; }
 
 
-.subtitle-card {
+/* ===== 右侧竖排旁白面板 ===== */
+.narrator-panel {
     position: fixed;
-    bottom: 40px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 800px;
-    max-width: 90vw;
-    background: rgba(10, 10, 18, 0.6);
-    backdrop-filter: blur(40px) saturate(150%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 24px;
-    padding: 24px 32px;
-    text-align: center;
+    right: 32px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 300px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: row;
     z-index: 100;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255,255,255,0.1);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255,255,255,0.1);
+}
+
+/* 左侧青色渐变光带 */
+.narrator-accent-line {
+    width: 3px;
+    min-height: 100%;
+    background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(0, 212, 255, 0.15) 15%,
+        #00d4ff 50%,
+        rgba(0, 212, 255, 0.15) 85%,
+        transparent 100%
+    );
+    flex-shrink: 0;
+    box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
+}
+
+.narrator-inner {
+    flex: 1;
+    background: rgba(10, 10, 18, 0.72);
+    backdrop-filter: blur(40px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-left: none;
+    border-radius: 0 20px 20px 0;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
 }
 
-.card-glow {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60%;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, #00d4ff, transparent);
-    opacity: 0.6;
+.narrator-header {
+    padding: 20px 20px 0;
 }
 
-.district-prefix {
-    font-size: 10px;
+.narrator-eyebrow {
+    font-size: 9px;
     font-weight: 700;
     color: #00d4ff;
     text-transform: uppercase;
-    letter-spacing: 4px;
-    margin-bottom: 8px;
-    display: block;
-    opacity: 0.7;
+    letter-spacing: 3px;
+    opacity: 0.65;
 }
 
-.district-name-text {
-    font-size: 18px;
+.narrator-focus {
+    font-size: 20px;
     font-weight: 700;
-    margin: 0 0 12px;
-    letter-spacing: 3px;
-    background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.6) 100%);
+    margin: 6px 0 0;
+    letter-spacing: 1.5px;
+    background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.55) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+    line-height: 1.3;
 }
 
-.narrative-text {
+.narrator-body {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+.narrator-body::-webkit-scrollbar { display: none; }
+
+.narrator-text {
     font-size: 13px;
-    line-height: 1.7;
-    color: rgba(255,255,255,0.85);
+    line-height: 1.85;
+    color: rgba(255,255,255,0.82);
     font-weight: 400;
-    letter-spacing: 0.3px;
-    min-height: 40px;
+    letter-spacing: 0.2px;
+    margin: 0;
+    min-height: 48px;
+}
+
+.narrator-tagline {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+.narrator-tagline span {
+    font-size: 11px;
+    line-height: 1.55;
+    color: rgba(255,255,255,0.45);
+}
+
+.narrator-fact {
+    margin-top: 8px;
+}
+
+.narrator-footer {
+    padding: 12px 20px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+.narrator-step-badge {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.5px;
 }
 
 .typing-cursor {
@@ -1638,22 +1138,22 @@ onBeforeUnmount(() => {
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
 
-.card-controls { margin-top: 24px; display: flex; justify-content: center; }
-.voice-visualizer { display: flex; align-items: flex-end; gap: 4px; height: 30px; }
+.voice-visualizer { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
 .audio-bar {
-    width: 3px;
-    height: 8px;
+    width: 2.5px;
+    height: 6px;
     background: #00d4ff;
     border-radius: 2px;
     animation: bar-dance 0.6s ease-in-out infinite alternate;
+    opacity: 0.7;
 }
 
-@keyframes bar-dance { from { height: 6px; opacity: 0.4; } to { height: 24px; opacity: 1; } }
+@keyframes bar-dance { from { height: 4px; opacity: 0.3; } to { height: 18px; opacity: 1; } }
 
 
 .action-buttons {
     position: absolute;
-    right: 32px;
+    left: 32px;
     bottom: 32px;
     display: flex;
     flex-direction: column;
@@ -1703,8 +1203,11 @@ onBeforeUnmount(() => {
 }
 
 
-.up-enter-active, .up-leave-active { transition: all 0.8s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.up-enter-from, .up-leave-to { opacity: 0; transform: translate(-50%, 100px); }
+/* 旁白面板右侧滑入动画 */
+.narrator-slide-enter-active { transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+.narrator-slide-leave-active { transition: all 0.4s ease-in; }
+.narrator-slide-enter-from { opacity: 0; transform: translateY(-50%) translateX(80px); }
+.narrator-slide-leave-to { opacity: 0; transform: translateY(-50%) translateX(40px); }
 
 .fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.6s ease; }
 .fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateX(-50px); filter: blur(10px); }

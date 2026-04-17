@@ -280,5 +280,7 @@ export function buildRegionSnapshotFromEvidence(input: {
     aoiContext: input.view.aoiContext || [],
     landuseContext: input.view.landuseContext || [],
     competitionDensity: readCompetitionDensity(input.competitionDensity || []),
+    anchorLon: Number.isFinite(Number(input.view.anchor.lon)) ? Number(input.view.anchor.lon) : null,
+    anchorLat: Number.isFinite(Number(input.view.anchor.lat)) ? Number(input.view.anchor.lat) : null,
   }
 }

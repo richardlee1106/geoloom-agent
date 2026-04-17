@@ -6,10 +6,16 @@ import type {
 
 export type RepresentativeAnchorType =
   | 'campus'
+  | 'medical'
   | 'scenic'
   | 'commercial'
   | 'station'
   | 'other'
+
+const MEDICAL_PATTERNS = [
+  /医学院|附属医院|附属.*医院|临床学院|医院|中心医院|人民医院|协和|同济|省医|市医|军区总医院/u,
+  /hospital|medical|clinic|healthcare/i,
+]
 
 const CAMPUS_PATTERNS = [
   /大学|学院|学校|校园|校区/u,
@@ -78,6 +84,7 @@ export function classifyRepresentativeAnchorType(input: {
     .join(' ')
 
   if (matchesAny(structured, STATION_PATTERNS)) return 'station'
+  if (matchesAny(structured, MEDICAL_PATTERNS)) return 'medical'
   if (matchesAny(structured, CAMPUS_PATTERNS)) return 'campus'
   if (matchesAny(structured, SCENIC_PATTERNS)) return 'scenic'
   if (matchesAny(structured, COMMERCIAL_PATTERNS)) return 'commercial'
@@ -93,6 +100,7 @@ export function classifyRepresentativeAnchorType(input: {
     .filter(Boolean)
     .join(' ')
 
+  if (matchesAny(combined, MEDICAL_PATTERNS)) return 'medical'
   if (matchesAny(combined, CAMPUS_PATTERNS)) return 'campus'
   if (matchesAny(combined, SCENIC_PATTERNS)) return 'scenic'
   if (matchesAny(combined, COMMERCIAL_PATTERNS)) return 'commercial'

@@ -6,6 +6,8 @@
   "scripts": {
     "clean:ports:dev": "node scripts/cleanup-ports.mjs 3000 3411 8100 3210",
     "clean:ports:start": "node scripts/cleanup-ports.mjs 4173 3411 8100 3210",
+    "pop:dry-run": "python scripts/import-pop-raster.py --dry-run",
+    "pop:import": "python scripts/import-pop-raster.py --truncate",
     "predev:v4": "npm run clean:ports:dev",
     "dev:v4": "concurrently -n front,deps,encoder,v4 -c cyan,magenta,yellow,green \"npm run dev:frontend:v4\" \"npm run dev:deps\" \"npm run dev:encoder-service\" \"npm run dev:backend\"",
     "dev:stack": "npm run dev:v4",

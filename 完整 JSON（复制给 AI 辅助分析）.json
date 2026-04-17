@@ -1,0 +1,2603 @@
+{
+  "version": "0.1.0",
+  "viewport": {
+    "swLon": 114.23858304162071,
+    "swLat": 30.574645347804562,
+    "neLon": 114.31284232485305,
+    "neLat": 30.60426732001116
+  },
+  "center": {
+    "lon": 114.27571268323689,
+    "lat": 30.58945633390786
+  },
+  "diagonalM": 7834.210746514219,
+  "raw": {
+    "categoryHistogram": [
+      {
+        "category_main": "购物服务",
+        "poi_count": "22669"
+      },
+      {
+        "category_main": "生活服务",
+        "poi_count": "9082"
+      },
+      {
+        "category_main": "餐饮美食",
+        "poi_count": "6224"
+      },
+      {
+        "category_main": "地名地址信息",
+        "poi_count": "4150"
+      },
+      {
+        "category_main": "公司企业",
+        "poi_count": "3698"
+      },
+      {
+        "category_main": "科教文化服务",
+        "poi_count": "3530"
+      },
+      {
+        "category_main": "交通设施服务",
+        "poi_count": "3035"
+      },
+      {
+        "category_main": "通行设施",
+        "poi_count": "2812"
+      }
+    ],
+    "representativeSamples": [
+      {
+        "id": 140979,
+        "name": "华中科技大学同济医学院407",
+        "category_main": "地名地址信息",
+        "category_sub": "门牌信息",
+        "longitude": 114.2570780001497,
+        "latitude": 30.581706000031943,
+        "distance_m": 1983.1407734,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 253265,
+        "name": "街电(艺齐舞艺术学校)",
+        "category_main": "生活服务",
+        "category_sub": "共享设备",
+        "longitude": 114.27415199971506,
+        "latitude": 30.581877999869846,
+        "distance_m": 853.38299526,
+        "anchor_priority": 0,
+        "tile_x": 1,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 372399,
+        "name": "鲜果蔬批发大卖场(武汉大学城医院店)",
+        "category_main": "购物服务",
+        "category_sub": "综合市场",
+        "longitude": 114.28065500012826,
+        "latitude": 30.58150599980212,
+        "distance_m": 1000.78392007,
+        "anchor_priority": 0,
+        "tile_x": 2,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 100668,
+        "name": "华中科技大学同济医学院附属武汉中心医院",
+        "category_main": "医疗保健服务",
+        "category_sub": "综合医院",
+        "longitude": 114.29485200011982,
+        "latitude": 30.581827000215924,
+        "distance_m": 2021.22179083,
+        "anchor_priority": 0,
+        "tile_x": 3,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 150230,
+        "name": "地质大学学生公寓男生1栋",
+        "category_main": "地名地址信息",
+        "category_sub": "门牌信息",
+        "longitude": 114.25622799962252,
+        "latitude": 30.587002999688764,
+        "distance_m": 1888.50598281,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 1,
+        "brand_bucket": null
+      },
+      {
+        "id": 323716,
+        "name": "状元教育(新华路校区)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27566900042405,
+        "latitude": 30.588594000212993,
+        "distance_m": 95.69172323,
+        "anchor_priority": 0,
+        "tile_x": 1,
+        "tile_y": 1,
+        "brand_bucket": null
+      },
+      {
+        "id": 445109,
+        "name": "武汉大学工操饮料店",
+        "category_main": "购物服务",
+        "category_sub": "便民商店/便利店",
+        "longitude": 114.27649499984443,
+        "latitude": 30.588744999981827,
+        "distance_m": 108.85248485,
+        "anchor_priority": 0,
+        "tile_x": 2,
+        "tile_y": 1,
+        "brand_bucket": null
+      },
+      {
+        "id": 319290,
+        "name": "睿之升教育(大智路校区)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.29445699989071,
+        "latitude": 30.587318999872025,
+        "distance_m": 1813.35313611,
+        "anchor_priority": 0,
+        "tile_x": 3,
+        "tile_y": 1,
+        "brand_bucket": null
+      },
+      {
+        "id": 332916,
+        "name": "长商学院",
+        "category_main": "科教文化服务",
+        "category_sub": "科教文化场所",
+        "longitude": 114.25090599971213,
+        "latitude": 30.5927159996437,
+        "distance_m": 2406.48083323,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 2,
+        "brand_bucket": null
+      },
+      {
+        "id": 339401,
+        "name": "湖北美术学院藏龙岛校区A13教学楼",
+        "category_main": "科教文化服务",
+        "category_sub": "学校",
+        "longitude": 114.27502600044966,
+        "latitude": 30.590241999768523,
+        "distance_m": 109.19774907,
+        "anchor_priority": 0,
+        "tile_x": 1,
+        "tile_y": 2,
+        "brand_bucket": null
+      },
+      {
+        "id": 24581,
+        "name": "武汉市第一商业学校停车场(出入口)",
+        "category_main": "交通设施服务",
+        "category_sub": "停车场",
+        "longitude": 114.27649799998278,
+        "latitude": 30.590368000183105,
+        "distance_m": 126.04884258,
+        "anchor_priority": 0,
+        "tile_x": 2,
+        "tile_y": 2,
+        "brand_bucket": null
+      },
+      {
+        "id": 342207,
+        "name": "海德家教(利济北路校区)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.29481700030442,
+        "latitude": 30.59066899967462,
+        "distance_m": 1837.22774418,
+        "anchor_priority": 0,
+        "tile_x": 3,
+        "tile_y": 2,
+        "brand_bucket": null
+      },
+      {
+        "id": 553407,
+        "name": "湖北商贸学院学生公寓第11栋(东门)",
+        "category_main": "通行设施",
+        "category_sub": "临街院门",
+        "longitude": 114.2544349996756,
+        "latitude": 30.59962099970943,
+        "distance_m": 2331.12390924,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 3,
+        "brand_bucket": null
+      },
+      {
+        "id": 331552,
+        "name": "武汉鑫悦职业培训学校",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27375800043149,
+        "latitude": 30.597573999740348,
+        "distance_m": 919.26350245,
+        "anchor_priority": 0,
+        "tile_x": 1,
+        "tile_y": 3,
+        "brand_bucket": null
+      },
+      {
+        "id": 538125,
+        "name": "华中农业大学主楼(南门)",
+        "category_main": "通行设施",
+        "category_sub": "建筑物门",
+        "longitude": 114.27659299986715,
+        "latitude": 30.597337999649028,
+        "distance_m": 877.8511085,
+        "anchor_priority": 0,
+        "tile_x": 2,
+        "tile_y": 3,
+        "brand_bucket": null
+      },
+      {
+        "id": 333239,
+        "name": "武汉十六中球场校区",
+        "category_main": "科教文化服务",
+        "category_sub": "科教文化场所",
+        "longitude": 114.2943280002371,
+        "latitude": 30.598458000036715,
+        "distance_m": 2045.31308766,
+        "anchor_priority": 0,
+        "tile_x": 3,
+        "tile_y": 3,
+        "brand_bucket": null
+      },
+      {
+        "id": 253821,
+        "name": "华中科技大学同济医学院小蜜蜂智慧服务中心",
+        "category_main": "生活服务",
+        "category_sub": "生活服务场所",
+        "longitude": 114.25712699971132,
+        "latitude": 30.581240000125945,
+        "distance_m": 2001.88188088,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 337164,
+        "name": "湖北省网球学校",
+        "category_main": "科教文化服务",
+        "category_sub": "学校",
+        "longitude": 114.25594500006173,
+        "latitude": 30.581032000426546,
+        "distance_m": 2113.55970737,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 346690,
+        "name": "北九车行(江汉大学北区店)",
+        "category_main": "购物服务",
+        "category_sub": "综合市场",
+        "longitude": 114.25523499969552,
+        "latitude": 30.581613000239827,
+        "distance_m": 2147.981094,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 0,
+        "brand_bucket": null
+      },
+      {
+        "id": 531975,
+        "name": "华中科技大学同济医学院(2号门)",
+        "category_main": "通行设施",
+        "category_sub": "临街院门",
+        "longitude": 114.25524900034111,
+        "latitude": 30.581305999572294,
+        "distance_m": 2160.76573522,
+        "anchor_priority": 0,
+        "tile_x": 0,
+        "tile_y": 0,
+        "brand_bucket": null
+      }
+    ],
+    "brandPool": [
+      {
+        "id": 445109,
+        "name": "武汉大学工操饮料店",
+        "category_main": "购物服务",
+        "category_sub": "便民商店/便利店",
+        "longitude": 114.27649499984443,
+        "latitude": 30.588744999981827,
+        "distance_m": 108.85248485,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 339401,
+        "name": "湖北美术学院藏龙岛校区A13教学楼",
+        "category_main": "科教文化服务",
+        "category_sub": "学校",
+        "longitude": 114.27502600044966,
+        "latitude": 30.590241999768523,
+        "distance_m": 109.19774907,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 531694,
+        "name": "武汉市软件工程学院(东南门)",
+        "category_main": "通行设施",
+        "category_sub": "临街院门",
+        "longitude": 114.27453800042849,
+        "latitude": 30.5890119997041,
+        "distance_m": 122.96293195,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 480470,
+        "name": "冰棒批发(晴川学院店)",
+        "category_main": "购物服务",
+        "category_sub": "购物相关场所",
+        "longitude": 114.27574999966282,
+        "latitude": 30.59073700011254,
+        "distance_m": 142.0233334,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 541893,
+        "name": "华中师范大学(东门)",
+        "category_main": "通行设施",
+        "category_sub": "临街院门",
+        "longitude": 114.27547300037872,
+        "latitude": 30.59101999967328,
+        "distance_m": 174.86977335,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 316735,
+        "name": "武汉市江汉区老年大学",
+        "category_main": "科教文化服务",
+        "category_sub": "学校",
+        "longitude": 114.27550900024028,
+        "latitude": 30.59134999960287,
+        "distance_m": 210.84377337,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 336150,
+        "name": "科技兔科学院(永旺梦乐城金桥店)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27398600015385,
+        "latitude": 30.587889000077325,
+        "distance_m": 240.03777444,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 335683,
+        "name": "武汉市江汉区老年大学汉兴街分校",
+        "category_main": "科教文化服务",
+        "category_sub": "学校",
+        "longitude": 114.27843100009068,
+        "latitude": 30.58883699972779,
+        "distance_m": 269.60690864,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 343379,
+        "name": "华中农业大学学生通讯社",
+        "category_main": "科教文化服务",
+        "category_sub": "传媒机构",
+        "longitude": 114.27889199976607,
+        "latitude": 30.589444999886894,
+        "distance_m": 304.93422053,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 331986,
+        "name": "湖北经济技术培训学院(汉口校区)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27909900031864,
+        "latitude": 30.58960700016297,
+        "distance_m": 325.21423681,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 324013,
+        "name": "天英网络营销培训学院(汉口校区)",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27275099985877,
+        "latitude": 30.591188000226055,
+        "distance_m": 342.84475663,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 334468,
+        "name": "铂凌瑜伽学院",
+        "category_main": "科教文化服务",
+        "category_sub": "培训机构",
+        "longitude": 114.27281400006609,
+        "latitude": 30.591360000064014,
+        "distance_m": 349.04318601,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "campus"
+      },
+      {
+        "id": 28243,
+        "name": "中山公园东门停车场",
+        "category_main": "交通设施服务",
+        "category_sub": "停车场",
+        "longitude": 114.27407699985372,
+        "latitude": 30.589453000255787,
+        "distance_m": 156.88009256,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 2889,
+        "name": "中山公园东门停车场",
+        "category_main": "交通设施服务",
+        "category_sub": "停车场",
+        "longitude": 114.27407699985372,
+        "latitude": 30.589453000255787,
+        "distance_m": 156.88009256,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 26318,
+        "name": "中山公园地下停车场(建设中)",
+        "category_main": "交通设施服务",
+        "category_sub": "停车场",
+        "longitude": 114.27356100034001,
+        "latitude": 30.589772999724232,
+        "distance_m": 209.33414929,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 315340,
+        "name": "户外职工爱心驿站(江汉区园林局小南湖公园)",
+        "category_main": "生活服务",
+        "category_sub": "生活服务场所",
+        "longitude": 114.27565899996296,
+        "latitude": 30.591366000340713,
+        "distance_m": 211.77332826,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 551576,
+        "name": "驭马体育公园(1号门)",
+        "category_main": "通行设施",
+        "category_sub": "临街院门",
+        "longitude": 114.2753019996876,
+        "latitude": 30.591333999764345,
+        "distance_m": 211.85681126,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 60702,
+        "name": "小南湖公园-公共厕所",
+        "category_main": "公共设施",
+        "category_sub": "公共厕所",
+        "longitude": 114.27629300042167,
+        "latitude": 30.592179000060867,
+        "distance_m": 306.93057689,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 133052,
+        "name": "龙湖冠寓(武汉中山公园店)",
+        "category_main": "商务住宅",
+        "category_sub": "住宅区",
+        "longitude": 114.27340400029448,
+        "latitude": 30.59138799955656,
+        "distance_m": 308.04108685,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      },
+      {
+        "id": 122162,
+        "name": "龙湖冠寓(武汉中山公园店)",
+        "category_main": "商务住宅",
+        "category_sub": "住宅区",
+        "longitude": 114.27325399967242,
+        "latitude": 30.591483000340247,
+        "distance_m": 325.71323789,
+        "anchor_priority": null,
+        "tile_x": null,
+        "tile_y": null,
+        "brand_bucket": "scenic"
+      }
+    ],
+    "aoiContext": [
+      {
+        "id": 1110,
+        "name": "海军工程大学",
+        "fclass": "military",
+        "code": "7213",
+        "population": 0,
+        "area_sqm": 1251486.608205611,
+        "longitude": 114.23774184201172,
+        "latitude": 30.583316727859987,
+        "anchor_priority": 0
+      },
+      {
+        "id": 6261,
+        "name": "江汉大学（汉口校区）",
+        "fclass": "university",
+        "code": "2081",
+        "population": 0,
+        "area_sqm": 49685.015236194915,
+        "longitude": 114.28470020472719,
+        "latitude": 30.60408104570357,
+        "anchor_priority": 0
+      },
+      {
+        "id": 6294,
+        "name": "None",
+        "fclass": "park",
+        "code": "2204",
+        "population": 0,
+        "area_sqm": 19332.8911107599,
+        "longitude": 114.24766754061207,
+        "latitude": 30.579491911316467,
+        "anchor_priority": 1
+      },
+      {
+        "id": 3869,
+        "name": "消防科普主题公园",
+        "fclass": "park",
+        "code": "7202",
+        "population": 0,
+        "area_sqm": 7519.211022403977,
+        "longitude": 114.27476795047157,
+        "latitude": 30.574334090962957,
+        "anchor_priority": 1
+      },
+      {
+        "id": 1470,
+        "name": "None",
+        "fclass": "park",
+        "code": "7202",
+        "population": 0,
+        "area_sqm": 2182.963333882958,
+        "longitude": 114.29105714933009,
+        "latitude": 30.578964798391752,
+        "anchor_priority": 1
+      },
+      {
+        "id": 7650,
+        "name": "武昌生态文化长廊-武九铁路旧址",
+        "fclass": "park",
+        "code": "2204",
+        "population": 0,
+        "area_sqm": 30386.77558415153,
+        "longitude": 114.3129269647145,
+        "latitude": 30.572644657653424,
+        "anchor_priority": 1
+      }
+    ],
+    "landuseContext": [
+      {
+        "land_type": "河流湖泊",
+        "parcel_count": "15",
+        "total_area_sqm": 17252556.32179463
+      },
+      {
+        "land_type": "居住用地",
+        "parcel_count": "316",
+        "total_area_sqm": 12919018.122410402
+      },
+      {
+        "land_type": "公园与绿地用地",
+        "parcel_count": "43",
+        "total_area_sqm": 2714752.2368190777
+      },
+      {
+        "land_type": "商务办公用地",
+        "parcel_count": "66",
+        "total_area_sqm": 2396239.1187493317
+      },
+      {
+        "land_type": "体育与文化用地",
+        "parcel_count": "13",
+        "total_area_sqm": 2103322.1381088435
+      },
+      {
+        "land_type": "商业服务用地",
+        "parcel_count": "39",
+        "total_area_sqm": 1710291.2587108472
+      }
+    ],
+    "hotspots": [
+      {
+        "grid_wkt": "POLYGON((114.285036537 30.5799727394,114.285036537 30.594824596,114.2998883936 30.594824596,114.2998883936 30.5799727394,114.285036537 30.5799727394))",
+        "poi_count": "15211"
+      },
+      {
+        "grid_wkt": "POLYGON((114.27018468039999 30.5799727394,114.27018468039999 30.594824596,114.285036537 30.594824596,114.285036537 30.5799727394,114.27018468039999 30.5799727394))",
+        "poi_count": "8008"
+      },
+      {
+        "grid_wkt": "POLYGON((114.25533282379999 30.5799727394,114.25533282379999 30.594824596,114.27018468039999 30.594824596,114.27018468039999 30.5799727394,114.25533282379999 30.5799727394))",
+        "poi_count": "7171"
+      },
+      {
+        "grid_wkt": "POLYGON((114.285036537 30.5651208828,114.285036537 30.5799727394,114.2998883936 30.5799727394,114.2998883936 30.5651208828,114.285036537 30.5651208828))",
+        "poi_count": "6902"
+      },
+      {
+        "grid_wkt": "POLYGON((114.27018468039999 30.5651208828,114.27018468039999 30.5799727394,114.285036537 30.5799727394,114.285036537 30.5651208828,114.27018468039999 30.5651208828))",
+        "poi_count": "5902"
+      }
+    ]
+  },
+  "brandAggregation": {
+    "allClusters": [
+      {
+        "brand": "华中科技大学",
+        "type": "campus",
+        "count": 4,
+        "eligible": true,
+        "center": {
+          "lon": 114.26607650008049,
+          "lat": 30.581519749986526
+        },
+        "members": [
+          {
+            "id": 140979,
+            "name": "华中科技大学同济医学院407",
+            "longitude": 114.2570780001497,
+            "latitude": 30.581706000031943
+          },
+          {
+            "id": 253821,
+            "name": "华中科技大学同济医学院小蜜蜂智慧服务中心",
+            "longitude": 114.25712699971132,
+            "latitude": 30.581240000125945
+          },
+          {
+            "id": 100668,
+            "name": "华中科技大学同济医学院附属武汉中心医院",
+            "longitude": 114.29485200011982,
+            "latitude": 30.581827000215924
+          },
+          {
+            "id": 531975,
+            "name": "华中科技大学同济医学院(2号门)",
+            "longitude": 114.25524900034111,
+            "latitude": 30.581305999572294
+          }
+        ]
+      },
+      {
+        "brand": "中山公园",
+        "type": "scenic",
+        "count": 3,
+        "eligible": true,
+        "center": {
+          "lon": 114.27202599999998,
+          "lat": 30.58935533328207
+        },
+        "members": [
+          {
+            "id": 26318,
+            "name": "中山公园地下停车场(建设中)",
+            "longitude": 114.27356100034001,
+            "latitude": 30.589772999724232
+          },
+          {
+            "id": 55953,
+            "name": "中山公园吃奶鱼主题乐园",
+            "longitude": 114.2713500000026,
+            "latitude": 30.588719999728255
+          },
+          {
+            "id": 60768,
+            "name": "中山公园-公共厕所",
+            "longitude": 114.27116699965734,
+            "latitude": 30.589573000393727
+          }
+        ]
+      },
+      {
+        "brand": "华中农业大学",
+        "type": "campus",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27774249981661,
+          "lat": 30.59339149976796
+        },
+        "members": [
+          {
+            "id": 538125,
+            "name": "华中农业大学主楼(南门)",
+            "longitude": 114.27659299986715,
+            "latitude": 30.597337999649028
+          },
+          {
+            "id": 343379,
+            "name": "华中农业大学学生通讯社",
+            "longitude": 114.27889199976607,
+            "latitude": 30.589444999886894
+          }
+        ]
+      },
+      {
+        "brand": "武汉市江汉区老年大学",
+        "type": "campus",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27697000016548,
+          "lat": 30.59009349966533
+        },
+        "members": [
+          {
+            "id": 316735,
+            "name": "武汉市江汉区老年大学",
+            "longitude": 114.27550900024028,
+            "latitude": 30.59134999960287
+          },
+          {
+            "id": 335683,
+            "name": "武汉市江汉区老年大学汉兴街分校",
+            "longitude": 114.27843100009068,
+            "latitude": 30.58883699972779
+          }
+        ]
+      },
+      {
+        "brand": "锦江之星酒店武汉万松园美食街",
+        "type": "food_street",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27110599999196,
+          "lat": 30.59385150029655
+        },
+        "members": [
+          {
+            "id": 11850,
+            "name": "锦江之星酒店武汉万松园美食街取水楼店停车场",
+            "longitude": 114.27117399998019,
+            "latitude": 30.59380000016995
+          },
+          {
+            "id": 2723,
+            "name": "锦江之星酒店武汉万松园美食街取水楼店停车场(出入口)",
+            "longitude": 114.27103800000373,
+            "latitude": 30.593903000423154
+          }
+        ]
+      },
+      {
+        "brand": "湖北美术学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27502600044966,
+          "lat": 30.590241999768523
+        },
+        "members": [
+          {
+            "id": 339401,
+            "name": "湖北美术学院藏龙岛校区A13教学楼",
+            "longitude": 114.27502600044966,
+            "latitude": 30.590241999768523
+          }
+        ]
+      },
+      {
+        "brand": "武汉大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27649499984443,
+          "lat": 30.588744999981827
+        },
+        "members": [
+          {
+            "id": 445109,
+            "name": "武汉大学工操饮料店",
+            "longitude": 114.27649499984443,
+            "latitude": 30.588744999981827
+          }
+        ]
+      },
+      {
+        "brand": "地质大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25622799962252,
+          "lat": 30.587002999688764
+        },
+        "members": [
+          {
+            "id": 150230,
+            "name": "地质大学学生公寓男生1栋",
+            "longitude": 114.25622799962252,
+            "latitude": 30.587002999688764
+          }
+        ]
+      },
+      {
+        "brand": "同济医学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25497999962738,
+          "lat": 30.581325999595265
+        },
+        "members": [
+          {
+            "id": 105645,
+            "name": "同济医学院社区卫生服务站",
+            "longitude": 114.25497999962738,
+            "latitude": 30.581325999595265
+          }
+        ]
+      },
+      {
+        "brand": "软件学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25415700034534,
+          "lat": 30.58154299970971
+        },
+        "members": [
+          {
+            "id": 119893,
+            "name": "软件学院小区",
+            "longitude": 114.25415700034534,
+            "latitude": 30.58154299970971
+          }
+        ]
+      },
+      {
+        "brand": "武汉国际广场同济医学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25643800031355,
+          "lat": 30.57711399961147
+        },
+        "members": [
+          {
+            "id": 30532,
+            "name": "武汉国际广场同济医学院亚朵酒店",
+            "longitude": 114.25643800031355,
+            "latitude": 30.57711399961147
+          }
+        ]
+      },
+      {
+        "brand": "新起航圆梦电商学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.2562240003374,
+          "lat": 30.57732100016409
+        },
+        "members": [
+          {
+            "id": 331302,
+            "name": "新起航圆梦电商学院",
+            "longitude": 114.2562240003374,
+            "latitude": 30.57732100016409
+          }
+        ]
+      },
+      {
+        "brand": "湖北商贸学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.2544349996756,
+          "lat": 30.59962099970943
+        },
+        "members": [
+          {
+            "id": 553407,
+            "name": "湖北商贸学院学生公寓第11栋(东门)",
+            "longitude": 114.2544349996756,
+            "latitude": 30.59962099970943
+          }
+        ]
+      },
+      {
+        "brand": "长商学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25090599971213,
+          "lat": 30.5927159996437
+        },
+        "members": [
+          {
+            "id": 332916,
+            "name": "长商学院",
+            "longitude": 114.25090599971213,
+            "latitude": 30.5927159996437
+          }
+        ]
+      },
+      {
+        "brand": "湖北中医药大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25341700039428,
+          "lat": 30.57899199988094
+        },
+        "members": [
+          {
+            "id": 541878,
+            "name": "湖北中医药大学黄家湖校区科技中心(南门)",
+            "longitude": 114.25341700039428,
+            "latitude": 30.57899199988094
+          }
+        ]
+      },
+      {
+        "brand": "武汉市软件工程学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27453800042849,
+          "lat": 30.5890119997041
+        },
+        "members": [
+          {
+            "id": 531694,
+            "name": "武汉市软件工程学院(东南门)",
+            "longitude": 114.27453800042849,
+            "latitude": 30.5890119997041
+          }
+        ]
+      },
+      {
+        "brand": "华中师范大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27547300037872,
+          "lat": 30.59101999967328
+        },
+        "members": [
+          {
+            "id": 541893,
+            "name": "华中师范大学(东门)",
+            "longitude": 114.27547300037872,
+            "latitude": 30.59101999967328
+          }
+        ]
+      },
+      {
+        "brand": "科技兔科学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27398600015385,
+          "lat": 30.587889000077325
+        },
+        "members": [
+          {
+            "id": 336150,
+            "name": "科技兔科学院(永旺梦乐城金桥店)",
+            "longitude": 114.27398600015385,
+            "latitude": 30.587889000077325
+          }
+        ]
+      },
+      {
+        "brand": "湖北经济技术培训学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27909900031864,
+          "lat": 30.58960700016297
+        },
+        "members": [
+          {
+            "id": 331986,
+            "name": "湖北经济技术培训学院(汉口校区)",
+            "longitude": 114.27909900031864,
+            "latitude": 30.58960700016297
+          }
+        ]
+      },
+      {
+        "brand": "天英网络营销培训学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27275099985877,
+          "lat": 30.591188000226055
+        },
+        "members": [
+          {
+            "id": 324013,
+            "name": "天英网络营销培训学院(汉口校区)",
+            "longitude": 114.27275099985877,
+            "latitude": 30.591188000226055
+          }
+        ]
+      },
+      {
+        "brand": "铂凌瑜伽学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27281400006609,
+          "lat": 30.591360000064014
+        },
+        "members": [
+          {
+            "id": 334468,
+            "name": "铂凌瑜伽学院",
+            "longitude": 114.27281400006609,
+            "latitude": 30.591360000064014
+          }
+        ]
+      },
+      {
+        "brand": "驭马体育公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.2753019996876,
+          "lat": 30.591333999764345
+        },
+        "members": [
+          {
+            "id": 551576,
+            "name": "驭马体育公园(1号门)",
+            "longitude": 114.2753019996876,
+            "latitude": 30.591333999764345
+          }
+        ]
+      },
+      {
+        "brand": "小南湖公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27629300042167,
+          "lat": 30.592179000060867
+        },
+        "members": [
+          {
+            "id": 60702,
+            "name": "小南湖公园-公共厕所",
+            "longitude": 114.27629300042167,
+            "latitude": 30.592179000060867
+          }
+        ]
+      },
+      {
+        "brand": "台北一路喷泉公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27460099973644,
+          "lat": 30.593107999734457
+        },
+        "members": [
+          {
+            "id": 430,
+            "name": "台北一路喷泉公园(公交站)",
+            "longitude": 114.27460099973644,
+            "latitude": 30.593107999734457
+          }
+        ]
+      },
+      {
+        "brand": "武汉汉口江汉路步行街",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27874700027394,
+          "lat": 30.592436000221312
+        },
+        "members": [
+          {
+            "id": 37137,
+            "name": "武汉汉口江汉路步行街商圈/万松园美食街湖景房公寓(3号店)",
+            "longitude": 114.27874700027394,
+            "latitude": 30.592436000221312
+          }
+        ]
+      },
+      {
+        "brand": "汉正美食街",
+        "type": "food_street",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.26952699957144,
+          "lat": 30.592656999620885
+        },
+        "members": [
+          {
+            "id": 384324,
+            "name": "汉正美食街63",
+            "longitude": 114.26952699957144,
+            "latitude": 30.592656999620885
+          }
+        ]
+      },
+      {
+        "brand": "荣天翔夏氏美食城",
+        "type": "food_street",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.269439,
+          "lat": 30.592896
+        },
+        "members": [
+          {
+            "id": 599816,
+            "name": "荣天翔夏氏美食城",
+            "longitude": 114.269439,
+            "latitude": 30.592896
+          }
+        ]
+      },
+      {
+        "brand": "泰顺和商业街",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27487699987375,
+          "lat": 30.589660999955242
+        },
+        "members": [
+          {
+            "id": 370724,
+            "name": "泰顺和商业街C区",
+            "longitude": 114.27487699987375,
+            "latitude": 30.589660999955242
+          }
+        ]
+      },
+      {
+        "brand": "泛悦·南国中心一期购物中心",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27599700026144,
+          "lat": 30.590314000390833
+        },
+        "members": [
+          {
+            "id": 527782,
+            "name": "泛悦·南国中心一期购物中心",
+            "longitude": 114.27599700026144,
+            "latitude": 30.590314000390833
+          }
+        ]
+      }
+    ],
+    "eligibleClusters": [
+      {
+        "brand": "华中科技大学",
+        "type": "campus",
+        "count": 4,
+        "eligible": true,
+        "center": {
+          "lon": 114.26607650008049,
+          "lat": 30.581519749986526
+        },
+        "members": [
+          {
+            "id": 140979,
+            "name": "华中科技大学同济医学院407",
+            "longitude": 114.2570780001497,
+            "latitude": 30.581706000031943
+          },
+          {
+            "id": 253821,
+            "name": "华中科技大学同济医学院小蜜蜂智慧服务中心",
+            "longitude": 114.25712699971132,
+            "latitude": 30.581240000125945
+          },
+          {
+            "id": 100668,
+            "name": "华中科技大学同济医学院附属武汉中心医院",
+            "longitude": 114.29485200011982,
+            "latitude": 30.581827000215924
+          },
+          {
+            "id": 531975,
+            "name": "华中科技大学同济医学院(2号门)",
+            "longitude": 114.25524900034111,
+            "latitude": 30.581305999572294
+          }
+        ]
+      },
+      {
+        "brand": "中山公园",
+        "type": "scenic",
+        "count": 3,
+        "eligible": true,
+        "center": {
+          "lon": 114.27202599999998,
+          "lat": 30.58935533328207
+        },
+        "members": [
+          {
+            "id": 26318,
+            "name": "中山公园地下停车场(建设中)",
+            "longitude": 114.27356100034001,
+            "latitude": 30.589772999724232
+          },
+          {
+            "id": 55953,
+            "name": "中山公园吃奶鱼主题乐园",
+            "longitude": 114.2713500000026,
+            "latitude": 30.588719999728255
+          },
+          {
+            "id": 60768,
+            "name": "中山公园-公共厕所",
+            "longitude": 114.27116699965734,
+            "latitude": 30.589573000393727
+          }
+        ]
+      },
+      {
+        "brand": "华中农业大学",
+        "type": "campus",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27774249981661,
+          "lat": 30.59339149976796
+        },
+        "members": [
+          {
+            "id": 538125,
+            "name": "华中农业大学主楼(南门)",
+            "longitude": 114.27659299986715,
+            "latitude": 30.597337999649028
+          },
+          {
+            "id": 343379,
+            "name": "华中农业大学学生通讯社",
+            "longitude": 114.27889199976607,
+            "latitude": 30.589444999886894
+          }
+        ]
+      },
+      {
+        "brand": "武汉市江汉区老年大学",
+        "type": "campus",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27697000016548,
+          "lat": 30.59009349966533
+        },
+        "members": [
+          {
+            "id": 316735,
+            "name": "武汉市江汉区老年大学",
+            "longitude": 114.27550900024028,
+            "latitude": 30.59134999960287
+          },
+          {
+            "id": 335683,
+            "name": "武汉市江汉区老年大学汉兴街分校",
+            "longitude": 114.27843100009068,
+            "latitude": 30.58883699972779
+          }
+        ]
+      },
+      {
+        "brand": "锦江之星酒店武汉万松园美食街",
+        "type": "food_street",
+        "count": 2,
+        "eligible": true,
+        "center": {
+          "lon": 114.27110599999196,
+          "lat": 30.59385150029655
+        },
+        "members": [
+          {
+            "id": 11850,
+            "name": "锦江之星酒店武汉万松园美食街取水楼店停车场",
+            "longitude": 114.27117399998019,
+            "latitude": 30.59380000016995
+          },
+          {
+            "id": 2723,
+            "name": "锦江之星酒店武汉万松园美食街取水楼店停车场(出入口)",
+            "longitude": 114.27103800000373,
+            "latitude": 30.593903000423154
+          }
+        ]
+      },
+      {
+        "brand": "驭马体育公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.2753019996876,
+          "lat": 30.591333999764345
+        },
+        "members": [
+          {
+            "id": 551576,
+            "name": "驭马体育公园(1号门)",
+            "longitude": 114.2753019996876,
+            "latitude": 30.591333999764345
+          }
+        ]
+      },
+      {
+        "brand": "小南湖公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27629300042167,
+          "lat": 30.592179000060867
+        },
+        "members": [
+          {
+            "id": 60702,
+            "name": "小南湖公园-公共厕所",
+            "longitude": 114.27629300042167,
+            "latitude": 30.592179000060867
+          }
+        ]
+      },
+      {
+        "brand": "台北一路喷泉公园",
+        "type": "scenic",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27460099973644,
+          "lat": 30.593107999734457
+        },
+        "members": [
+          {
+            "id": 430,
+            "name": "台北一路喷泉公园(公交站)",
+            "longitude": 114.27460099973644,
+            "latitude": 30.593107999734457
+          }
+        ]
+      },
+      {
+        "brand": "武汉汉口江汉路步行街",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27874700027394,
+          "lat": 30.592436000221312
+        },
+        "members": [
+          {
+            "id": 37137,
+            "name": "武汉汉口江汉路步行街商圈/万松园美食街湖景房公寓(3号店)",
+            "longitude": 114.27874700027394,
+            "latitude": 30.592436000221312
+          }
+        ]
+      },
+      {
+        "brand": "汉正美食街",
+        "type": "food_street",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.26952699957144,
+          "lat": 30.592656999620885
+        },
+        "members": [
+          {
+            "id": 384324,
+            "name": "汉正美食街63",
+            "longitude": 114.26952699957144,
+            "latitude": 30.592656999620885
+          }
+        ]
+      },
+      {
+        "brand": "荣天翔夏氏美食城",
+        "type": "food_street",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.269439,
+          "lat": 30.592896
+        },
+        "members": [
+          {
+            "id": 599816,
+            "name": "荣天翔夏氏美食城",
+            "longitude": 114.269439,
+            "latitude": 30.592896
+          }
+        ]
+      },
+      {
+        "brand": "泰顺和商业街",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27487699987375,
+          "lat": 30.589660999955242
+        },
+        "members": [
+          {
+            "id": 370724,
+            "name": "泰顺和商业街C区",
+            "longitude": 114.27487699987375,
+            "latitude": 30.589660999955242
+          }
+        ]
+      },
+      {
+        "brand": "泛悦·南国中心一期购物中心",
+        "type": "commercial",
+        "count": 1,
+        "eligible": true,
+        "center": {
+          "lon": 114.27599700026144,
+          "lat": 30.590314000390833
+        },
+        "members": [
+          {
+            "id": 527782,
+            "name": "泛悦·南国中心一期购物中心",
+            "longitude": 114.27599700026144,
+            "latitude": 30.590314000390833
+          }
+        ]
+      }
+    ],
+    "ineligibleClusters": [
+      {
+        "brand": "湖北美术学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27502600044966,
+          "lat": 30.590241999768523
+        },
+        "members": [
+          {
+            "id": 339401,
+            "name": "湖北美术学院藏龙岛校区A13教学楼",
+            "longitude": 114.27502600044966,
+            "latitude": 30.590241999768523
+          }
+        ]
+      },
+      {
+        "brand": "武汉大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27649499984443,
+          "lat": 30.588744999981827
+        },
+        "members": [
+          {
+            "id": 445109,
+            "name": "武汉大学工操饮料店",
+            "longitude": 114.27649499984443,
+            "latitude": 30.588744999981827
+          }
+        ]
+      },
+      {
+        "brand": "地质大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25622799962252,
+          "lat": 30.587002999688764
+        },
+        "members": [
+          {
+            "id": 150230,
+            "name": "地质大学学生公寓男生1栋",
+            "longitude": 114.25622799962252,
+            "latitude": 30.587002999688764
+          }
+        ]
+      },
+      {
+        "brand": "同济医学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25497999962738,
+          "lat": 30.581325999595265
+        },
+        "members": [
+          {
+            "id": 105645,
+            "name": "同济医学院社区卫生服务站",
+            "longitude": 114.25497999962738,
+            "latitude": 30.581325999595265
+          }
+        ]
+      },
+      {
+        "brand": "软件学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25415700034534,
+          "lat": 30.58154299970971
+        },
+        "members": [
+          {
+            "id": 119893,
+            "name": "软件学院小区",
+            "longitude": 114.25415700034534,
+            "latitude": 30.58154299970971
+          }
+        ]
+      },
+      {
+        "brand": "武汉国际广场同济医学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25643800031355,
+          "lat": 30.57711399961147
+        },
+        "members": [
+          {
+            "id": 30532,
+            "name": "武汉国际广场同济医学院亚朵酒店",
+            "longitude": 114.25643800031355,
+            "latitude": 30.57711399961147
+          }
+        ]
+      },
+      {
+        "brand": "新起航圆梦电商学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.2562240003374,
+          "lat": 30.57732100016409
+        },
+        "members": [
+          {
+            "id": 331302,
+            "name": "新起航圆梦电商学院",
+            "longitude": 114.2562240003374,
+            "latitude": 30.57732100016409
+          }
+        ]
+      },
+      {
+        "brand": "湖北商贸学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.2544349996756,
+          "lat": 30.59962099970943
+        },
+        "members": [
+          {
+            "id": 553407,
+            "name": "湖北商贸学院学生公寓第11栋(东门)",
+            "longitude": 114.2544349996756,
+            "latitude": 30.59962099970943
+          }
+        ]
+      },
+      {
+        "brand": "长商学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25090599971213,
+          "lat": 30.5927159996437
+        },
+        "members": [
+          {
+            "id": 332916,
+            "name": "长商学院",
+            "longitude": 114.25090599971213,
+            "latitude": 30.5927159996437
+          }
+        ]
+      },
+      {
+        "brand": "湖北中医药大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.25341700039428,
+          "lat": 30.57899199988094
+        },
+        "members": [
+          {
+            "id": 541878,
+            "name": "湖北中医药大学黄家湖校区科技中心(南门)",
+            "longitude": 114.25341700039428,
+            "latitude": 30.57899199988094
+          }
+        ]
+      },
+      {
+        "brand": "武汉市软件工程学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27453800042849,
+          "lat": 30.5890119997041
+        },
+        "members": [
+          {
+            "id": 531694,
+            "name": "武汉市软件工程学院(东南门)",
+            "longitude": 114.27453800042849,
+            "latitude": 30.5890119997041
+          }
+        ]
+      },
+      {
+        "brand": "华中师范大学",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27547300037872,
+          "lat": 30.59101999967328
+        },
+        "members": [
+          {
+            "id": 541893,
+            "name": "华中师范大学(东门)",
+            "longitude": 114.27547300037872,
+            "latitude": 30.59101999967328
+          }
+        ]
+      },
+      {
+        "brand": "科技兔科学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27398600015385,
+          "lat": 30.587889000077325
+        },
+        "members": [
+          {
+            "id": 336150,
+            "name": "科技兔科学院(永旺梦乐城金桥店)",
+            "longitude": 114.27398600015385,
+            "latitude": 30.587889000077325
+          }
+        ]
+      },
+      {
+        "brand": "湖北经济技术培训学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27909900031864,
+          "lat": 30.58960700016297
+        },
+        "members": [
+          {
+            "id": 331986,
+            "name": "湖北经济技术培训学院(汉口校区)",
+            "longitude": 114.27909900031864,
+            "latitude": 30.58960700016297
+          }
+        ]
+      },
+      {
+        "brand": "天英网络营销培训学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27275099985877,
+          "lat": 30.591188000226055
+        },
+        "members": [
+          {
+            "id": 324013,
+            "name": "天英网络营销培训学院(汉口校区)",
+            "longitude": 114.27275099985877,
+            "latitude": 30.591188000226055
+          }
+        ]
+      },
+      {
+        "brand": "铂凌瑜伽学院",
+        "type": "campus",
+        "count": 1,
+        "eligible": false,
+        "center": {
+          "lon": 114.27281400006609,
+          "lat": 30.591360000064014
+        },
+        "members": [
+          {
+            "id": 334468,
+            "name": "铂凌瑜伽学院",
+            "longitude": 114.27281400006609,
+            "latitude": 30.591360000064014
+          }
+        ]
+      }
+    ],
+    "coveredPoiIds": [
+      "140979",
+      "253821",
+      "100668",
+      "531975",
+      "26318",
+      "55953",
+      "60768",
+      "538125",
+      "343379",
+      "316735",
+      "335683",
+      "11850",
+      "2723",
+      "551576",
+      "60702",
+      "430",
+      "37137",
+      "384324",
+      "599816",
+      "370724",
+      "527782"
+    ]
+  },
+  "candidates": {
+    "total": 18,
+    "bySource": {
+      "brand_cluster": 13,
+      "aoi_context": 5
+    },
+    "byRole": {
+      "campus_anchor": 5,
+      "scenic_landmark": 7,
+      "food_street_anchor": 3,
+      "commercial_anchor": 3
+    },
+    "items": [
+      {
+        "id": "brand:campus:华中科技大学",
+        "name": "华中科技大学",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.26607650008049,
+          "lat": 30.581519749986526
+        },
+        "score": 1.296,
+        "categoryMain": null,
+        "categorySub": "高校",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "brand:campus",
+          "cluster_count:4"
+        ],
+        "reasons": [
+          "高校锚点",
+          "由 4 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:campus:华中科技大学",
+        "childPoiIds": [
+          "poi:140979",
+          "poi:253821",
+          "poi:100668",
+          "poi:531975"
+        ]
+      },
+      {
+        "id": "brand:scenic:中山公园",
+        "name": "中山公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27202599999998,
+          "lat": 30.58935533328207
+        },
+        "score": 1.34,
+        "categoryMain": null,
+        "categorySub": "景区/公园",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "brand:scenic",
+          "cluster_count:3"
+        ],
+        "reasons": [
+          "景区地标",
+          "由 3 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:scenic:中山公园",
+        "childPoiIds": [
+          "poi:26318",
+          "poi:55953",
+          "poi:60768"
+        ]
+      },
+      {
+        "id": "brand:campus:华中农业大学",
+        "name": "华中农业大学",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27774249981661,
+          "lat": 30.59339149976796
+        },
+        "score": 1.259,
+        "categoryMain": null,
+        "categorySub": "高校",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "brand:campus",
+          "cluster_count:2"
+        ],
+        "reasons": [
+          "高校锚点",
+          "由 2 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:campus:华中农业大学",
+        "childPoiIds": [
+          "poi:538125",
+          "poi:343379"
+        ]
+      },
+      {
+        "id": "brand:campus:武汉市江汉区老年大学",
+        "name": "武汉市江汉区老年大学",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27697000016548,
+          "lat": 30.59009349966533
+        },
+        "score": 1.259,
+        "categoryMain": null,
+        "categorySub": "高校",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "brand:campus",
+          "cluster_count:2"
+        ],
+        "reasons": [
+          "高校锚点",
+          "由 2 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:campus:武汉市江汉区老年大学",
+        "childPoiIds": [
+          "poi:316735",
+          "poi:335683"
+        ]
+      },
+      {
+        "id": "brand:food_street:锦江之星酒店武汉万松园美食街",
+        "name": "锦江之星酒店武汉万松园美食街",
+        "role": "food_street_anchor",
+        "roleLabel": "小吃街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27110599999196,
+          "lat": 30.59385150029655
+        },
+        "score": 1.179,
+        "categoryMain": null,
+        "categorySub": "小吃/美食街",
+        "distanceM": null,
+        "tags": [
+          "food_street_anchor",
+          "brand:food_street",
+          "cluster_count:2"
+        ],
+        "reasons": [
+          "小吃街区",
+          "由 2 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:food_street:锦江之星酒店武汉万松园美食街",
+        "childPoiIds": [
+          "poi:11850",
+          "poi:2723"
+        ]
+      },
+      {
+        "id": "brand:scenic:驭马体育公园",
+        "name": "驭马体育公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.2753019996876,
+          "lat": 30.591333999764345
+        },
+        "score": 1.29,
+        "categoryMain": null,
+        "categorySub": "景区/公园",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "brand:scenic",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "景区地标",
+          "景区/公园代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:scenic:驭马体育公园",
+        "childPoiIds": [
+          "poi:551576"
+        ]
+      },
+      {
+        "id": "brand:scenic:小南湖公园",
+        "name": "小南湖公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27629300042167,
+          "lat": 30.592179000060867
+        },
+        "score": 1.29,
+        "categoryMain": null,
+        "categorySub": "景区/公园",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "brand:scenic",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "景区地标",
+          "景区/公园代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:scenic:小南湖公园",
+        "childPoiIds": [
+          "poi:60702"
+        ]
+      },
+      {
+        "id": "brand:scenic:台北一路喷泉公园",
+        "name": "台北一路喷泉公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27460099973644,
+          "lat": 30.593107999734457
+        },
+        "score": 1.29,
+        "categoryMain": null,
+        "categorySub": "景区/公园",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "brand:scenic",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "景区地标",
+          "景区/公园代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:scenic:台北一路喷泉公园",
+        "childPoiIds": [
+          "poi:430"
+        ]
+      },
+      {
+        "id": "brand:commercial:武汉汉口江汉路步行街",
+        "name": "武汉汉口江汉路步行街",
+        "role": "commercial_anchor",
+        "roleLabel": "商业街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27874700027394,
+          "lat": 30.592436000221312
+        },
+        "score": 1.17,
+        "categoryMain": null,
+        "categorySub": "商业街区",
+        "distanceM": null,
+        "tags": [
+          "commercial_anchor",
+          "brand:commercial",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "商业街区",
+          "商业街区代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:commercial:武汉汉口江汉路步行街",
+        "childPoiIds": [
+          "poi:37137"
+        ]
+      },
+      {
+        "id": "brand:food_street:汉正美食街",
+        "name": "汉正美食街",
+        "role": "food_street_anchor",
+        "roleLabel": "小吃街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.26952699957144,
+          "lat": 30.592656999620885
+        },
+        "score": 1.15,
+        "categoryMain": null,
+        "categorySub": "小吃/美食街",
+        "distanceM": null,
+        "tags": [
+          "food_street_anchor",
+          "brand:food_street",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "小吃街区",
+          "小吃/美食街代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:food_street:汉正美食街",
+        "childPoiIds": [
+          "poi:384324"
+        ]
+      },
+      {
+        "id": "brand:food_street:荣天翔夏氏美食城",
+        "name": "荣天翔夏氏美食城",
+        "role": "food_street_anchor",
+        "roleLabel": "小吃街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.269439,
+          "lat": 30.592896
+        },
+        "score": 1.15,
+        "categoryMain": null,
+        "categorySub": "小吃/美食街",
+        "distanceM": null,
+        "tags": [
+          "food_street_anchor",
+          "brand:food_street",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "小吃街区",
+          "小吃/美食街代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:food_street:荣天翔夏氏美食城",
+        "childPoiIds": [
+          "poi:599816"
+        ]
+      },
+      {
+        "id": "brand:commercial:泰顺和商业街",
+        "name": "泰顺和商业街",
+        "role": "commercial_anchor",
+        "roleLabel": "商业街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27487699987375,
+          "lat": 30.589660999955242
+        },
+        "score": 1.17,
+        "categoryMain": null,
+        "categorySub": "商业街区",
+        "distanceM": null,
+        "tags": [
+          "commercial_anchor",
+          "brand:commercial",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "商业街区",
+          "商业街区代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:commercial:泰顺和商业街",
+        "childPoiIds": [
+          "poi:370724"
+        ]
+      },
+      {
+        "id": "brand:commercial:泛悦·南国中心一期购物中心",
+        "name": "泛悦·南国中心一期购物中心",
+        "role": "commercial_anchor",
+        "roleLabel": "商业街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27599700026144,
+          "lat": 30.590314000390833
+        },
+        "score": 1.17,
+        "categoryMain": null,
+        "categorySub": "商业街区",
+        "distanceM": null,
+        "tags": [
+          "commercial_anchor",
+          "brand:commercial",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "商业街区",
+          "商业街区代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:commercial:泛悦·南国中心一期购物中心",
+        "childPoiIds": [
+          "poi:527782"
+        ]
+      },
+      {
+        "id": "aoi:1110",
+        "name": "海军工程大学",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.23774184201172,
+          "lat": 30.583316727859987
+        },
+        "score": 1.32,
+        "categoryMain": null,
+        "categorySub": "military",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "military"
+        ],
+        "reasons": [
+          "高校锚点",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low"
+      },
+      {
+        "id": "aoi:6261",
+        "name": "江汉大学（汉口校区）",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.28470020472719,
+          "lat": 30.60408104570357
+        },
+        "score": 1.32,
+        "categoryMain": null,
+        "categorySub": "university",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "university"
+        ],
+        "reasons": [
+          "高校锚点",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low"
+      },
+      {
+        "id": "aoi:6294",
+        "name": "None",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.24766754061207,
+          "lat": 30.579491911316467
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low"
+      },
+      {
+        "id": "aoi:3869",
+        "name": "消防科普主题公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.27476795047157,
+          "lat": 30.574334090962957
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low"
+      },
+      {
+        "id": "aoi:7650",
+        "name": "武昌生态文化长廊-武九铁路旧址",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.3129269647145,
+          "lat": 30.572644657653424
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low"
+      }
+    ]
+  },
+  "ranked": {
+    "limit": 7,
+    "mode": "landmark_to_life",
+    "selected": [
+      {
+        "id": "aoi:6294",
+        "name": "None",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.24766754061207,
+          "lat": 30.579491911316467
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low",
+        "sceneBucket": "景观",
+        "selectionReason": "None能补足“景观地标”这条导览主线。"
+      },
+      {
+        "id": "aoi:3869",
+        "name": "消防科普主题公园",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.27476795047157,
+          "lat": 30.574334090962957
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low",
+        "sceneBucket": "景观",
+        "selectionReason": "消防科普主题公园能补足“景观地标”这条导览主线。"
+      },
+      {
+        "id": "aoi:7650",
+        "name": "武昌生态文化长廊-武九铁路旧址",
+        "role": "scenic_landmark",
+        "roleLabel": "景区地标",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.3129269647145,
+          "lat": 30.572644657653424
+        },
+        "score": 1.38,
+        "categoryMain": null,
+        "categorySub": "park",
+        "distanceM": null,
+        "tags": [
+          "scenic_landmark",
+          "park"
+        ],
+        "reasons": [
+          "景区地标",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low",
+        "sceneBucket": "景观",
+        "selectionReason": "武昌生态文化长廊-武九铁路旧址能补足“景观地标”这条导览主线。"
+      },
+      {
+        "id": "aoi:1110",
+        "name": "海军工程大学",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.23774184201172,
+          "lat": 30.583316727859987
+        },
+        "score": 1.32,
+        "categoryMain": null,
+        "categorySub": "military",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "military"
+        ],
+        "reasons": [
+          "高校锚点",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low",
+        "sceneBucket": "校园",
+        "selectionReason": "海军工程大学能补足“校园人文”这条导览主线。"
+      },
+      {
+        "id": "aoi:6261",
+        "name": "江汉大学（汉口校区）",
+        "role": "campus_anchor",
+        "roleLabel": "高校锚点",
+        "source": "aoi_context",
+        "center": {
+          "lon": 114.28470020472719,
+          "lat": 30.60408104570357
+        },
+        "score": 1.32,
+        "categoryMain": null,
+        "categorySub": "university",
+        "distanceM": null,
+        "tags": [
+          "campus_anchor",
+          "university"
+        ],
+        "reasons": [
+          "高校锚点",
+          "AOI 代表锚点"
+        ],
+        "hotness": "low",
+        "sceneBucket": "校园",
+        "selectionReason": "江汉大学（汉口校区）能补足“校园人文”这条导览主线。"
+      },
+      {
+        "id": "brand:commercial:武汉汉口江汉路步行街",
+        "name": "武汉汉口江汉路步行街",
+        "role": "commercial_anchor",
+        "roleLabel": "商业街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27874700027394,
+          "lat": 30.592436000221312
+        },
+        "score": 1.17,
+        "categoryMain": null,
+        "categorySub": "商业街区",
+        "distanceM": null,
+        "tags": [
+          "commercial_anchor",
+          "brand:commercial",
+          "cluster_count:1"
+        ],
+        "reasons": [
+          "商业街区",
+          "商业街区代表节点"
+        ],
+        "hotness": "low",
+        "cellId": "brand:commercial:武汉汉口江汉路步行街",
+        "childPoiIds": [
+          "poi:37137"
+        ],
+        "sceneBucket": "商业",
+        "selectionReason": "武汉汉口江汉路步行街能补足“商业休闲”这条导览主线。"
+      },
+      {
+        "id": "brand:food_street:锦江之星酒店武汉万松园美食街",
+        "name": "锦江之星酒店武汉万松园美食街",
+        "role": "food_street_anchor",
+        "roleLabel": "小吃街区",
+        "source": "brand_cluster",
+        "center": {
+          "lon": 114.27110599999196,
+          "lat": 30.59385150029655
+        },
+        "score": 1.179,
+        "categoryMain": null,
+        "categorySub": "小吃/美食街",
+        "distanceM": null,
+        "tags": [
+          "food_street_anchor",
+          "brand:food_street",
+          "cluster_count:2"
+        ],
+        "reasons": [
+          "小吃街区",
+          "由 2 个同品牌 POI 汇聚成的区域实体"
+        ],
+        "hotness": "low",
+        "cellId": "brand:food_street:锦江之星酒店武汉万松园美食街",
+        "childPoiIds": [
+          "poi:11850",
+          "poi:2723"
+        ],
+        "sceneBucket": "小吃",
+        "selectionReason": "锦江之星酒店武汉万松园美食街能补足“街巷烟火”这条导览主线。"
+      }
+    ],
+    "droppedIds": [
+      "brand:campus:华中科技大学",
+      "brand:scenic:中山公园",
+      "brand:campus:华中农业大学",
+      "brand:campus:武汉市江汉区老年大学",
+      "brand:scenic:驭马体育公园",
+      "brand:scenic:小南湖公园",
+      "brand:scenic:台北一路喷泉公园",
+      "brand:food_street:汉正美食街",
+      "brand:food_street:荣天翔夏氏美食城",
+      "brand:commercial:泰顺和商业街",
+      "brand:commercial:泛悦·南国中心一期购物中心"
+    ]
+  },
+  "encoder": null,
+  "diagnostics": {
+    "notes": []
+  }
+}

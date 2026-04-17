@@ -271,6 +271,8 @@ export interface RegionSnapshotInput {
   aoiContext?: AreaAoiContextItem[]
   landuseContext?: AreaLanduseContextItem[]
   competitionDensity?: RegionSnapshotCompetition[]
+  anchorLon?: number | null
+  anchorLat?: number | null
 }
 
 export interface RegionFeatureTag {
@@ -289,6 +291,8 @@ export interface PoiProfileInput {
   hotspotLabel?: string | null
   surroundingCategories?: string[]
   aoiContext?: AreaAoiContextItem[]
+  lon?: number | null
+  lat?: number | null
 }
 
 export interface PoiFeatureTag {

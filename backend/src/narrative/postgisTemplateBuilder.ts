@@ -9,7 +9,11 @@ export type NarrativeAreaTemplateName =
   | 'area_representative_sample'
   | 'area_h3_hotspots'
   | 'area_aoi_context'
+  | 'area_population_hotspots'
   | 'area_landuse_context'
+  | 'area_regional_brand_pool'
+  | 'area_landuse_boundaries'
+  | 'narrative_aggregate_boundary'
 
 const TEMPLATE_ROOT = resolveResourceUrl(import.meta.url, [
   '../skills/postgis/templates/',
@@ -21,7 +25,11 @@ const TEMPLATE_FILE_MAP: Record<NarrativeAreaTemplateName, string> = {
   area_representative_sample: 'areaRepresentativeSampleViewport.sql',
   area_h3_hotspots: 'areaH3Hotspots.sql',
   area_aoi_context: 'areaAoiContextViewport.sql',
+  area_population_hotspots: 'areaPopulationHotspots.sql',
   area_landuse_context: 'areaLanduseContext.sql',
+  area_regional_brand_pool: 'areaRegionalBrandPool.sql',
+  area_landuse_boundaries: 'areaLanduseBoundaries.sql',
+  narrative_aggregate_boundary: 'narrativeAggregateBoundary.sql',
 }
 
 const templateCache = new Map<NarrativeAreaTemplateName, string>()
@@ -103,6 +111,8 @@ export function buildNarrativeAreaTemplateSql(input: {
   viewport: NarrativeViewport
   center?: NarrativePoint
   limit?: number
+  /** 聚合边界生成所需的成员点集（WGS84），用于 MEMBER_POINTS token */
+  memberPoints?: NarrativePoint[]
 }) {
   const template = loadTemplate(input.templateName)
   const viewport = input.viewport
@@ -121,6 +131,11 @@ export function buildNarrativeAreaTemplateSql(input: {
   const cellSizeDeg = Math.max(Math.max(widthDeg, heightDeg) / 5, 0.00012)
   const limit = clampLimit(input.limit ?? 12, 12)
 
+  // 构造 MEMBER_POINTS WKT MultiPoint（聚合边界 SQL 专用）
+  const memberPointsWkt = (input.memberPoints && input.memberPoints.length >= 3)
+    ? `MULTIPOINT(${input.memberPoints.map((pt) => `${formatNumber(pt.lon)} ${formatNumber(pt.lat)}`).join(', ')})`
+    : ''
+
   return replaceTokens(template, {
     AREA_FILTER: areaFilter,
     AREA_GEOMETRY: areaGeometry,
@@ -130,6 +145,7 @@ export function buildNarrativeAreaTemplateSql(input: {
     POINT_GEOGRAPHY: pointGeography,
     CELL_SIZE_DEG: formatNumber(cellSizeDeg, 10),
     LIMIT: String(limit),
+    MEMBER_POINTS: memberPointsWkt,
     VIEWPORT_MIN_LON: formatNumber(viewport.swLon),
     VIEWPORT_MIN_LAT: formatNumber(viewport.swLat),
     VIEWPORT_TILE_WIDTH: formatNumber(tileWidth, 10),

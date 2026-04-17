@@ -253,6 +253,7 @@ const app = createApp({
     (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   ),
   chat,
+  narrativeRuntime: narrativeChat,
 })
 
 const shutdown = async () => {
