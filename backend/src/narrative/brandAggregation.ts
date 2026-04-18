@@ -141,13 +141,33 @@ export function clusterPoisByBrand(pois: EvidenceItem[]): BrandCluster[] {
 }
 
 /**
- * 判断一个 brand cluster 是否足以成为独立导览节点：
- *   - campus：至少 2 个子 POI 才聚合（避免单个 "XX大学宿舍" 误判）
- *   - scenic / food_street / commercial：单个 POI 本身就是地标，1 个也够
+ * 判断一个 brand cluster 是否足以成为独立导览节点。
+ *
+ * 全部类型统一要求 `count >= 2` 或存在强主体成员（"主体成员"指 name 与 brand 高度一致，
+ * 比如 POI 名字就是 brand 本身、或者只比 brand 多出一个核心尾词 公园/广场/中心）。
+ *
+ * 这是为了杀死**单点伪品牌**——例如视口内只有一个"武汉天地XX分店"、"黄鹤楼XX驿站"、
+ * "武汉生物工程学院实训基地"这类分支 POI 时，之前会被合成一个假的 scenic/commercial/
+ * campus cluster，导致导览卡片出现完全不在视口内的节点名和错误镜头位置。
  */
 export function isBrandClusterEligible(cluster: BrandCluster) {
-  if (cluster.type === 'campus') return cluster.count >= 2
-  return cluster.count >= 1
+  if (cluster.count >= 2) return true
+  // count === 1：要求唯一成员本身就是 brand 主体，不是分支/驿站/代销点
+  const only = cluster.members[0]
+  if (!only) return false
+  const name = stripTrailingBracketSuffix(String(only.name || '')).trim()
+  if (!name) return false
+  if (name === cluster.brand) return true
+  if (name.startsWith(cluster.brand)) {
+    const tail = normalizeRemainder(name.slice(cluster.brand.length))
+    // 剩余完全为空 → 完全相等，主体即 brand
+    if (!tail) return true
+    // 剩余只有核心尾词（公园/广场/中心等），视作主体别名
+    if (/^(公园|广场|中心|景区|风景区|博物馆|纪念馆|文化园|大学|学院|商圈|商业街|步行街|小吃街|美食街)$/u.test(tail)) {
+      return true
+    }
+  }
+  return false
 }
 
 export function resolveBrandRole(type: BrandType): string {

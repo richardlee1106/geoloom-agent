@@ -52,6 +52,11 @@ import {
   buildViewportDiagonalM,
   type NarrativeAreaTemplateName,
 } from './postgisTemplateBuilder.js'
+import {
+  transformGeoJsonCoordinatesWgs84ToGcj02,
+  wgs84ToGcj02,
+} from './gcj02.js'
+import { clipBoundaryToViewport, isPointInViewport } from './viewportClipping.js'
 import type {
   NarrativeProbeRequest,
   NarrativeProbeResult,
@@ -71,6 +76,18 @@ import type {
   NarrativeViewport,
   NarrativeViewportSummary,
 } from './types.js'
+
+/**
+ * 广告/营销/推广文案特征词库（narrative 联网事实补强专用）。
+ *
+ * 触发后整条 snippet 将被跳过，不再进入 voice_text / webFactHint / labels。
+ * 覆盖：楼盘营销、直播带货、抽奖福利、招聘加盟、公众号/小程序引流、票务预约等。
+ * 典型反例：
+ *   ✗ "保利·公园上城营销中心盛大开放，泥乐脱口秀连嗨三天，引爆全城"
+ *   ✗ "XX 大厦盛大开盘，首付 20 万抢购，限时特惠"
+ *   ✗ "扫码关注公众号，领取 100 元优惠券"
+ */
+const NARRATIVE_AD_PATTERN = /(营销中心|售楼处|售楼部|置业顾问|开盘|开盘大吉|开售|盛大开放|盛大开业|盛大开幕|隆重开业|震撼开盘|钜献|钜惠|限时抢|限时特|特价优惠|返利|返现|红包|抽奖|引爆全|引爆|加盟|招商|脱口秀连嗨|脱口秀|演唱会|票务|预约咨询|销售热线|免费领|新品上市|首付|月供|总价|户型|样板间|样板房|VIP|尊享|抢购|限购|限时优惠|团购|代理|扫码关注|关注公众号|二维码|小程序|APP下载|app下载|微信公众号|广告|招聘|优惠券|折扣券|入驻|引流|刷单)/u
 
 function extractLastUserText(messages: ChatRequestV4['messages']) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -208,8 +225,23 @@ function toFiniteNumber(value: unknown) {
 }
 
 /**
+ * 来自 OSM 的 WGS84 源：解析时需要做 WGS84 → GCJ02 转换，和 POI 对齐。
+ * 其它源（aggregate_morphology / point_halo）本就基于 GCJ02 POI 成员点生成，
+ * 不需要再转。
+ */
+const WGS84_BOUNDARY_SOURCES = new Set<NarrativeNodeBoundary['source']>([
+  'aoi_native',
+  'landuse_parcel',
+  'road_block',
+  'concave_hull',
+  'buffer',
+])
+
+/**
  * 解析 PostGIS ST_AsGeoJSON 返回的字符串，构造节点模糊边界。
  * 兼容 Polygon / MultiPolygon，无效或空几何返回 null。
+ * 对 WGS84 来源自动做 GCJ02 转换，保证后端 narrative 输出都是 GCJ02，
+ * 前端直接 fromLonLat 即可贴合高德 GCJ02 底图。
  */
 function parseBoundaryGeoJson(
   value: unknown,
@@ -224,14 +256,50 @@ function parseBoundaryGeoJson(
     const type = String(parsed.type || '')
     if (type !== 'Polygon' && type !== 'MultiPolygon') return null
     if (!Array.isArray(parsed.coordinates) || parsed.coordinates.length === 0) return null
+    const normalizedCoordinates = WGS84_BOUNDARY_SOURCES.has(source)
+      ? transformGeoJsonCoordinatesWgs84ToGcj02(parsed.coordinates)
+      : parsed.coordinates
     return {
       type: type as NarrativeNodeBoundary['type'],
-      coordinates: parsed.coordinates as NarrativeNodeBoundary['coordinates'],
+      coordinates: normalizedCoordinates as NarrativeNodeBoundary['coordinates'],
       source,
     }
   } catch {
     return null
   }
+}
+
+/**
+ * 计算模糊边界顶点算术平均作为视觉中心。
+ * 用于 enrichAggregateBoundaries / enrichMissingBoundaries 同步 node.center，
+ * 让镜头对准的区域和实际画出的 boundary 视觉中心一致。
+ */
+function computeBoundaryCentroid(boundary: NarrativeNodeBoundary): { lon: number, lat: number } | null {
+  const rings: unknown[] = []
+  if (boundary.type === 'Polygon') {
+    rings.push(...(boundary.coordinates as unknown[]))
+  } else if (boundary.type === 'MultiPolygon') {
+    for (const polygon of boundary.coordinates as unknown[]) {
+      if (Array.isArray(polygon)) rings.push(...polygon)
+    }
+  }
+  let sumLon = 0
+  let sumLat = 0
+  let count = 0
+  for (const ring of rings) {
+    if (!Array.isArray(ring)) continue
+    for (const point of ring) {
+      if (!Array.isArray(point) || point.length < 2) continue
+      const lon = Number(point[0])
+      const lat = Number(point[1])
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue
+      sumLon += lon
+      sumLat += lat
+      count += 1
+    }
+  }
+  if (count === 0) return null
+  return { lon: sumLon / count, lat: sumLat / count }
 }
 
 function resolvePopulationHotness(populationSum: number, populationPeak: number) {
@@ -448,15 +516,18 @@ export class NarrativeRuntime implements ChatRuntime {
     await this.enrichMissingBoundaries(candidates, context)
     // 对仍缺 boundary 的节点做聚合边界生成（DBSCAN→ConcaveHull→Buffer→Landuse吸附 / 单点圆兜底）
     await this.enrichAggregateBoundaries(candidates, viewport, context)
-    const rankedCandidates = input.includeEncoder && candidates.length > 0
+    // 视口契约门禁：boundary 必须与视口真实相交，否则淘汰节点。
+    // 这是 narrative 对用户的基本承诺——输出里的节点必定在视口内有可见几何。
+    const candidatesInViewport = this.enforceViewportBoundaryContract(candidates, viewport, context)
+    const rankedCandidates = input.includeEncoder && candidatesInViewport.length > 0
       ? await this.enrichCandidatesWithEncoder({
-          candidates,
+          candidates: candidatesInViewport,
           center,
           rawQuery,
           areaView,
           context,
         })
-      : candidates
+      : candidatesInViewport
 
     // 6. 排序：includeEncoder 时尽量复用正式 narrative 的 summary 与候选 enrich 链路
     const viewportSummary = buildNarrativeViewportSummary({
@@ -698,18 +769,27 @@ export class NarrativeRuntime implements ChatRuntime {
     await this.enrichMissingBoundaries(candidates, context)
     // 对仍缺 boundary 的节点做聚合边界生成（DBSCAN→ConcaveHull→Buffer→Landuse吸附 / 单点圆兜底）
     await this.enrichAggregateBoundaries(candidates, viewport, context)
-    const encoderCandidates = candidates.length > 0
+    // 视口契约门禁：boundary 必须与视口真实相交，否则淘汰节点。
+    // 确保任何进入 narrative 编排的 candidate 都能在视口内呈现具体几何。
+    const candidatesInViewport = this.enforceViewportBoundaryContract(candidates, viewport, context)
+    const encoderCandidates = candidatesInViewport.length > 0
       ? await this.enrichCandidatesWithEncoder({
-          candidates,
+          candidates: candidatesInViewport,
           center,
           rawQuery,
           areaView,
           context,
         })
-      : buildNarrativeCandidates({
-          representativeSamples: poiSamples,
-          aoiContext: areaEvidence.aoiContext,
-        })
+      // fallback：即使 cell candidates 空了，也从 POI 样本和 AOI 上下文重算一批，
+      // 但同样要经过视口契约门禁，不能绕过。
+      : this.enforceViewportBoundaryContract(
+          buildNarrativeCandidates({
+            representativeSamples: poiSamples,
+            aoiContext: areaEvidence.aoiContext,
+          }),
+          viewport,
+          context,
+        )
     const viewportSummary = buildNarrativeViewportSummary({
       featureTags: derivedFeatureTags,
       featureSummary: derivedFeatureSummary,
@@ -1219,7 +1299,11 @@ ${nodeDescriptions}`
           ? resolveNodeRoleFromPoi(representativePoi)
           : this.inferRoleFromCell(cell)
 
-        const center = cell.center
+        // cell.center 来自 spatial_encoder（WGS84），统一转 GCJ02 供镜头与 POI 对齐
+        const [cellCenterLon, cellCenterLat] = wgs84ToGcj02(cell.center.lon, cell.center.lat)
+        const center = representativePoi
+          ? { lon: Number(representativePoi.longitude), lat: Number(representativePoi.latitude) }
+          : { lon: cellCenterLon, lat: cellCenterLat }
         const childCount = cell.childPoiIds.length
         const densityBonus = Math.min(Math.log2(Math.max(childCount, 1) + 1) * 0.04, 0.16)
         const score = Number((resolveRoleWeight(role) + cell.searchScore * 0.15 + densityBonus).toFixed(3))
@@ -1315,13 +1399,15 @@ ${nodeDescriptions}`
       const weight = this.resolveAoiWeight(item)
       const scaleBonus = Math.min(Math.log10(Math.max(weight, 1) + 1) / 10, 0.18)
       const boundary = parseBoundaryGeoJson(item.boundary_geojson, 'aoi_native')
+      // AOI centroid 来自 aois 表（WGS84），转 GCJ02 和 POI/前端底图对齐
+      const [gcjLon, gcjLat] = wgs84ToGcj02(lon, lat)
       const node = {
         id: `aoi:${String(item.id ?? name)}`,
         name,
         role,
         roleLabel: resolveRoleLabel(role),
         source: 'aoi_context',
-        center: { lon, lat },
+        center: { lon: gcjLon, lat: gcjLat },
         score: Number((resolveRoleWeight(role) + 0.24 + scaleBonus).toFixed(3)),
         categoryMain: null,
         categorySub: String(item.fclass || '').trim() || null,
@@ -1417,7 +1503,12 @@ ${nodeDescriptions}`
     if (rows.length === 0) return
 
     // 按 entityKey 索引查询结果，取面积最大且空间最近的
-    const bestByEntityKey = new Map<string, { boundary: NarrativeNodeBoundary, area: number, dist: number }>()
+    const bestByEntityKey = new Map<string, {
+      boundary: NarrativeNodeBoundary
+      area: number
+      dist: number
+      center: { lon: number, lat: number } | null
+    }>()
     for (const row of rows) {
       const rowName = String(row.name || '').trim()
       const key = this.buildNarrativeEntityKey(rowName)
@@ -1445,7 +1536,11 @@ ${nodeDescriptions}`
       const existing = bestByEntityKey.get(key)
       if (!existing || area > existing.area) {
         const boundary = parseBoundaryGeoJson(row.boundary_geojson, 'aoi_native')
-        if (boundary) bestByEntityKey.set(key, { boundary, area, dist: minDist })
+        if (boundary) {
+          // boundary 坐标已在 parseBoundaryGeoJson 中转成 GCJ02，centroid 同坐标系
+          const centroid = computeBoundaryCentroid(boundary)
+          bestByEntityKey.set(key, { boundary, area, dist: minDist, center: centroid })
+        }
       }
     }
 
@@ -1455,17 +1550,50 @@ ${nodeDescriptions}`
       const match = bestByEntityKey.get(key)
       if (match) {
         node.boundary = match.boundary
+        // 同步镜头中心到 AOI 视觉中心，避免"沙湖公园"定位到成员 POI 质心污染的商业区
+        if (match.center) node.center = match.center
       }
     }
   }
 
   /**
-   * 对仍缺 boundary 的节点做聚合边界生成。
+   * 从节点推断关键字驱动 parcel union 的索引词。
    *
-   * 策略：
-   * 1. 若节点有 ≥3 个 memberPoints → 调用 narrativeAggregateBoundary SQL
-   *    （DBSCAN → ConcaveHull → Buffer → Landuse 吸附）
-   * 2. 若 memberPoints <3 或 SQL 失败 → JS 纯生成单点圆兜底（point_halo）
+   * 优先级：
+   *   1) 用 `extractBrandFromName(node.name)` 抽出的品牌词（如"武汉生物工程学院"）
+   *   2) 退化为 node.name 本身（aoi_context / civic / culture 等节点常常名字就是关键词）
+   *
+   * 过短（<2 字）或去掉品牌核心尾词后长度不足的关键字直接返回 null，避免 ILIKE 过宽。
+   */
+  private resolveParcelKeyword(node: NarrativeNode): string | null {
+    const rawName = String(node.name || '').trim()
+    if (!rawName) return null
+
+    // 1. 品牌抽取（适合"武汉生物工程学院实训基地" → "武汉生物工程学院"）
+    const { brand } = extractBrandFromName(rawName)
+    if (brand && brand.length >= 2) return brand
+
+    // 2. 用完整 name 本身作为关键字。截到 20 字防 ILIKE 误匹配过窄。
+    //    像"黄鹤楼公园"、"中共湖北省委员会"这种 name 本身就是好的关键字。
+    const cleaned = rawName.replace(/[\s\-—_·•]+/gu, '').slice(0, 20)
+    if (cleaned.length >= 2) return cleaned
+    return null
+  }
+
+  /**
+   * 给尚未挂上 boundary 的节点生成模糊边界。三级降级链：
+   *
+   *   阶段 1：**关键字驱动 parcel union**（`narrative_keyword_parcel_union.sql`）
+   *     以 node.name 推断的关键字为索引，在视口 + BFS 邻接扩散半径内把含该关键字的
+   *     aoi / landuse 地块 ST_Union。这是最贴近真实地理的边界——跨视口的校园/园区
+   *     主体也能抓到。
+   *
+   *   阶段 2：**聚合边界**（`narrative_aggregate_boundary.sql`）
+   *     memberPoints >= 3 时，DBSCAN 聚类 → ConcaveHull → Buffer 软化 → Landuse 吸附。
+   *     适合 brand cluster 成员分布构成的有机区块（小吃街、商圈）。
+   *
+   *   阶段 3：**单点圆兼底**（`generatePointHalo`）
+   *     前两阶段都失败时退到 150m 固定半径圆。按产品要求尽量避免此路径。
    */
   private async enrichAggregateBoundaries(
     nodes: NarrativeNode[],
@@ -1477,44 +1605,94 @@ ${nodeDescriptions}`
 
     const postgis = this.requireSkill('postgis')
 
-    // 按节点逐个生成聚合边界（每个节点的 memberPoints 不同）
+    // 按节点逐个生成聚合边界
+    //
+    // 优先级链（从精到粗，越上越"真实地块"）：
+    //   1) 关键字驱动 parcel union —— 用 node 名字做关键字，在视口 + BFS 邻接扩散内
+    //      把含该关键字 POI 的 aoi / landuse 地块 ST_Union 起来。适合有具体行政/校园/
+    //      园区边界但没被 AOI 直接命中的节点（武汉生物工程学院、XX园区等）。
+    //   2) 聚合边界 (aggregate_morphology) —— memberPoints >=3 时 DBSCAN + ConcaveHull。
+    //   3) 单点圆 (point_halo) —— 最后兼底。按用户新要求，尽量不用，但不能完全抛空。
     const settled = await Promise.allSettled(missing.map(async (node) => {
+      // --- 阶段 1：关键字驱动 parcel union ---
+      const keyword = this.resolveParcelKeyword(node)
+      if (keyword) {
+        try {
+          const sql = buildNarrativeAreaTemplateSql({
+            templateName: 'narrative_keyword_parcel_union',
+            viewport,
+            center: node.center,
+            limit: 1,
+            keyword,
+            searchRadiusM: 500,
+          })
+          const result = await this.executeSkill<{ rows: Record<string, unknown>[] }>(
+            postgis, 'execute_spatial_sql', { sql }, context,
+          )
+          const rows = Array.isArray(result?.rows) ? result.rows : []
+          const row = rows[0]
+          if (row?.boundary_geojson) {
+            const parcelCount = Number(row.parcel_count || 0)
+            const areaM2 = Number(row.area_m2 || 0)
+            // 至少有 1 个地块 + 合并面积 >= 800 m²（避开路口一段噪声 polygon）
+            if (parcelCount >= 1 && areaM2 >= 800) {
+              const boundary = parseBoundaryGeoJson(row.boundary_geojson, 'landuse_parcel')
+              if (boundary) {
+                context.logger.info('keywordParcelUnion hit', {
+                  nodeId: node.id,
+                  keyword,
+                  parcelCount,
+                  areaM2,
+                })
+                return { nodeId: node.id, boundary }
+              }
+            }
+          }
+        } catch (error) {
+          context.logger.warn('keywordParcelUnion failed, fallback to aggregate_morphology', {
+            nodeId: node.id,
+            keyword,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      // --- 阶段 2：聚合边界（DBSCAN + ConcaveHull + Landuse 吸附）---
       const pts = node.memberPoints?.filter(
         (pt) => Number.isFinite(pt.lon) && Number.isFinite(pt.lat),
       ) ?? []
 
-      // 兜底：memberPoints <3 → 生成单点圆
-      if (pts.length < 3) {
-        return { nodeId: node.id, boundary: this.generatePointHalo(node) }
+      if (pts.length >= 3) {
+        try {
+          const sql = buildNarrativeAreaTemplateSql({
+            templateName: 'narrative_aggregate_boundary',
+            viewport,
+            center: node.center,
+            limit: 1,
+            memberPoints: pts,
+          })
+          const result = await this.executeSkill<{ rows: Record<string, unknown>[] }>(
+            postgis, 'execute_spatial_sql', { sql }, context,
+          )
+          const rows = Array.isArray(result?.rows) ? result.rows : []
+          if (rows.length > 0 && rows[0].boundary_geojson) {
+            const boundary = parseBoundaryGeoJson(rows[0].boundary_geojson, 'aggregate_morphology')
+            if (boundary) {
+              return { nodeId: node.id, boundary }
+            }
+          }
+        } catch (error) {
+          context.logger.warn('enrichAggregateBoundaries SQL failed for node', {
+            nodeId: node.id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
 
-      try {
-        const sql = buildNarrativeAreaTemplateSql({
-          templateName: 'narrative_aggregate_boundary',
-          viewport,
-          center: node.center,
-          limit: 1,
-          memberPoints: pts,
-        })
-        const result = await this.executeSkill<{ rows: Record<string, unknown>[] }>(
-          postgis, 'execute_spatial_sql', { sql }, context,
-        )
-        const rows = Array.isArray(result?.rows) ? result.rows : []
-        if (rows.length > 0 && rows[0].boundary_geojson) {
-          const boundary = parseBoundaryGeoJson(rows[0].boundary_geojson, 'aggregate_morphology')
-          if (boundary) {
-            return { nodeId: node.id, boundary }
-          }
-        }
-        // SQL 成功但无有效结果 → 兜底单点圆
-        return { nodeId: node.id, boundary: this.generatePointHalo(node) }
-      } catch (error) {
-        context.logger.warn('enrichAggregateBoundaries SQL failed for node', {
-          nodeId: node.id,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        return { nodeId: node.id, boundary: this.generatePointHalo(node) }
-      }
+      // --- 阶段 3：兜底单点圆 ---
+      // 用户希望尽量不用距离缓冲兜底，但当 parcel union 和聚合边界都失败时，
+      // 至少画个视觉提示圆避免节点完全没有边界，前端仍能飞镜头并定位到中心。
+      return { nodeId: node.id, boundary: this.generatePointHalo(node) }
     }))
 
     for (const item of settled) {
@@ -1522,8 +1700,79 @@ ${nodeDescriptions}`
       const node = missing.find((n) => n.id === item.value.nodeId)
       if (node && !node.boundary) {
         node.boundary = item.value.boundary
+        // 聚合边界已是 GCJ02（源自 POI 成员点），用其视觉中心同步 node.center
+        const centroid = computeBoundaryCentroid(item.value.boundary)
+        if (centroid) node.center = centroid
       }
     }
+  }
+
+  /**
+   * 视口契约门禁：把所有 candidate 的 boundary 裁剪到视口矩形内，并淘汰裁剪后
+   * 无可见主体的节点。
+   *
+   * narrative 系统对用户的承诺是：**任何出现在输出中的节点，必须在当前视口内
+   * 呈现出具体几何主体**。因此：
+   *   1) 每个 candidate 的 boundary 必须与视口相交，否则清除 boundary
+   *   2) 裁剪后面积必须 ≥ minClippedAreaM2（默认 500 m²）——不然只是擦边角料
+   *   3) node.center 同步到裁剪后的视觉中心，确保 fly-to 目标真的在视口内
+   *   4) 经过本步后仍无 boundary 或 center 不在视口内的 candidate → 被外层 filter 淘汰
+   *
+   * 这是 enrichMissingBoundaries / enrichAggregateBoundaries 跑完后必经的门禁，
+   * 放在 rankNarrativeNodes 之前调用。
+   */
+  private enforceViewportBoundaryContract(
+    nodes: NarrativeNode[],
+    viewport: NarrativeViewport,
+    context: SkillExecutionContext,
+    minClippedAreaM2: number = 500,
+  ): NarrativeNode[] {
+    const survivors: NarrativeNode[] = []
+    for (const node of nodes) {
+      if (!node.boundary) {
+        // 本来就没 boundary → 看 center 是否至少在视口里；不在就直接淘汰
+        if (isPointInViewport(node.center, viewport)) {
+          survivors.push(node)
+        } else {
+          context.logger.info('narrative: drop node without boundary and center outside viewport', {
+            nodeId: node.id,
+            name: node.name,
+            source: node.source,
+            role: node.role,
+          })
+        }
+        continue
+      }
+
+      const { boundary: clipped, clippedAreaM2 } = clipBoundaryToViewport(node.boundary, viewport)
+      if (!clipped || clippedAreaM2 < minClippedAreaM2) {
+        // 主体完全在视口外，或只剩擦边的小角料 → 清除 boundary 并淘汰节点
+        context.logger.info('narrative: drop node whose boundary does not meaningfully intersect viewport', {
+          nodeId: node.id,
+          name: node.name,
+          source: node.source,
+          role: node.role,
+          originalSource: node.boundary.source,
+          clippedAreaM2,
+        })
+        continue
+      }
+
+      // 裁剪成功 → 替换 boundary + 重算 center 到视口内视觉中心
+      node.boundary = clipped
+      const centroid = computeBoundaryCentroid(clipped)
+      if (centroid) node.center = centroid
+      survivors.push(node)
+    }
+
+    if (survivors.length < nodes.length) {
+      context.logger.info('narrative: viewport contract gate dropped candidates', {
+        before: nodes.length,
+        after: survivors.length,
+        dropped: nodes.length - survivors.length,
+      })
+    }
+    return survivors
   }
 
   /**
@@ -1582,7 +1831,13 @@ ${nodeDescriptions}`
     // 品牌/cell 节点本无 polygon，若 AOI 有原生边界则提拔为节点 boundary
     if (!node.boundary) {
       const aoiBoundary = parseBoundaryGeoJson(item.boundary_geojson, 'aoi_native')
-      if (aoiBoundary) node.boundary = aoiBoundary
+      if (aoiBoundary) {
+        node.boundary = aoiBoundary
+        // POI 成员质心常被分店/宿舍/门岗污染偏离主体，AOI 被挂上后，
+        // 用 AOI centroid 覆盖 node.center，确保镜头飞到 boundary 视觉中心
+        const centroid = computeBoundaryCentroid(aoiBoundary)
+        if (centroid) node.center = centroid
+      }
     }
   }
 
@@ -1828,12 +2083,18 @@ ${nodeDescriptions}`
         const labels: string[] = []
         for (const item of items) {
           const snippet = String(item.snippet || item.title || '').trim()
+          const title = String(item.title || '')
+          const text = `${title} ${snippet}`
+
+          // 广告/营销/推广类文案过滤：这类 snippet 与区域导览事实无关，
+          // 若混入 voice_text / webFactHint，会出现"保利·公园上城营销中心盛大开放"
+          // 这类明显错误的解说词。命中广告特征就整条跳过，不再参与 snippet / label。
+          if (NARRATIVE_AD_PATTERN.test(text)) continue
+
           if (snippet && snippet.includes(node.name)) {
             snippets.push(snippet.slice(0, 120))
           }
           // 从搜索结果中提取事实标签
-          const title = String(item.title || '')
-          const text = `${title} ${snippet}`
           if (/(5A|AAAA|五A级|国家级|世界遗产|重点文物|历史名城|千年|百年)/u.test(text)) labels.push('国家级')
           if (/(4A|AAAA|四A级)/u.test(text)) labels.push('4A景区')
           if (/(3A|AAA|三A级)/u.test(text)) labels.push('3A景区')

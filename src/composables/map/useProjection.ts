@@ -25,6 +25,7 @@ function transformLon(x: number, y: number): number {
 
 export function useProjection(): {
   wgs84ToGcj02: (lon: number, lat: number) => CoordinatePair
+  gcj02ToWgs84: (lon: number, lat: number) => CoordinatePair
   toGcj02IfNeeded: (lon: number, lat: number, coordSys?: unknown) => CoordinatePair
 } {
   function wgs84ToGcj02(lon: number, lat: number): CoordinatePair {
@@ -42,6 +43,22 @@ export function useProjection(): {
     return [mgLon, mgLat]
   }
 
+  // GCJ02 → WGS84 反向迭代（3 次收敛到厘米级）。
+  // 用途：高德 GCJ02 底图得到的经纬度要发给后端前必须转 WGS84，否则在武汉
+  // 经纬度会产生约 500m 的系统性偏移（东南向），导致后端 viewport 与真实
+  // 渲染视野不一致，蓝色 boundary 画回前端后会再次经过 wgs84→gcj02 偏移。
+  function gcj02ToWgs84(lon: number, lat: number): CoordinatePair {
+    if (outOfChina(lon, lat)) return [lon, lat]
+    let wgsLon = lon
+    let wgsLat = lat
+    for (let i = 0; i < 3; i++) {
+      const [convLon, convLat] = wgs84ToGcj02(wgsLon, wgsLat)
+      wgsLon = lon - (convLon - wgsLon)
+      wgsLat = lat - (convLat - wgsLat)
+    }
+    return [wgsLon, wgsLat]
+  }
+
   function toGcj02IfNeeded(lon: number, lat: number, coordSys: unknown = 'gcj02'): CoordinatePair {
     if (String(coordSys || '').trim().toLowerCase() === 'wgs84') {
       return wgs84ToGcj02(lon, lat)
@@ -51,6 +68,7 @@ export function useProjection(): {
 
   return {
     wgs84ToGcj02,
+    gcj02ToWgs84,
     toGcj02IfNeeded
   }
 }

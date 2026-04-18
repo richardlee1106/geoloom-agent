@@ -116,7 +116,10 @@ export interface NarrativeTourStep {
   region_index?: number
   hotness?: NarrativeHotness
   tagline?: string | null
+  /** 短 labels 补充式补充（如“关键词·关键词”），由前端 narrator 卡片单行灰底展示 */
   webFactHint?: string | null
+  /** 网页原文摘要（已在后端滤掉广告），前端独立样式展示，标识为“网页来源” */
+  webFactSnippet?: string | null
   /** 节点模糊边界，播放到该步骤时前端会渲染光带 */
   boundary?: NarrativeNodeBoundary | null
 }

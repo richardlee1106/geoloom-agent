@@ -137,12 +137,37 @@
               <div v-if="currentWebFactHint" class="narrator-fact">
                 <span class="fact-badge">{{ currentWebFactHint }}</span>
               </div>
+              <div v-if="currentWebFactSnippet" class="narrator-web-source">
+                <div class="narrator-web-source__label">
+                  <el-icon class="narrator-web-source__icon"><Link /></el-icon>
+                  <span>网页来源</span>
+                </div>
+                <div class="narrator-web-source__quote">{{ currentWebFactSnippet }}</div>
+              </div>
             </div>
             <div class="narrator-footer">
               <div class="voice-visualizer">
                 <div v-for="i in 5" :key="i" class="audio-bar" :style="{ animationDelay: (i * 0.2) + 's' }"></div>
               </div>
-              <div class="narrator-step-badge">{{ currentStepIndex + 1 }} / {{ narrativeSteps.length }}</div>
+              <div class="narrator-controls">
+                <button
+                  class="narrator-step-btn"
+                  :disabled="currentStepIndex <= 0"
+                  @click="goPrevStep"
+                  title="上一个节点"
+                >
+                  <el-icon><ArrowLeft /></el-icon>
+                </button>
+                <div class="narrator-step-badge">{{ currentStepIndex + 1 }} / {{ narrativeSteps.length }}</div>
+                <button
+                  class="narrator-step-btn"
+                  :disabled="currentStepIndex >= narrativeSteps.length - 1"
+                  @click="goNextStep"
+                  title="下一个节点"
+                >
+                  <el-icon><ArrowRight /></el-icon>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -167,7 +192,7 @@ import { useRouter } from 'vue-router';
 import { ElButton } from 'element-plus/es/components/button/index';
 import { ElIcon } from 'element-plus/es/components/icon/index';
 import { marked } from 'marked';
-import { ArrowLeft, Close, Hide, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
+import { ArrowLeft, ArrowRight, Close, Hide, Link, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
 import Feature from 'ol/Feature';
 import Polygon from 'ol/geom/Polygon';
 import MultiPolygon from 'ol/geom/MultiPolygon';
@@ -180,10 +205,10 @@ import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../u
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
 import { useProjection } from '../composables/map/useProjection';
 
-// 底图为高德 GCJ02，后端 AOI/landuse boundary 全部为 WGS84（OSM），
-// 必须先做 WGS84→GCJ02 偏移转换再 fromLonLat 投影到 EPSG:3857，
-// 否则在武汉经纬度会产生约 500m 的系统性偏移（东南向）。
-const { wgs84ToGcj02 } = useProjection();
+// 底图为高德 GCJ02。前端发给后端的 viewport/center 必须是真 WGS84，
+// 因此需要 gcj02ToWgs84；后端统一把 boundary/node.center 都输出 GCJ02，
+// 前端直接 fromLonLat 即可贴合底图，不再做 wgs84ToGcj02 二次偏移。
+const { gcj02ToWgs84 } = useProjection();
 
 const MapContainer = defineAsyncComponent(() => import('../components/MapContainer.vue'));
 
@@ -268,26 +293,75 @@ const currentWebFactHint = computed(() => {
   return step?.webFactHint || null;
 });
 
+// 网页原文摘要（后端已过滤广告文案）——独立样式展示，
+// 避免混在打字机正文里让用户分不清“原文来自网页”和“地理分析结论”。
+const currentWebFactSnippet = computed(() => {
+  if (currentStepIndex.value < 0) return null;
+  const step = narrativeSteps.value[currentStepIndex.value];
+  return step?.webFactSnippet || null;
+});
 
+
+// 播放与打字机协同：
+// - autoAdvance=true：打字机完成后等 3s 自动推进到下一节点
+// - prev/next 手动切换时立即关掉 autoAdvance，不再追加定时器
+// - 节点已走完时等 3s 收尾清理 narrator panel
+const autoAdvance = ref(true);
+const isTyping = ref(false);
+const HOLD_AFTER_TYPING_MS = 3000;
 let typeInterval = null;
+let autoAdvanceTimer = null;
+
+const clearAutoAdvanceTimer = () => {
+  if (autoAdvanceTimer) {
+    clearTimeout(autoAdvanceTimer);
+    autoAdvanceTimer = null;
+  }
+};
+
 const typeText = (text) => {
   clearInterval(typeInterval);
+  clearAutoAdvanceTimer();
   typedText.value = '';
+  isTyping.value = true;
   let i = 0;
   typeInterval = setInterval(() => {
     if (i < text.length) {
       typedText.value += text[i];
       i++;
-    } else {
-      clearInterval(typeInterval);
+      return;
     }
-  }, 50); 
+    clearInterval(typeInterval);
+    isTyping.value = false;
+    if (!isPlaying.value || !autoAdvance.value) return;
+    const nextIndex = currentStepIndex.value + 1;
+    if (nextIndex < narrativeSteps.value.length) {
+      // 打字机完成 → 停留 3 秒 → 自动切换到下一个节点
+      autoAdvanceTimer = setTimeout(() => {
+        autoAdvanceTimer = null;
+        if (isPlaying.value && autoAdvance.value) {
+          currentStepIndex.value = nextIndex;
+        }
+      }, HOLD_AFTER_TYPING_MS);
+    } else {
+      // 已走到最后一步，等 3s 后收尾
+      autoAdvanceTimer = setTimeout(() => {
+        autoAdvanceTimer = null;
+        isPlaying.value = false;
+        autoAdvance.value = true;
+        currentStepIndex.value = -1;
+        currentVoiceText.value = '';
+        typedText.value = '';
+        renderNarrativeNodeBoundary(null);
+      }, HOLD_AFTER_TYPING_MS);
+    }
+  }, 50);
 };
 
 
 watch(currentVoiceText, (newVal) => {
   if (newVal) {
-    typeText(newVal.replace(/<[^>]+>/g, '')); 
+    typeText(newVal.replace(/<[^>]+>/g, ''));
   }
 });
 
@@ -378,10 +452,9 @@ function normalizeClosedBoundaryRing(ringCandidate) {
 }
 
 function toOlRingCoordinates(ringCandidate) {
-  // 后端返回的 boundary 坐标均为 WGS84（aois/landuse OSM 源），
-  // 必须先 wgs84→gcj02 再 fromLonLat，否则与高德 GCJ02 底图错位 ~500m。
+  // 后端 narrative 已统一把 boundary/node.center 输出为 GCJ02（与 POI 对齐），
+  // 前端直接 fromLonLat 投影即可贴合高德 GCJ02 底图，不再做 wgs84→gcj02。
   return normalizeClosedBoundaryRing(ringCandidate)
-    .map(([lon, lat]) => wgs84ToGcj02(lon, lat))
     .map(([lon, lat]) => fromLonLat([lon, lat]));
 }
 
@@ -437,9 +510,14 @@ function readViewportFromMap(olMap) {
   const size = olMap.getSize();
   if (!size) return null;
   const extent = olMap.getView().calculateExtent(size);
+  // 底图是高德 GCJ02，toLonLat 3857→4326 得到的仍是 GCJ02 值；
+  // 发给后端前必须 gcj02→wgs84，否则后端查 WGS84 的 AOI/landuse
+  // 会把视野整体东南偏移 ~500m，导致蓝色 boundary 对不上用户的视口。
   const bl = toLonLat([extent[0], extent[1]]);
   const tr = toLonLat([extent[2], extent[3]]);
-  return [bl[0], bl[1], tr[0], tr[1]];
+  const [blLon, blLat] = gcj02ToWgs84(bl[0], bl[1]);
+  const [trLon, trLat] = gcj02ToWgs84(tr[0], tr[1]);
+  return [blLon, blLat, trLon, trLat];
 }
 
 function buildViewportCenter(viewport) {
@@ -558,7 +636,12 @@ const onMapReady = async (olMap) => {
 };
 
 const onMapMove = (viewport) => {
-  currentViewport.value = Array.isArray(viewport) ? viewport : currentViewport.value;
+  // MapContainer 发出的 viewport 是底图 GCJ02 经纬度，需要统一到 WGS84
+  // 后再存，保证 currentViewport 的坐标系语义始终一致。
+  if (!Array.isArray(viewport) || viewport.length < 4) return;
+  const [blLon, blLat] = gcj02ToWgs84(Number(viewport[0]), Number(viewport[1]));
+  const [trLon, trLat] = gcj02ToWgs84(Number(viewport[2]), Number(viewport[3]));
+  currentViewport.value = [blLon, blLat, trLon, trLat];
 };
 
 const handleGenerate = async () => {
@@ -626,75 +709,93 @@ const renderNarrativeNodeBoundary = async (boundary) => {
   syncBoundaryLayer(narrativeNodeBoundarySource, boundary);
 };
 
+// 解析 step 的镜头目标坐标（GCJ02）。
+// 优先用 step.center（后端 narrative 已统一为 GCJ02），
+// 再回退到 fuzzyRegions / poiFeatures 的坐标，避免个别节点无 center 时镜头不动。
+const resolveStepTargetCoords = (step) => {
+  if (!step) return null;
+  const stepCenter = step.center;
+  if (stepCenter && Number.isFinite(Number(stepCenter.lon)) && Number.isFinite(Number(stepCenter.lat))) {
+    return [Number(stepCenter.lon), Number(stepCenter.lat)];
+  }
+  if (fuzzyRegions.value?.length > 0) {
+    const targetRegion = fuzzyRegions.value.find((r) =>
+      r.id === step.region_id
+      || r.name === step.focus
+      || r.candidates?.bestGuess === step.focus,
+    );
+    if (targetRegion?.center) {
+      const { lon, lat } = targetRegion.center;
+      if (Number.isFinite(Number(lon)) && Number.isFinite(Number(lat))) {
+        return [Number(lon), Number(lat)];
+      }
+    }
+  }
+  const targetPoi = poiFeatures.value.find((p) => p?.properties?.name === step.focus);
+  if (targetPoi?.geometry?.coordinates) {
+    return targetPoi.geometry.coordinates;
+  }
+  return null;
+};
+
+// 应用某一步：同步 narrator 文本 + 渲染节点边界 + 镜头飞行。
+// 由 playNarrative / goPrevStep / goNextStep 共同驱动；autoAdvance 由 typeText 负责。
+const applyStep = async (index) => {
+  if (index < 0 || index >= narrativeSteps.value.length) return;
+  clearAutoAdvanceTimer();
+  const step = narrativeSteps.value[index];
+  if (!step) return;
+  currentVoiceText.value = step.voice_text || '';
+  await renderNarrativeNodeBoundary(step);
+  if (!mapInstance.value) return;
+  const view = mapInstance.value.getView();
+  if (step.focus === 'overview') {
+    view.animate({ zoom: 14, duration: 1500 });
+    return;
+  }
+  const coords = resolveStepTargetCoords(step);
+  if (coords) {
+    view.animate({
+      center: fromLonLat(coords),
+      zoom: 16,
+      duration: 1500,
+    });
+  }
+};
+
+// currentStepIndex 变化时自动触发镜头/边界/文案同步。
+// autoAdvance 由 typeText 完成时自己推动，这里只负责"单步副作用"。
+watch(currentStepIndex, async (newIndex) => {
+  if (newIndex < 0 || !isPlaying.value) return;
+  await applyStep(newIndex);
+});
+
 const playNarrative = async () => {
   if (narrativeSteps.value.length === 0 || isPlaying.value) return;
-  
+  clearAutoAdvanceTimer();
   isPlaying.value = true;
+  autoAdvance.value = true;
   // 播放节点导览时，隐藏 viewport 外框，避免和节点边界视觉冲突
   boundaryData.value = null;
-  
-  for (let i = 0; i < narrativeSteps.value.length; i++) {
-    currentStepIndex.value = i;
-    const step = narrativeSteps.value[i];
-    currentVoiceText.value = step.voice_text;
+  // 赋值 currentStepIndex 会在下个 tick 触发 watch → applyStep，
+  // 这里不重复调用，避免 typeText 被启动两次。
+  currentStepIndex.value = 0;
+};
 
-    // 渲染该节点的模糊边界（overview 步骤会 boundary=null，自动清空上一个节点的光带）
-    await renderNarrativeNodeBoundary(step);
-    
-    
-    
-    if (step.focus !== 'overview') {
-      let targetCoords = null;
-      
-      
-      if (step.center && step.center.lon && step.center.lat) {
-        targetCoords = [step.center.lon, step.center.lat];
-      }
-      
-      
-      if (!targetCoords && fuzzyRegions.value && fuzzyRegions.value.length > 0) {
-        const targetRegion = fuzzyRegions.value.find(r => 
-          r.id === step.region_id || 
-          r.name === step.focus || 
-          (r.candidates?.bestGuess === step.focus)
-        );
-        
-        if (targetRegion && targetRegion.center) {
-          targetCoords = [targetRegion.center.lon, targetRegion.center.lat];
-        }
-      }
-      
-      
-      if (!targetCoords) {
-        const targetPoi = poiFeatures.value.find(p => p.properties.name === step.focus);
-        if (targetPoi) {
-          targetCoords = targetPoi.geometry.coordinates;
-        }
-      }
-      
-      if (targetCoords && mapInstance.value) {
-        mapInstance.value.getView().animate({
-          center: fromLonLat(targetCoords),
-          zoom: 16,
-          duration: 1500
-        });
-      }
-    } else {
-      
-      if (mapInstance.value) {
-        mapInstance.value.getView().animate({ zoom: 14, duration: 1500 });
-      }
-      
-    }
+const goPrevStep = async () => {
+  if (!isPlaying.value || narrativeSteps.value.length === 0) return;
+  if (currentStepIndex.value <= 0) return;
+  autoAdvance.value = false;
+  clearAutoAdvanceTimer();
+  currentStepIndex.value -= 1;
+};
 
-    await new Promise(resolve => setTimeout(resolve, step.duration || 5000));
-  }
-  
-  isPlaying.value = false;
-  currentStepIndex.value = -1;
-  currentVoiceText.value = '';
-  // 清理残留节点光带
-  await renderNarrativeNodeBoundary(null);
+const goNextStep = async () => {
+  if (!isPlaying.value || narrativeSteps.value.length === 0) return;
+  if (currentStepIndex.value >= narrativeSteps.value.length - 1) return;
+  autoAdvance.value = false;
+  clearAutoAdvanceTimer();
+  currentStepIndex.value += 1;
 };
 
 
@@ -1109,6 +1210,42 @@ onBeforeUnmount(() => {
     margin-top: 8px;
 }
 
+/* 网页来源摘要：独立引用块样式，强视觉区分于打字机正文与事实标签。
+   左侧加一条主题色竖线作为 quote bar，顶部 label 用小字+图标标识"来自网页"。*/
+.narrator-web-source {
+    margin-top: 12px;
+    padding: 10px 12px 10px 14px;
+    border-left: 3px solid rgba(0, 212, 255, 0.7);
+    background: rgba(0, 212, 255, 0.06);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.narrator-web-source__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(0, 212, 255, 0.85);
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+
+.narrator-web-source__icon {
+    font-size: 11px;
+}
+
+.narrator-web-source__quote {
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.78);
+    word-break: break-word;
+}
+
 .narrator-footer {
     padding: 12px 20px 16px;
     display: flex;
@@ -1122,6 +1259,44 @@ onBeforeUnmount(() => {
     font-weight: 600;
     color: rgba(255,255,255,0.35);
     letter-spacing: 0.5px;
+}
+
+.narrator-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.narrator-step-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(0, 212, 255, 0.28);
+    color: rgba(255, 255, 255, 0.78);
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s ease, color 0.2s ease, border 0.2s ease, transform 0.15s ease;
+}
+
+.narrator-step-btn:hover:not(:disabled) {
+    background: rgba(0, 212, 255, 0.18);
+    color: #ffffff;
+    border-color: rgba(0, 212, 255, 0.7);
+    transform: translateY(-1px);
+}
+
+.narrator-step-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.narrator-step-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    border-color: rgba(255, 255, 255, 0.08);
 }
 
 .typing-cursor {

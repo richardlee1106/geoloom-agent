@@ -7,10 +7,96 @@ import type {
   NarrativeTourTransition,
   NarrativeViewportSummary,
 } from './types.js'
+import {
+  transformGeoJsonCoordinatesWgs84ToGcj02,
+  wgs84ToGcj02,
+} from './gcj02.js'
+
+/**
+ * Name 关键字词典：OSM landuse fclass 常把政府/党政/法院/学校等随手标为 `commercial`，
+ * 导致“中共湖北省委员会”这类 POI 被推断成 commercial_anchor 、roleLabel 写成“商业街区”。
+ * 用 name 词典在 classifyRepresentativeAnchorType 之前提前拦截，把 role 切到专属锪点。
+ */
+const CIVIC_NAME_PATTERN = /(党委|党政|人民政府|市政府|区政府|县政府|镇政府|街道办事处|街道办|人民代表大会|政协|党校|新闻办公室|公安(?:分?局)|派出所|消防(?:局|大队)|人民法院|人民检察院|法院|检察院|司法局|纪委|监委|管理委员会|政务服务中心|党群服务中心|社会保障局|民政局|税务局|交通局|规划局|教育局|卫生健康委员会|卫健委|中共.{0,8}委员会|中共.{0,8}省委|中共.{0,8}市委|中共.{0,8}区委)/u
+
+const CULTURE_NAME_PATTERN = /(博物馆|纪念馆|展览馆|文化馆|艺术馆|美术馆|图书馆|科技馆|规划馆|展览中心|剧院|大剧院|音乐厅|文化中心|文化广场|文化城|遗址公园|文保单位|文物)/u
+
+const RELIGION_NAME_PATTERN = /(寺(?:院)?|庙|神社|教堂|道观|清真寺|清真堂|佛堂|禅寺|归元寺|宝通寺)/u
+
+const MEDICAL_NAME_PATTERN = /(人民医院|中医院|妇幼保健院|急救中心|疾控中心|卫生院|社区卫生服务中心|医院(?:总部|分院|门诊部)?|门诊部|防疫站)/u
+
+/** OSM landuse fclass 英文代码 → 中文可读名。外补会在 zhFriendlyCategory 中基于 name 关键字覆写。*/
+const OSM_FCLASS_ZH: Record<string, string> = {
+  commercial: '商业用地',
+  residential: '居住社区',
+  industrial: '工业用地',
+  retail: '零售地块',
+  park: '公园绿地',
+  forest: '林地',
+  farmland: '农田',
+  meadow: '草地',
+  grass: '绿地',
+  scrub: '灌木地',
+  orchard: '果园',
+  cemetery: '陵园',
+  recreation_ground: '活动场地',
+  allotments: '菜地',
+  heath: '灌木地',
+  quarry: '采石场',
+  military: '军事管理区',
+  reservoir: '水库',
+  basin: '泄洪区',
+  water: '水体',
+  nature_reserve: '自然保护区',
+  village_green: '社区绿地',
+  university: '高校用地',
+  college: '高校用地',
+  school: '教育用地',
+}
+
+/**
+ * 从 name 词典推断专属锪点 role；命中则覆盖 fclass 级分类，避免政务/文化被当成 commercial。
+ * 返回 null 表示 name 未命中任何专属锪点，由调用方继续走 fclass / anchor type 原逻辑。
+ */
+export function resolveRoleFromCivicName(name: string): string | null {
+  if (!name) return null
+  if (MEDICAL_NAME_PATTERN.test(name)) return 'medical_anchor'
+  if (CIVIC_NAME_PATTERN.test(name)) return 'civic_anchor'
+  if (CULTURE_NAME_PATTERN.test(name)) return 'culture_anchor'
+  if (RELIGION_NAME_PATTERN.test(name)) return 'religious_anchor'
+  return null
+}
+
+/**
+ * 把节点的原始 category（可能是 OSM 英文 fclass）转成前端可读的中文。
+ * 优先级：name 关键字 → OSM_FCLASS_ZH 字典 → 中文原值 → roleLabel 兆底
+ * ——注意：只用于 voice_text / 用户展示，不替换 node.categorySub 存储。
+ */
+export function zhFriendlyCategory(node: NarrativeNode): string {
+  const name = String(node.name || '')
+  if (CIVIC_NAME_PATTERN.test(name)) return '政务办公区'
+  if (CULTURE_NAME_PATTERN.test(name)) return '文化场馆'
+  if (RELIGION_NAME_PATTERN.test(name)) return '宗教场所'
+  if (MEDICAL_NAME_PATTERN.test(name)) return '医疗配套'
+  const raw = String(node.categorySub || node.categoryMain || '').trim().toLowerCase()
+  if (raw && OSM_FCLASS_ZH[raw]) return OSM_FCLASS_ZH[raw]
+  if (raw && /[\u4e00-\u9fff]/u.test(raw)) return raw
+  return node.roleLabel || '区域实体'
+}
+
+/** 与 NarrativeRuntime 保持一致的 WGS84 边界源集合。 */
+const WGS84_BOUNDARY_SOURCES = new Set<NarrativeNodeBoundary['source']>([
+  'aoi_native',
+  'landuse_parcel',
+  'road_block',
+  'concave_hull',
+  'buffer',
+])
 
 /**
  * 解析 PostGIS ST_AsGeoJSON 字符串为节点模糊边界。
  * 与 NarrativeRuntime 里同名函数保持一致实现，便于纯函数场景使用。
+ * 对 WGS84 来源自动做 GCJ02 转换，使后端 narrative 输出统一为 GCJ02。
  */
 function parseBoundaryGeoJsonFromRow(
   value: unknown,
@@ -25,9 +111,12 @@ function parseBoundaryGeoJsonFromRow(
     const type = String(parsed.type || '')
     if (type !== 'Polygon' && type !== 'MultiPolygon') return null
     if (!Array.isArray(parsed.coordinates) || parsed.coordinates.length === 0) return null
+    const normalizedCoordinates = WGS84_BOUNDARY_SOURCES.has(source)
+      ? transformGeoJsonCoordinatesWgs84ToGcj02(parsed.coordinates)
+      : parsed.coordinates
     return {
       type: type as NarrativeNodeBoundary['type'],
-      coordinates: parsed.coordinates as NarrativeNodeBoundary['coordinates'],
+      coordinates: normalizedCoordinates as NarrativeNodeBoundary['coordinates'],
       source,
     }
   } catch {
@@ -103,6 +192,9 @@ export function resolveRoleLabel(role: string) {
   if (role === 'food_street_anchor') return '小吃街区'
   if (role === 'transit_connector') return '交通节点'
   if (role === 'local_life_anchor') return '本地生活'
+  if (role === 'civic_anchor') return '政务配套'
+  if (role === 'culture_anchor') return '文化场馆'
+  if (role === 'religious_anchor') return '宗教场所'
   return '片区节点'
 }
 
@@ -110,14 +202,20 @@ export function resolveRoleWeight(role: string) {
   if (role === 'scenic_landmark') return 0.96
   if (role === 'commercial_anchor') return 0.88
   if (role === 'food_street_anchor') return 0.86
+  if (role === 'culture_anchor') return 0.84
   if (role === 'campus_anchor') return 0.82
   if (role === 'medical_anchor') return 0.78
   if (role === 'local_life_anchor') return 0.76
+  if (role === 'civic_anchor') return 0.7
+  if (role === 'religious_anchor') return 0.68
   if (role === 'transit_connector') return 0.6
   return 0.52
 }
 
 export function resolveNodeRoleFromPoi(item: EvidenceItem) {
+  // name 词典优先：政务/文化/宗教/医疗直接走专属锪点，避免 fclass 为 commercial 时被误分
+  const civicRole = resolveRoleFromCivicName(String(item.name || ''))
+  if (civicRole) return civicRole
   const anchorType = classifyRepresentativeAnchorType({
     name: item.name,
     categoryMain: item.categoryMain,
@@ -137,14 +235,17 @@ export function resolveNodeRoleFromPoi(item: EvidenceItem) {
 }
 
 export function resolveNodeRoleFromAoi(item: Record<string, unknown>) {
+  const name = normalizeName(item.name)
+  // name 词典优先：例如“中共湖北省委员会”被 OSM landuse 标为 commercial，先按名字关键字覆写
+  const civicRole = resolveRoleFromCivicName(name)
+  if (civicRole) return civicRole
   const anchorType = classifyRepresentativeAnchorType({
-    name: normalizeName(item.name),
+    name,
     fclass: String(item.fclass || '').trim() || null,
   })
   if (anchorType === 'scenic') return 'scenic_landmark'
   if (anchorType === 'medical') return 'medical_anchor'
   if (anchorType === 'campus') {
-    const name = normalizeName(item.name)
     const fclass = String(item.fclass || '').trim().toLowerCase()
     return !isVocationalEducationName(name) && (isUniversityCampusName(name) || fclass === 'university' || fclass === 'college')
       ? 'campus_anchor'
@@ -156,6 +257,12 @@ export function resolveNodeRoleFromAoi(item: Record<string, unknown>) {
 }
 
 function inferNodeSceneBucket(node: NarrativeNode) {
+  // name 关键字优先：政务/文化/宗教 不该因 fclass=commercial 被杂进商业 bucket
+  const name = String(node.name || '')
+  if (CIVIC_NAME_PATTERN.test(name)) return '政务'
+  if (CULTURE_NAME_PATTERN.test(name)) return '文化'
+  if (RELIGION_NAME_PATTERN.test(name)) return '宗教'
+
   const text = [
     node.sceneBucket,
     node.encoderSummary,
@@ -166,7 +273,8 @@ function inferNodeSceneBucket(node: NarrativeNode) {
   ].filter(Boolean).join(' ')
 
   if (/(小吃街|美食街|夜市|food_street|street_food)/iu.test(text)) return '小吃'
-  if (/(景观|景区|滨水|湖|公园|风景|博物馆|纪念馆|展览馆|文化馆|艺术馆|scenic|park|museum|water)/iu.test(text)) return '景观'
+  if (/(景观|景区|滨水|湖|公园|风景|scenic|park|water)/iu.test(text)) return '景观'
+  if (/(博物馆|纪念馆|展览馆|文化馆|艺术馆|美术馆|图书馆|科技馆|museum|library)/iu.test(text)) return '文化'
   if (/(医疗|医院|医学院|附属|clinic|hospital|medical|healthcare)/iu.test(text)) return '医疗'
   if (/(校园|高校|大学|学院|education|campus)/iu.test(text)) return '校园'
   if (/(商业|商圈|零售|购物|retail|mall|commercial)/iu.test(text)) return '商业'
@@ -177,6 +285,9 @@ function inferNodeSceneBucket(node: NarrativeNode) {
 
 function matchesSceneBucket(sceneLabel: string, bucket: string) {
   if (bucket === '景观') return /景观|滨水|风景|公园/u.test(sceneLabel)
+  if (bucket === '文化') return /文化|博物|纪念馆|展览|艺术/u.test(sceneLabel)
+  if (bucket === '宗教') return /宗教|寺|庙|教堂/u.test(sceneLabel)
+  if (bucket === '政务') return /政务|政府|委员会|党政/u.test(sceneLabel)
   if (bucket === '医疗') return /医疗|医院|卫生/u.test(sceneLabel)
   if (bucket === '校园') return /校园|高校/u.test(sceneLabel)
   if (bucket === '商业') return /商业/u.test(sceneLabel)
@@ -188,6 +299,9 @@ function matchesSceneBucket(sceneLabel: string, bucket: string) {
 
 function resolveSceneBucketLead(bucket: string) {
   if (bucket === '景观') return '景观地标'
+  if (bucket === '文化') return '文化人文'
+  if (bucket === '宗教') return '宗教人文'
+  if (bucket === '政务') return '政务办公'
   if (bucket === '医疗') return '医疗配套'
   if (bucket === '校园') return '校园人文'
   if (bucket === '商业') return '商业休闲'
@@ -214,9 +328,9 @@ function hasStableRepresentativeSupport(node: NarrativeNode) {
 }
 
 function resolveBucketOrder(mode: string) {
-  if (mode === 'campus_to_commerce') return ['景观', '商业', '小吃', '生活', '校园', '医疗', '交通', '片区']
-  if (mode === 'district_sweep') return ['商业', '小吃', '景观', '生活', '校园', '医疗', '交通', '片区']
-  return ['景观', '商业', '小吃', '生活', '校园', '医疗', '交通', '片区']
+  if (mode === 'campus_to_commerce') return ['景观', '文化', '宗教', '商业', '小吃', '生活', '校园', '医疗', '政务', '交通', '片区']
+  if (mode === 'district_sweep') return ['商业', '小吃', '景观', '文化', '宗教', '生活', '校园', '医疗', '政务', '交通', '片区']
+  return ['景观', '文化', '宗教', '商业', '小吃', '生活', '校园', '医疗', '政务', '交通', '片区']
 }
 
 function topEncoderTagScore(node: NarrativeNode) {
@@ -233,13 +347,16 @@ function buildSelectionReason(node: NarrativeNode, summary: NarrativeViewportSum
   if (roleLabel === '景区地标') {
     const topTag = (node.encoderTags || []).find((item) => Number(item.score || 0) >= 0.72)
     const tagHint = topTag?.label ? `，${topTag.label}特色突出` : ''
-    return `${node.name}是这片区域的核心${roleLabel}，代表"${lead}"导览主线${tagHint}。`
+    return `${node.name}是这片区域的核心${roleLabel}，代表“${lead}”导览主线${tagHint}。`
   }
-  if (roleLabel === '高校锚点') return `${node.name}是区域核心${roleLabel}，代表"${lead}"导览主线。`
-  if (roleLabel === '医疗配套') return `${node.name}是区域重要${roleLabel}，代表"${lead}"导览主线。`
-  if (roleLabel === '商业街区') return `${node.name}是区域核心${roleLabel}，代表"${lead}"导览主线。`
-  if (roleLabel === '小吃街区') return `${node.name}是区域特色${roleLabel}，代表"${lead}"导览主线。`
-  if (roleLabel === '本地生活') return `${node.name}是区域日常${roleLabel}节点，补足"${lead}"导览主线。`
+  if (roleLabel === '高校锚点') return `${node.name}是区域核心${roleLabel}，代表“${lead}”导览主线。`
+  if (roleLabel === '医疗配套') return `${node.name}是区域重要${roleLabel}，代表“${lead}”导览主线。`
+  if (roleLabel === '商业街区') return `${node.name}是区域核心${roleLabel}，代表“${lead}”导览主线。`
+  if (roleLabel === '小吃街区') return `${node.name}是区域特色${roleLabel}，代表“${lead}”导览主线。`
+  if (roleLabel === '本地生活') return `${node.name}是区域日常${roleLabel}节点，补足“${lead}”导览主线。`
+  if (roleLabel === '政务配套') return `${node.name}是这片区域的${roleLabel}中枢，补足“${lead}”导览主线。`
+  if (roleLabel === '文化场馆') return `${node.name}是区域核心${roleLabel}，代表“${lead}”导览主线。`
+  if (roleLabel === '宗教场所') return `${node.name}是这片区域的${roleLabel}，承载“${lead}”导览主线。`
 
   // 非锚点角色：有高分 encoder 标签时补充语义
   const topTag = (node.encoderTags || []).find((item) => Number(item.score || 0) >= 0.72)
@@ -483,13 +600,15 @@ export function buildNarrativeCandidates(input: {
     const weight = Number(item.population || item.area_sqm || item.areaSqm || 1)
     const scaleBonus = Math.min(Math.log10(Math.max(weight, 1) + 1) / 10, 0.18)
     const boundary = parseBoundaryGeoJsonFromRow(item.boundary_geojson, 'aoi_native')
+    // AOI centroid 来自 aois 表（WGS84），转 GCJ02 与 POI/前端底图对齐
+    const [gcjLon, gcjLat] = wgs84ToGcj02(lon, lat)
     nodes.push({
       id: `aoi:${String(item.id ?? name)}`,
       name,
       role,
       roleLabel: resolveRoleLabel(role),
       source: 'aoi_context',
-      center: { lon, lat },
+      center: { lon: gcjLon, lat: gcjLat },
       score: Number((resolveRoleWeight(role) + 0.24 + scaleBonus).toFixed(3)),
       categoryMain: null,
       categorySub: String(item.fclass || '').trim() || null,
@@ -598,21 +717,34 @@ export function buildNarrativeTransitions(nodes: NarrativeNode[]) {
 
 function buildNodeVoiceText(node: NarrativeNode, transition?: NarrativeTourTransition | null) {
   const intro = transition ? `${transition.rationale} 接着看 ${node.name}。` : `先看 ${node.name}。`
-  const categoryText = node.categorySub || node.categoryMain || node.roleLabel
+  // 将 OSM fclass 英文分类 中文化，并对政务/文化/宗教/医疗用 name 词典覆写，
+  // 避免 voice_text 出现“commercial 代表点”这类中英文混合 / 分类错误的描述。
+  const categoryText = zhFriendlyCategory(node)
   const reasonText = node.selectionReason || node.encoderSummary || `${node.name}是这片区域里比较有代表性的${node.roleLabel}。`
   const factLabels = (node.webFacts?.labels || []).length > 0 ? `（${node.webFacts!.labels.join('、')}）` : ''
-  const factSnippet = (node.webFacts?.snippets || []).length > 0 ? node.webFacts!.snippets[0] : ''
-  const factSuffix = factSnippet ? ` ${factSnippet}` : ''
-  return `${intro}${node.name}更像这里的“${categoryText}”代表点${factLabels}。${reasonText}${factSuffix}`
+  // factSnippet 不再拼接进 voice_text，改由前端 narrator 卡片用独立底色展示（标识为网页来源），
+  // 配合 webFactHint 规范化 UI。打字机正文只保留事实标签。
+  return `${intro}${node.name}更像这里的“${categoryText}”代表点${factLabels}。${reasonText}`
 }
 
+/**
+ * 给前端卡片提供的短 fact badge：只拼 labels，不再混入网页摘要原文，
+ * 摘要原文改走 `webFactSnippet` 字段，前端用独立样式标识为"网页来源"。
+ */
 function buildWebFactHint(node: NarrativeNode) {
   const labels = node.webFacts?.labels || []
+  if (labels.length === 0) return null
+  return labels.join('·')
+}
+
+/**
+ * 网页原文摘要（已在后端滤掉广告文案），独立字段供前端用单独底色/引用样式展示。
+ * 限 120 字，拿一条即可，缺失返回 null。
+ */
+function buildWebFactSnippet(node: NarrativeNode) {
   const snippet = (node.webFacts?.snippets || [])[0] || null
-  if (labels.length === 0 && !snippet) return null
-  const labelPart = labels.length > 0 ? labels.join('·') : ''
-  const snippetPart = snippet ? snippet.slice(0, 60) : ''
-  return [labelPart, snippetPart].filter(Boolean).join(' — ')
+  if (!snippet) return null
+  return snippet.length > 120 ? snippet.slice(0, 120) + '…' : snippet
 }
 
 export function buildNarrativeSteps(input: {
@@ -642,6 +774,7 @@ export function buildNarrativeSteps(input: {
       hotness: node.hotness,
       tagline: node.selectionReason || node.encoderSummary || null,
       webFactHint: buildWebFactHint(node),
+      webFactSnippet: buildWebFactSnippet(node),
       boundary: node.boundary || null,
     })
   }

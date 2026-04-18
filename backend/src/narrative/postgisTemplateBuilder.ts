@@ -14,6 +14,7 @@ export type NarrativeAreaTemplateName =
   | 'area_regional_brand_pool'
   | 'area_landuse_boundaries'
   | 'narrative_aggregate_boundary'
+  | 'narrative_keyword_parcel_union'
 
 const TEMPLATE_ROOT = resolveResourceUrl(import.meta.url, [
   '../skills/postgis/templates/',
@@ -30,6 +31,7 @@ const TEMPLATE_FILE_MAP: Record<NarrativeAreaTemplateName, string> = {
   area_regional_brand_pool: 'areaRegionalBrandPool.sql',
   area_landuse_boundaries: 'areaLanduseBoundaries.sql',
   narrative_aggregate_boundary: 'narrativeAggregateBoundary.sql',
+  narrative_keyword_parcel_union: 'narrativeKeywordParcelUnion.sql',
 }
 
 const templateCache = new Map<NarrativeAreaTemplateName, string>()
@@ -106,6 +108,17 @@ export function buildViewportDiagonalM(viewport: NarrativeViewport) {
   return 6371000 * c
 }
 
+/**
+ * 把用户输入或节点名字转成安全的 SQL 单引号字面量内部。
+ * —— `stripStringLiterals` 会在 validator 阶段把整个字符串洗掉，但真实执行还是会
+ * 带着 keyword 进库，所以必须把 `'` 转义成 `''` 避免跨包。
+ * 同时统一 trim 掉两端空白、截断过长输入（防 ILIKE 性能摸痱）。
+ */
+export function sanitizeKeywordLiteral(keyword: string): string {
+  const trimmed = String(keyword || '').trim().slice(0, 40)
+  return trimmed.replace(/'/g, "''")
+}
+
 export function buildNarrativeAreaTemplateSql(input: {
   templateName: NarrativeAreaTemplateName
   viewport: NarrativeViewport
@@ -113,6 +126,10 @@ export function buildNarrativeAreaTemplateSql(input: {
   limit?: number
   /** 聚合边界生成所需的成员点集（WGS84），用于 MEMBER_POINTS token */
   memberPoints?: NarrativePoint[]
+  /** 关键字驱动地块合并的索引词（已 sanitize）*/
+  keyword?: string
+  /** BFS 邻接扩散半径（米），仅 narrative_keyword_parcel_union 使用 */
+  searchRadiusM?: number
 }) {
   const template = loadTemplate(input.templateName)
   const viewport = input.viewport
@@ -136,6 +153,12 @@ export function buildNarrativeAreaTemplateSql(input: {
     ? `MULTIPOINT(${input.memberPoints.map((pt) => `${formatNumber(pt.lon)} ${formatNumber(pt.lat)}`).join(', ')})`
     : ''
 
+  // 关键字驱动地块合并专用参数：不涉及其他模板的输出格式。
+  const keywordLiteral = sanitizeKeywordLiteral(input.keyword || '')
+  const searchRadiusM = Number.isFinite(Number(input.searchRadiusM))
+    ? Math.max(50, Math.min(Math.round(Number(input.searchRadiusM)), 5000))
+    : 500
+
   return replaceTokens(template, {
     AREA_FILTER: areaFilter,
     AREA_GEOMETRY: areaGeometry,
@@ -146,6 +169,8 @@ export function buildNarrativeAreaTemplateSql(input: {
     CELL_SIZE_DEG: formatNumber(cellSizeDeg, 10),
     LIMIT: String(limit),
     MEMBER_POINTS: memberPointsWkt,
+    KEYWORD: keywordLiteral,
+    SEARCH_RADIUS_M: String(searchRadiusM),
     VIEWPORT_MIN_LON: formatNumber(viewport.swLon),
     VIEWPORT_MIN_LAT: formatNumber(viewport.swLat),
     VIEWPORT_TILE_WIDTH: formatNumber(tileWidth, 10),
