@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
+import { wgs84ToGcj02 } from './gcj02.js'
 import type { NarrativePoint, NarrativeViewport } from './types.js'
 
 export type NarrativeAreaTemplateName =
@@ -14,6 +15,7 @@ export type NarrativeAreaTemplateName =
   | 'area_regional_brand_pool'
   | 'area_landuse_boundaries'
   | 'narrative_aggregate_boundary'
+  | 'narrative_keyword_road_block_union'
   | 'narrative_keyword_parcel_union'
 
 const TEMPLATE_ROOT = resolveResourceUrl(import.meta.url, [
@@ -31,6 +33,7 @@ const TEMPLATE_FILE_MAP: Record<NarrativeAreaTemplateName, string> = {
   area_regional_brand_pool: 'areaRegionalBrandPool.sql',
   area_landuse_boundaries: 'areaLanduseBoundaries.sql',
   narrative_aggregate_boundary: 'narrativeAggregateBoundary.sql',
+  narrative_keyword_road_block_union: 'narrativeKeywordRoadBlockUnion.sql',
   narrative_keyword_parcel_union: 'narrativeKeywordParcelUnion.sql',
 }
 
@@ -84,14 +87,19 @@ export function buildViewportCenter(viewport: NarrativeViewport): NarrativePoint
 }
 
 export function buildViewportBoundary(viewport: NarrativeViewport) {
+  // narrative 对前端输出统一走 GCJ02，和高德底图保持同一坐标系。
+  const [swLon, swLat] = wgs84ToGcj02(viewport.swLon, viewport.swLat)
+  const [seLon, seLat] = wgs84ToGcj02(viewport.neLon, viewport.swLat)
+  const [neLon, neLat] = wgs84ToGcj02(viewport.neLon, viewport.neLat)
+  const [nwLon, nwLat] = wgs84ToGcj02(viewport.swLon, viewport.neLat)
   return {
     type: 'Polygon' as const,
     coordinates: [[
-      [viewport.swLon, viewport.swLat],
-      [viewport.neLon, viewport.swLat],
-      [viewport.neLon, viewport.neLat],
-      [viewport.swLon, viewport.neLat],
-      [viewport.swLon, viewport.swLat],
+      [swLon, swLat],
+      [seLon, seLat],
+      [neLon, neLat],
+      [nwLon, nwLat],
+      [swLon, swLat],
     ]],
   }
 }

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildNarrativeAreaTemplateSql,
+  buildViewportBoundary,
   sanitizeKeywordLiteral,
 } from '../../../src/narrative/postgisTemplateBuilder.js'
+import { wgs84ToGcj02 } from '../../../src/narrative/gcj02.js'
 import type { NarrativeViewport } from '../../../src/narrative/types.js'
 
 // 覆盖武汉洪山视野的一个典型 viewport（WGS84）。
@@ -92,5 +94,42 @@ describe('buildNarrativeAreaTemplateSql - narrative_keyword_parcel_union', () =>
     // 字面量仍然闭合（等号数量为偶数）
     const quoteCount = (sql.match(/'/gu) || []).length
     expect(quoteCount % 2).toBe(0)
+  })
+})
+
+describe('buildNarrativeAreaTemplateSql - narrative_keyword_road_block_union', () => {
+  it('把关键字和路网闭合地块探索结构正确注入 SQL 模板', () => {
+    const sql = buildNarrativeAreaTemplateSql({
+      templateName: 'narrative_keyword_road_block_union',
+      viewport: VIEWPORT,
+      keyword: '湖北大学',
+      searchRadiusM: 500,
+      limit: 1,
+    })
+
+    expect(sql).toContain("p.name ILIKE '%湖北大学%'")
+    expect(sql).toContain('FROM road_blocks b')
+    expect(sql).toContain("'road_block' AS source")
+    expect(sql).toContain('ST_DWithin(b.geom::geography, s.geom::geography, 500)')
+    expect(sql).toMatch(/ST_Contains/u)
+    expect(sql).toMatch(/ST_Intersects/u)
+    expect(sql).toMatch(/ST_Union/u)
+    expect(sql).toMatch(/LIMIT 1/u)
+  })
+})
+
+describe('buildViewportBoundary', () => {
+  it('把 WGS84 viewport 四角转换成 GCJ02，供前端直接贴合高德底图', () => {
+    const boundary = buildViewportBoundary(VIEWPORT)
+    const ring = boundary.coordinates[0]
+    const [expectedSwLon, expectedSwLat] = wgs84ToGcj02(VIEWPORT.swLon, VIEWPORT.swLat)
+    const [expectedNeLon, expectedNeLat] = wgs84ToGcj02(VIEWPORT.neLon, VIEWPORT.neLat)
+
+    expect(ring[0]?.[0]).toBeCloseTo(expectedSwLon, 8)
+    expect(ring[0]?.[1]).toBeCloseTo(expectedSwLat, 8)
+    expect(ring[2]?.[0]).toBeCloseTo(expectedNeLon, 8)
+    expect(ring[2]?.[1]).toBeCloseTo(expectedNeLat, 8)
+    expect(ring[0]?.[0]).not.toBeCloseTo(VIEWPORT.swLon, 4)
+    expect(ring[0]?.[1]).not.toBeCloseTo(VIEWPORT.swLat, 4)
   })
 })

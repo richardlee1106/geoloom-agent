@@ -11,7 +11,7 @@ WITH source AS (
     ST_Distance(geom::geography, {{POINT_GEOGRAPHY}}) AS distance_m,
     CASE
       WHEN COALESCE(name, '') ~ '(大学|学院)'
-        AND COALESCE(name, '') !~ '(小学|中学|幼儿园|附小|附中|实验学校|国际学校|九年一贯制)'
+        AND COALESCE(name, '') !~ '(小学|中学|幼儿园|附小|附中|实验学校|国际学校|九年一贯制|老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院|神学院|佛学院|道学院|修道院|修院|神哲学院)'
         THEN 'campus'
       WHEN COALESCE(category_sub, '') IN ('景点', '景区', '风景区', '公园', '旅游景点', '名胜古迹')
         OR COALESCE(name, '') ~ '(风景区|景区|景点|旅游区|文化园|国家公园|湿地公园|森林公园|植物园|动物园|公园|博物馆|纪念馆|名胜|古迹)'
@@ -19,7 +19,7 @@ WITH source AS (
       WHEN COALESCE(name, '') ~ '(小吃街|美食街|夜市|美食广场|美食城|大排档)'
         THEN 'food_street'
       WHEN COALESCE(category_sub, '') IN ('购物中心', '商场', '商业街', '步行街', '广场')
-        OR COALESCE(name, '') ~ '(商圈|步行街|商业街|购物中心|购物广场|奥特莱斯|奥莱|商业广场|天地)'
+        OR COALESCE(name, '') ~* '(商圈|步行街|商业街|购物中心|购物广场|奥特莱斯|奥莱|商业广场|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|K11|SKP|Mall|Plaza)'
         THEN 'commercial'
       ELSE NULL
     END AS brand_bucket

@@ -24,12 +24,12 @@ WITH tiled_aoi AS (
       )
     )::int AS tile_y,
     CASE
-      WHEN ((COALESCE(name, '') ~ '(大学|学院|高校|校区)' AND COALESCE(name, '') !~ '(小学|中学|幼儿园|附小|附中|实验学校|国际学校)')
+      WHEN ((COALESCE(name, '') ~ '(大学|学院|高校|校区)' AND COALESCE(name, '') !~ '(小学|中学|幼儿园|附小|附中|实验学校|国际学校|老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院|神学院|佛学院|道学院|修道院|修院|神哲学院)')
         OR COALESCE(fclass, '') IN ('university', 'college')) THEN 0
       WHEN COALESCE(name, '') ~ '(景区|景点|风景区|旅游区|公园|湖|江|河|湿地)'
         OR COALESCE(fclass, '') IN ('scenic', 'park', 'tourism', 'water', 'wetland', 'forest', 'nature_reserve', 'reservoir', 'lake', 'river') THEN 1
-      WHEN COALESCE(name, '') ~ '(商圈|步行街|广场|购物中心|商业街|商场)' OR COALESCE(fclass, '') IN ('commercial', 'mall', 'retail') THEN 2
-      WHEN COALESCE(name, '') ~ '地铁站' OR COALESCE(fclass, '') IN ('station', 'metro_station', 'subway_station') THEN 3
+      WHEN COALESCE(name, '') ~* '(商圈|步行街|广场|购物中心|商业街|商场|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|K11|SKP|Mall|Plaza)' OR COALESCE(fclass, '') IN ('commercial', 'mall', 'retail') THEN 2
+      WHEN COALESCE(name, '') ~ '(地铁站|换乘站|轨道交通)' OR COALESCE(fclass, '') IN ('station', 'metro_station', 'subway_station') THEN 3
       ELSE 9
     END AS anchor_priority
   FROM aois

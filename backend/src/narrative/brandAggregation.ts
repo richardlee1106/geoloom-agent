@@ -12,12 +12,13 @@ export interface BrandCluster {
 }
 
 // 高校排除规则：把中小学、幼儿园、附属学校从 campus 中剔除
-const CAMPUS_EXCLUDE = /(小学|中学|幼儿园|附小|附中|实验学校|国际学校|九年一贯制|职业学院|职业技术学院|职业大学|职业学校|职业技术学校|高等专科学校|专科学校|高职|中专|中等专业学校|技师学院|技工学校)/u
+const CAMPUS_EXCLUDE = /(小学|中学|幼儿园|附小|附中|实验学校|国际学校|九年一贯制|职业学院|职业技术学院|职业大学|职业学校|职业技术学校|高等专科学校|专科学校|高职|中专|中等专业学校|技师学院|技工学校|老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院|神学院|佛学院|道学院|修道院|修院|神哲学院)/u
 const LEADING_NOISE_OPERATOR = /^(怪兽充电|街电|来电|小电|美团充电|搜电|星星充电|汽车充电站|充电站|充电桩|峰泊|云快充|特来电)/u
 const SUPPORT_TAIL_NOISE = /^(停车场|停车楼|洗车场|充电站|充电桩|服务中心|游客中心|管理处|售票处|出入口|入口|出口|门岗|门卫|东门|西门|南门|北门|[东西南北]?[0-9一二三四五六七八九十]+号门|座椅|岗亭)/u
-const CAMPUS_TAIL_NOISE = /^(医院|医疗|门诊|校友会|通讯|专营店|零食仓|青年旅舍|不动产|酒店|宾馆|超市|餐厅|便利店|书店|奶茶|咖啡|烤肉|充电|停车场|洗车|驿站|快递|代理|营业部|商行|琴行|舞蹈|练字|培训|驾校|美容|药店|银行|打印|眼镜|档案室|办公室|管理处|服务中心|招生办|教务处|保卫处|后勤处)/u
+const CAMPUS_TAIL_NOISE = /^(医院|医疗|门诊|校友会|通讯|专营店|零食仓|青年旅舍|不动产|酒店|宾馆|超市|餐厅|便利店|书店|奶茶|咖啡|烤肉|充电|停车场|洗车|驿站|快递|代理|营业部|商行|琴行|舞蹈|练字|培训|驾校|美容|药店|银行|打印|眼镜|档案室|办公室|管理处|服务中心|管理服务中心|管理中心|运营中心|招生办|教务处|保卫处|后勤处)$/u
+const CAMPUS_RESIDENTIAL_CONTAINS = /(小区|家属区|家属院|社区|住宅区|居民区|生活区|新村|宿舍区)/u
 // 非锚定医疗噪声：remainder 中任意位置出现医学院/附属医院等 → 不是校园实体
-const CAMPUS_MEDICAL_CONTAINS = /医学院|附属医院|附属.*医院|临床学院/u
+const CAMPUS_MEDICAL_CONTAINS = /医学院|医学部|附属医院|附属.*医院|临床学院|护理学院|药学院|公共卫生学院|口腔医学院|口腔医院/u
 
 function stripTrailingBracketSuffix(text: string) {
   return text
@@ -56,7 +57,7 @@ export function extractBrandFromName(name: string): { brand: string | null, type
     if (match && !CAMPUS_EXCLUDE.test(match[1])) {
       const brand = sanitizeBrand(match[1])
       const remainder = normalizeRemainder(text.slice(match[1].length))
-      if (brand && !CAMPUS_TAIL_NOISE.test(remainder) && !CAMPUS_MEDICAL_CONTAINS.test(remainder)) {
+      if (brand && !CAMPUS_TAIL_NOISE.test(remainder) && !CAMPUS_RESIDENTIAL_CONTAINS.test(remainder) && !CAMPUS_MEDICAL_CONTAINS.test(remainder)) {
         return { brand, type: 'campus' }
       }
     }
@@ -83,7 +84,7 @@ export function extractBrandFromName(name: string): { brand: string | null, type
   }
 
   // 商业街 / 购物中心
-  const commercial = text.match(/^(.{2,12}?(?:步行街|商业街|商圈|购物中心|购物广场|商业广场|奥特莱斯|奥莱|天地))/u)
+  const commercial = text.match(/^(.{2,16}?(?:步行街|商业街|商圈|购物中心|购物广场|商业广场|商场|广场|奥特莱斯|奥莱|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|K11|SKP|Mall|Plaza))/iu)
   if (commercial) {
     const brand = sanitizeBrand(commercial[1])
     const remainder = normalizeRemainder(text.slice(commercial[1].length))

@@ -244,6 +244,7 @@ const map = ref(null);
 const isBaseLayerReady = ref(false);
 let baseLayerStatusKeys = [];
 let baseLayerReadyTimeoutId = null;
+let mapResizeObserver = null;
 
 let drawInteraction = null;
 // 注释说明
@@ -665,6 +666,11 @@ function markBaseLayerReady() {
   clearBaseLayerStatusWatchers();
 }
 
+function refreshMapSize() {
+  if (!map.value) return;
+  map.value.updateSize();
+}
+
 onMounted(() => {
   // 注释说明
   const amapKey = import.meta.env.VITE_AMAP_KEY || '2b42a2f72ef6751f2cd7c7bd24139e72';
@@ -706,9 +712,22 @@ onMounted(() => {
   rebuildPoiOlFeatures();
   syncUserLocationOverlay(props.userLocation);
 
+  if (typeof ResizeObserver !== 'undefined' && mapContainer.value) {
+    mapResizeObserver = new ResizeObserver(() => {
+      refreshMapSize();
+      schedulePopupPosition();
+    });
+    mapResizeObserver.observe(mapContainer.value);
+  }
 
   nextTick(() => {
-    emit('map-ready', map.value);
+    requestAnimationFrame(() => {
+      refreshMapSize();
+      requestAnimationFrame(() => {
+        refreshMapSize();
+        emit('map-ready', map.value);
+      });
+    });
   });
 });
 
@@ -757,11 +776,6 @@ function debounce(func, wait) {
     timeout = setTimeout(() => func.apply(context, args), wait);
   };
 }
-
-
-const emitHover = debounce((feature) => {
-  emit('hover-feature', feature);
-}, 50); // 注释说明
 
 /**
  *
@@ -902,6 +916,10 @@ onBeforeUnmount(() => {
   setBoundaryInteractionMode(false);
   destroyDeckBridge();
   clearBaseLayerStatusWatchers();
+  if (mapResizeObserver) {
+    mapResizeObserver.disconnect();
+    mapResizeObserver = null;
+  }
   
   // OpenLayers 相关说明
   if (map.value) map.value.setTarget(null);
@@ -1754,6 +1772,7 @@ function addUploadedPolygon(coordinates) {
 
 defineExpose({
   map,
+  refreshMapSize,
   openPolygonDraw,
   closePolygonDraw,
   showHighlights,

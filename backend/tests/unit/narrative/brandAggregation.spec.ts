@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { BrandCluster } from '../../../src/narrative/brandAggregation.js'
-import { isBrandClusterEligible } from '../../../src/narrative/brandAggregation.js'
+import { extractBrandFromName, isBrandClusterEligible } from '../../../src/narrative/brandAggregation.js'
 import type { EvidenceItem } from '../../../src/chat/types.js'
 
 function makePoi(name: string): EvidenceItem {
@@ -83,5 +83,51 @@ describe('isBrandClusterEligible (taming 单点伪品牌)', () => {
       count: 0,
     })
     expect(isBrandClusterEligible(cluster)).toBe(false)
+  })
+})
+
+describe('extractBrandFromName - campus 保护规则', () => {
+  it('医学院主体不应被抽成上位大学品牌', () => {
+    expect(extractBrandFromName('武汉大学医学院')).toEqual({
+      brand: null,
+      type: null,
+    })
+  })
+
+  it('高校前缀 + 小区尾部不应被抽成 campus 品牌', () => {
+    expect(extractBrandFromName('武汉理工大学友谊小区')).toEqual({
+      brand: null,
+      type: null,
+    })
+  })
+
+  it('老年大学不应被抽成 campus 品牌', () => {
+    expect(extractBrandFromName('湖北省老年大学')).toEqual({
+      brand: null,
+      type: null,
+    })
+  })
+
+  it('神学院不应被抽成 campus 品牌', () => {
+    expect(extractBrandFromName('中南神学院')).toEqual({
+      brand: null,
+      type: null,
+    })
+  })
+})
+
+describe('extractBrandFromName - commercial 扩展词典', () => {
+  it('万象城应能抽成商业综合体品牌', () => {
+    expect(extractBrandFromName('武昌万象城')).toEqual({
+      brand: '武昌万象城',
+      type: 'commercial',
+    })
+  })
+
+  it('商圈应能抽成商业综合体品牌', () => {
+    expect(extractBrandFromName('光谷商圈')).toEqual({
+      brand: '光谷商圈',
+      type: 'commercial',
+    })
   })
 })

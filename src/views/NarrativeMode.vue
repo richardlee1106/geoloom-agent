@@ -21,21 +21,8 @@
     
     <div class="narrative-ui">
       
-      <div v-if="isPlaying && narrativeSteps.length > 0" class="progress-ring-container">
-        <svg width="48" height="48" class="progress-ring-svg">
-          <circle class="ring-bg" cx="24" cy="24" r="20"/>
-          <circle 
-            class="ring-progress" 
-            cx="24" cy="24" r="20" 
-            :style="{ strokeDashoffset: progressOffset }"
-          />
-        </svg>
-        <div class="progress-text">{{ currentStepIndex + 1 }}/{{ narrativeSteps.length }}</div>
-      </div>
-
-      
       <transition name="fade-slide">
-        <div v-if="scriptVisible" class="script-panel" :class="{ 'generating': isGenerating }">
+        <div v-if="scriptVisible" ref="aiPanelRef" class="script-panel" :class="{ 'generating': isGenerating }">
           <div class="panel-header">
             <div class="brand-mini">
               <div class="brand-icon-mini">✨</div>
@@ -48,6 +35,25 @@
               <el-icon><Close /></el-icon>
             </el-button>
           </div>
+
+          <div class="tour-style-switcher">
+            <div class="tour-style-copy">
+              <span class="tour-style-copy__eyebrow">导览风格切换</span>
+              <p>同一视口，不同讲法。你可以先快速了解，也可以切到更像本地带路的版本。</p>
+            </div>
+            <div class="tour-style-group">
+              <button
+                v-for="option in TOUR_STYLE_OPTIONS"
+                :key="option.value"
+                class="tour-style-pill"
+                :class="{ active: selectedTourStyle === option.value }"
+                :disabled="isGenerating"
+                @click="selectTourStyle(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
           
           <div class="script-content" ref="scriptContentRef">
             
@@ -58,7 +64,7 @@
 
             
             <div v-if="narrativeSteps.length > 0" class="narrative-steps-section">
-              <div class="response-title">漫游脚本</div>
+              <div class="response-title">漫游脚本 · {{ currentTourStyleLabel }}</div>
               <div class="modern-steps">
                 <div 
                   v-for="(step, index) in narrativeSteps" 
@@ -72,6 +78,7 @@
                     <div class="step-label">STEP {{ index + 1 }}</div>
                     <div class="step-title">
                       {{ step.focus === 'overview' ? '区域全景' : step.focus }}
+                      <span v-if="step.focus !== 'overview' && step.tierLabel" class="step-tier">{{ step.tierLabel }}</span>
                     </div>
                     <div v-if="step.tagline && step.focus !== 'overview'" class="step-tagline">{{ step.tagline }}</div>
                   </div>
@@ -82,7 +89,7 @@
             
             <div v-if="!aiResponse && !isGenerating" class="empty-state">
               <div class="empty-icon">💬</div>
-              <p>点击下方按钮，按当前视口生成第一版区域导览骨架。</p>
+              <p>点击下方按钮，按当前视口与当前导览风格生成第一版区域导览骨架。</p>
             </div>
 
             
@@ -120,12 +127,16 @@
 
       
       <transition name="narrator-slide">
-        <div v-if="isPlaying && currentVoiceText" class="narrator-panel">
+        <div v-if="isPlaying && currentVoiceText" ref="narratorPanelRef" class="narrator-panel">
           <div class="narrator-accent-line"></div>
           <div class="narrator-inner">
             <div class="narrator-header">
-              <span class="narrator-eyebrow">当前镜头</span>
+              <div class="narrator-meta">
+                <span class="narrator-eyebrow">当前镜头</span>
+                <span v-if="currentTierLabel" class="narrator-tier">{{ currentTierLabel }}</span>
+              </div>
               <h2 class="narrator-focus">{{ currentNarrativeFocus }}</h2>
+              <div class="narrator-style">{{ currentTourStyleLabel }}</div>
             </div>
             <div class="narrator-body">
               <p class="narrator-text">
@@ -133,6 +144,31 @@
               </p>
               <div v-if="currentTagline" class="narrator-tagline">
                 <span>{{ currentTagline }}</span>
+              </div>
+              <div v-if="currentReasonCard" class="narrator-reason-card">
+                <div class="narrator-reason-card__title">推荐理由卡</div>
+                <div class="narrator-reason-card__grid">
+                  <div class="narrator-reason-row">
+                    <span>代表什么</span>
+                    <strong>{{ currentReasonCard.represents }}</strong>
+                  </div>
+                  <div class="narrator-reason-row">
+                    <span>为什么值得去</span>
+                    <strong>{{ currentReasonCard.whyWorthVisiting }}</strong>
+                  </div>
+                  <div class="narrator-reason-row">
+                    <span>适合什么时候去</span>
+                    <strong>{{ currentReasonCard.bestTime }}</strong>
+                  </div>
+                  <div class="narrator-reason-row">
+                    <span>和周边什么节点有关</span>
+                    <strong>{{ currentNearbyConnectionsText }}</strong>
+                  </div>
+                </div>
+              </div>
+              <div v-if="currentLocalTip" class="narrator-local-tip">
+                <span class="narrator-local-tip__label">本地人提醒</span>
+                <p>{{ currentLocalTip }}</p>
               </div>
               <div v-if="currentWebFactHint" class="narrator-fact">
                 <span class="fact-badge">{{ currentWebFactHint }}</span>
@@ -158,7 +194,7 @@
                 >
                   <el-icon><ArrowLeft /></el-icon>
                 </button>
-                <div class="narrator-step-badge">{{ currentStepIndex + 1 }} / {{ narrativeSteps.length }}</div>
+                <div class="narrator-step-badge">{{ currentStepProgressLabel }}</div>
                 <button
                   class="narrator-step-btn"
                   :disabled="currentStepIndex >= narrativeSteps.length - 1"
@@ -174,7 +210,7 @@
       </transition>
       
       
-      <div class="action-buttons">
+      <div ref="actionButtonsRef" class="action-buttons">
         <button class="round-tool-btn" @click="scriptVisible = !scriptVisible" :title="scriptVisible ? '隐藏面板' : '显示面板'">
           <el-icon><View v-if="scriptVisible" /><Hide v-else /></el-icon>
         </button>
@@ -187,7 +223,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount, shallowRef, watch, nextTick, defineAsyncComponent } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, shallowRef, watch, nextTick, defineAsyncComponent } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElButton } from 'element-plus/es/components/button/index';
 import { ElIcon } from 'element-plus/es/components/icon/index';
@@ -203,18 +239,23 @@ import { Fill, Stroke, Style } from 'ol/style';
 import { sendChatMessageStream } from '../utils/aiService';
 import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../utils/narrativeTextTemplate';
 import { normalizeMarkdownForRender } from '../utils/markdownContract';
+import { buildNarrativeSafePixelBounds } from '../utils/narrativeSafeViewport';
 import { useProjection } from '../composables/map/useProjection';
 
 // 底图为高德 GCJ02。前端发给后端的 viewport/center 必须是真 WGS84，
 // 因此需要 gcj02ToWgs84；后端统一把 boundary/node.center 都输出 GCJ02，
 // 前端直接 fromLonLat 即可贴合底图，不再做 wgs84ToGcj02 二次偏移。
-const { gcj02ToWgs84 } = useProjection();
+const { gcj02ToWgs84, wgs84ToGcj02 } = useProjection();
 
 const MapContainer = defineAsyncComponent(() => import('../components/MapContainer.vue'));
 
-
-
 const router = useRouter();
+const TOUR_STYLE_OPTIONS = [
+  { value: 'classic_must_see', label: '快速了解' },
+  { value: 'local_vibe', label: '本地人版本' },
+  { value: 'business_leisure', label: '商业休闲' },
+  { value: 'humanities_walk', label: '人文慢走' },
+];
 const mapRef = ref(null);
 const poiFeatures = ref([]);
 const narrativeSteps = ref([]);
@@ -226,22 +267,45 @@ const scriptVisible = ref(true);
 const currentVoiceText = ref('');
 const boundaryData = ref(null);
 const scriptContentRef = ref(null); 
+const selectedTourStyle = ref('classic_must_see');
 
 
 const typedText = ref('');
+const currentStep = computed(() => {
+  if (currentStepIndex.value < 0) return null;
+  return narrativeSteps.value[currentStepIndex.value] || null;
+});
+const currentTourStyleLabel = computed(() => {
+  return currentStep.value?.tourStyleLabel
+    || TOUR_STYLE_OPTIONS.find((item) => item.value === selectedTourStyle.value)?.label
+    || '快速了解';
+});
 const currentNarrativeFocus = computed(() => {
-  if (currentStepIndex.value >= 0 && narrativeSteps.value[currentStepIndex.value]) {
-    const focus = narrativeSteps.value[currentStepIndex.value].focus;
+  if (currentStep.value) {
+    const focus = currentStep.value.focus;
     return focus === 'overview' ? '区域概览' : focus;
   }
   return '空间叙事';
 });
-
-
-const progressOffset = computed(() => {
-  if (narrativeSteps.value.length === 0) return 125.6;
-  const progress = (currentStepIndex.value + 1) / narrativeSteps.value.length;
-  return 125.6 * (1 - progress);
+const currentTierLabel = computed(() => currentStep.value?.tierLabel || null);
+const currentReasonCard = computed(() => currentStep.value?.reasonCard || null);
+const currentLocalTip = computed(() => currentStep.value?.localTip || null);
+const currentNearbyConnectionsText = computed(() => {
+  const connections = Array.isArray(currentReasonCard.value?.nearbyConnections)
+    ? currentReasonCard.value.nearbyConnections.filter(Boolean)
+    : [];
+  return connections.length > 0 ? connections.join('、') : '可和周边节点顺着串讲';
+});
+const narrativeNodeCount = computed(() => narrativeSteps.value.filter((step) => step.focus !== 'overview').length);
+const currentStepProgressLabel = computed(() => {
+  const total = narrativeNodeCount.value;
+  if (total <= 0 || currentStepIndex.value < 0 || !currentStep.value) return `0 / ${total}`;
+  if (currentStep.value.focus === 'overview') return `总览 · ${total} 节点`;
+  const currentOrdinal = narrativeSteps.value
+    .slice(0, currentStepIndex.value + 1)
+    .filter((step) => step.focus !== 'overview')
+    .length;
+  return `${currentOrdinal} / ${total}`;
 });
 
 const overviewBoundarySource = new VectorSource();
@@ -282,23 +346,17 @@ const narrativeNodeBoundaryLayer = new VectorLayer({
 });
 
 const currentTagline = computed(() => {
-  if (currentStepIndex.value < 0) return null;
-  const step = narrativeSteps.value[currentStepIndex.value];
-  return step?.tagline || null;
+  return currentStep.value?.tagline || null;
 });
 
 const currentWebFactHint = computed(() => {
-  if (currentStepIndex.value < 0) return null;
-  const step = narrativeSteps.value[currentStepIndex.value];
-  return step?.webFactHint || null;
+  return currentStep.value?.webFactHint || null;
 });
 
 // 网页原文摘要（后端已过滤广告文案）——独立样式展示，
 // 避免混在打字机正文里让用户分不清“原文来自网页”和“地理分析结论”。
 const currentWebFactSnippet = computed(() => {
-  if (currentStepIndex.value < 0) return null;
-  const step = narrativeSteps.value[currentStepIndex.value];
-  return step?.webFactSnippet || null;
+  return currentStep.value?.webFactSnippet || null;
 });
 
 
@@ -373,6 +431,8 @@ const subtitleHistory = ref([]);
 const isSubtitleVisible = ref(false); 
 const subtitleContainerRef = ref(null); 
 const aiPanelRef = ref(null); 
+const narratorPanelRef = ref(null);
+const actionButtonsRef = ref(null);
 const subtitlePosition = ref({ x: 0, y: 0 }); 
 const subtitleSafeZone = ref({ left: 0, top: 0, right: 0, bottom: 0 }); 
 const currentViewport = ref(null);
@@ -505,19 +565,101 @@ function cleanupNarrativeBoundaryLayers() {
   narrativeBoundaryLayerAttached = false;
 }
 
+function buildRelativeOverlayRect(element, containerRect, mapSize) {
+  if (!element?.getBoundingClientRect || !containerRect) return null;
+  const rect = element.getBoundingClientRect();
+  if (!rect?.width || !rect?.height) return null;
+  const mapWidth = Number(mapSize?.[0] || 0);
+  const mapHeight = Number(mapSize?.[1] || 0);
+  if (!mapWidth || !mapHeight) return null;
+  const left = Math.max(0, rect.left - containerRect.left);
+  const top = Math.max(0, rect.top - containerRect.top);
+  const right = Math.min(mapWidth, rect.right - containerRect.left);
+  const bottom = Math.min(mapHeight, rect.bottom - containerRect.top);
+  if (right - left < 1 || bottom - top < 1) return null;
+  return { left, top, right, bottom };
+}
+
+function updateNarrativeSafeZone(olMap) {
+  if (!olMap?.getSize) return;
+  const size = olMap.getSize();
+  if (!size) return;
+  const targetElement = olMap.getTargetElement?.();
+  const containerRect = targetElement?.getBoundingClientRect?.() || null;
+  const overlays = [];
+  if (containerRect) {
+    const scriptRect = scriptVisible.value
+      ? buildRelativeOverlayRect(aiPanelRef.value, containerRect, size)
+      : null;
+    const narratorRect = isPlaying.value && currentVoiceText.value
+      ? buildRelativeOverlayRect(narratorPanelRef.value, containerRect, size)
+      : null;
+    const actionRect = buildRelativeOverlayRect(actionButtonsRef.value, containerRect, size);
+    if (scriptRect) overlays.push(scriptRect);
+    if (narratorRect) overlays.push(narratorRect);
+    if (actionRect) overlays.push(actionRect);
+  }
+  const safePixels = buildNarrativeSafePixelBounds({
+    mapWidth: Number(size[0] || 0),
+    mapHeight: Number(size[1] || 0),
+    overlays,
+    padding: 24,
+    gap: 18,
+    minWidth: 320,
+    minHeight: 220,
+  });
+  if (safePixels) {
+    subtitleSafeZone.value = safePixels;
+    return;
+  }
+  subtitleSafeZone.value = {
+    left: 0,
+    top: 0,
+    right: Number(size[0] || 0),
+    bottom: Number(size[1] || 0),
+  };
+}
+
+function buildNarrativeFitPadding(olMap) {
+  const size = olMap?.getSize?.();
+  const safeZone = subtitleSafeZone.value || {};
+  const mapWidth = Number(size?.[0] || 0);
+  const mapHeight = Number(size?.[1] || 0);
+  return [
+    Math.max(28, Math.round(Number(safeZone.top || 0) + 28)),
+    Math.max(28, Math.round(mapWidth - Number(safeZone.right || mapWidth) + 28)),
+    Math.max(28, Math.round(mapHeight - Number(safeZone.bottom || mapHeight) + 28)),
+    Math.max(28, Math.round(Number(safeZone.left || 0) + 28)),
+  ];
+}
+
 function readViewportFromMap(olMap) {
   if (!olMap?.getView || !olMap?.getSize) return null;
   const size = olMap.getSize();
   if (!size) return null;
-  const extent = olMap.getView().calculateExtent(size);
+  updateNarrativeSafeZone(olMap);
+  const targetElement = olMap.getTargetElement?.();
+  const targetRect = targetElement?.getBoundingClientRect?.() || null;
+  const pixelWidth = Math.max(1, Math.round(Number(targetRect?.width || size[0] || 0)));
+  const pixelHeight = Math.max(1, Math.round(Number(targetRect?.height || size[1] || 0)));
   // 底图是高德 GCJ02，toLonLat 3857→4326 得到的仍是 GCJ02 值；
   // 发给后端前必须 gcj02→wgs84，否则后端查 WGS84 的 AOI/landuse
   // 会把视野整体东南偏移 ~500m，导致蓝色 boundary 对不上用户的视口。
-  const bl = toLonLat([extent[0], extent[1]]);
-  const tr = toLonLat([extent[2], extent[3]]);
+  const bottomLeftCoord = olMap.getCoordinateFromPixel?.([0, pixelHeight]);
+  const topRightCoord = olMap.getCoordinateFromPixel?.([pixelWidth, 0]);
+  if (!Array.isArray(bottomLeftCoord) || !Array.isArray(topRightCoord)) return null;
+  const bl = toLonLat(bottomLeftCoord);
+  const tr = toLonLat(topRightCoord);
   const [blLon, blLat] = gcj02ToWgs84(bl[0], bl[1]);
   const [trLon, trLat] = gcj02ToWgs84(tr[0], tr[1]);
   return [blLon, blLat, trLon, trLat];
+}
+
+function refreshViewportFromMap() {
+  mapRef.value?.refreshMapSize?.();
+  mapInstance.value?.updateSize?.();
+  if (!mapInstance.value) return;
+  currentViewport.value = readViewportFromMap(mapInstance.value);
 }
 
 function buildViewportCenter(viewport) {
@@ -525,6 +667,29 @@ function buildViewportCenter(viewport) {
   return {
     lon: (Number(viewport[0]) + Number(viewport[2])) / 2,
     lat: (Number(viewport[1]) + Number(viewport[3])) / 2,
+  };
+}
+
+function buildViewportBoundaryPreview(viewport) {
+  if (!Array.isArray(viewport) || viewport.length < 4) return null;
+  const swLon = Number(viewport[0]);
+  const swLat = Number(viewport[1]);
+  const neLon = Number(viewport[2]);
+  const neLat = Number(viewport[3]);
+  if (![swLon, swLat, neLon, neLat].every(Number.isFinite)) return null;
+  const [swGcjLon, swGcjLat] = wgs84ToGcj02(swLon, swLat);
+  const [seGcjLon, seGcjLat] = wgs84ToGcj02(neLon, swLat);
+  const [neGcjLon, neGcjLat] = wgs84ToGcj02(neLon, neLat);
+  const [nwGcjLon, nwGcjLat] = wgs84ToGcj02(swLon, neLat);
+  return {
+    type: 'Polygon',
+    coordinates: [[
+      [swGcjLon, swGcjLat],
+      [seGcjLon, seGcjLat],
+      [neGcjLon, neGcjLat],
+      [nwGcjLon, nwGcjLat],
+      [swGcjLon, swGcjLat],
+    ]],
   };
 }
 
@@ -564,9 +729,13 @@ function applyNarrativeResult(payload) {
   const boundary = narrativeTour.boundary || results.boundary || null;
   const pois = asArray(results.pois);
   const clusters = asObject(results.spatial_clusters);
+  const responseTourStyle = String(narrativeTour.tour_style || results?.stats?.tour_style || '').trim();
 
   if (typeof root.answer === 'string' && root.answer.trim()) {
     aiResponse.value = root.answer;
+  }
+  if (responseTourStyle) {
+    selectedTourStyle.value = responseTourStyle;
   }
   if (steps.length > 0) {
     narrativeSteps.value = steps;
@@ -627,7 +796,7 @@ watch(boundaryData, (nextBoundary) => {
 
 const onMapReady = async (olMap) => {
   mapInstance.value = olMap;
-  currentViewport.value = readViewportFromMap(olMap);
+  refreshViewportFromMap();
   ensureNarrativeBoundaryLayers();
   syncBoundaryLayer(overviewBoundarySource, boundaryData.value);
   if (currentStepIndex.value >= 0 && narrativeSteps.value[currentStepIndex.value]) {
@@ -635,17 +804,38 @@ const onMapReady = async (olMap) => {
   }
 };
 
-const onMapMove = (viewport) => {
-  // MapContainer 发出的 viewport 是底图 GCJ02 经纬度，需要统一到 WGS84
-  // 后再存，保证 currentViewport 的坐标系语义始终一致。
-  if (!Array.isArray(viewport) || viewport.length < 4) return;
-  const [blLon, blLat] = gcj02ToWgs84(Number(viewport[0]), Number(viewport[1]));
-  const [trLon, trLat] = gcj02ToWgs84(Number(viewport[2]), Number(viewport[3]));
-  currentViewport.value = [blLon, blLat, trLon, trLat];
+const onMapMove = () => {
+  refreshViewportFromMap();
+};
+
+const scheduleViewportRefresh = () => {
+  nextTick(() => {
+    refreshViewportFromMap();
+  });
+};
+
+watch([scriptVisible, isPlaying, currentVoiceText, isGenerating, aiResponse, () => narrativeSteps.value.length], () => {
+  scheduleViewportRefresh();
+});
+
+onMounted(() => {
+  window.addEventListener('resize', scheduleViewportRefresh);
+});
+
+const selectTourStyle = async (style) => {
+  if (!style || selectedTourStyle.value === style) return;
+  selectedTourStyle.value = style;
+  if (isGenerating.value) return;
+  if (narrativeSteps.value.length > 0 || aiResponse.value) {
+    await handleGenerate();
+  }
 };
 
 const handleGenerate = async () => {
   if (isGenerating.value) return;
+
+  await nextTick();
+  refreshViewportFromMap();
 
   const viewport = Array.isArray(currentViewport.value) ? currentViewport.value : readViewportFromMap(mapInstance.value);
   const center = buildViewportCenter(viewport);
@@ -672,6 +862,10 @@ const handleGenerate = async () => {
   aiResponse.value = '';
 
   await nextTick();
+  const viewportBoundaryPreview = buildViewportBoundaryPreview(viewport);
+  if (viewportBoundaryPreview) {
+    boundaryData.value = viewportBoundaryPreview;
+  }
 
   try {
     const fullAnswer = await sendChatMessageStream(
@@ -684,6 +878,8 @@ const handleGenerate = async () => {
         spatialContext: {
           viewport,
           center,
+          narrativeStyle: selectedTourStyle.value,
+          tourStyle: selectedTourStyle.value,
         },
       },
       [],
@@ -707,6 +903,7 @@ const handleGenerate = async () => {
  */
 const renderNarrativeNodeBoundary = async (boundary) => {
   syncBoundaryLayer(narrativeNodeBoundarySource, boundary);
+  return toOlBoundaryGeometry(boundary);
 };
 
 // 解析 step 的镜头目标坐标（GCJ02）。
@@ -746,11 +943,19 @@ const applyStep = async (index) => {
   const step = narrativeSteps.value[index];
   if (!step) return;
   currentVoiceText.value = step.voice_text || '';
-  await renderNarrativeNodeBoundary(step);
+  const stepGeometry = await renderNarrativeNodeBoundary(step);
   if (!mapInstance.value) return;
   const view = mapInstance.value.getView();
   if (step.focus === 'overview') {
     view.animate({ zoom: 14, duration: 1500 });
+    return;
+  }
+  if (stepGeometry) {
+    view.fit(stepGeometry, {
+      duration: 1500,
+      maxZoom: 16,
+      padding: buildNarrativeFitPadding(mapInstance.value),
+    });
     return;
   }
   const coords = resolveStepTargetCoords(step);
@@ -802,6 +1007,7 @@ const goNextStep = async () => {
 const goBack = () => router.push('/');
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleViewportRefresh);
   cleanupNarrativeBoundaryLayers();
 });
 
@@ -893,49 +1099,12 @@ onBeforeUnmount(() => {
 .narrative-ui > * { pointer-events: auto; }
 
 
-.progress-ring-container {
-    position: fixed;
-    top: 32px;
-    left: 40px;
-    width: 56px;
-    height: 56px;
-    z-index: 100;
-    background: rgba(0,0,0,0.3);
-    backdrop-filter: blur(10px);
-    border-radius: 50%;
-    padding: 4px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-}
-
-.progress-ring-svg { transform: rotate(-90deg); }
-.progress-ring-svg circle { fill: none; stroke-width: 3; }
-.progress-ring-svg .ring-bg { stroke: rgba(255,255,255,0.1); }
-.progress-ring-svg .ring-progress {
-    stroke: #00d4ff;
-    stroke-dasharray: 125.6;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-    filter: drop-shadow(0 0 5px #00d4ff);
-}
-
-.progress-text {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    font-weight: 700;
-    color: #00d4ff;
-    letter-spacing: -0.5px;
-}
-
-
 .script-panel {
     position: absolute;
     left: 24px;
     top: 24px;
-    width: 380px;
+    width: min(380px, calc(100vw - 48px));
+    max-width: calc(100vw - 48px);
     max-height: calc(100vh - 48px);
     background: rgba(10, 10, 18, 0.75);
     backdrop-filter: blur(30px) saturate(180%);
@@ -960,6 +1129,74 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+}
+
+.tour-style-switcher {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 10px 24px 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 100%);
+}
+
+.tour-style-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 320px;
+}
+
+.tour-style-copy__eyebrow {
+    font-size: 11px;
+    letter-spacing: 2.4px;
+    text-transform: uppercase;
+    color: rgba(0, 212, 255, 0.82);
+    font-weight: 700;
+}
+
+.tour-style-copy p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.62);
+}
+
+.tour-style-group {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.tour-style-pill {
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.7);
+    border-radius: 999px;
+    padding: 9px 14px;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+.tour-style-pill:hover:not(:disabled) {
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.tour-style-pill.active {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.22) 0%, rgba(123, 44, 191, 0.28) 100%);
+    border-color: rgba(0, 212, 255, 0.32);
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(0, 212, 255, 0.12);
+}
+
+.tour-style-pill:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .brand-mini { display: flex; align-items: center; gap: 12px; }
@@ -1047,6 +1284,18 @@ onBeforeUnmount(() => {
 .step-title { font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500; transition: all 0.3s ease; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .modern-step-item.active .step-title { color: #fff; font-weight: 600; }
 
+.step-tier {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    color: rgba(0, 212, 255, 0.92);
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+}
+
 .step-tagline {
     margin-top: 4px;
     font-size: 11px;
@@ -1115,7 +1364,8 @@ onBeforeUnmount(() => {
     right: 32px;
     top: 50%;
     transform: translateY(-50%);
-    width: 300px;
+    width: clamp(260px, 24vw, 320px);
+    max-width: calc(100vw - 48px);
     max-height: 70vh;
     display: flex;
     flex-direction: row;
@@ -1157,6 +1407,12 @@ onBeforeUnmount(() => {
     padding: 20px 20px 0;
 }
 
+.narrator-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .narrator-eyebrow {
     font-size: 9px;
     font-weight: 700;
@@ -1175,6 +1431,24 @@ onBeforeUnmount(() => {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     line-height: 1.3;
+}
+
+.narrator-tier {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10px;
+    color: rgba(0, 212, 255, 0.92);
+    border: 1px solid rgba(0, 212, 255, 0.26);
+    background: rgba(0, 212, 255, 0.09);
+}
+
+.narrator-style {
+    margin-top: 8px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.42);
+    letter-spacing: 0.6px;
 }
 
 .narrator-body {
@@ -1204,6 +1478,72 @@ onBeforeUnmount(() => {
     font-size: 11px;
     line-height: 1.55;
     color: rgba(255,255,255,0.45);
+}
+
+.narrator-reason-card {
+    margin-top: 14px;
+    padding: 14px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+.narrator-reason-card__title {
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(0, 212, 255, 0.78);
+    font-weight: 700;
+    margin-bottom: 10px;
+}
+
+.narrator-reason-card__grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.narrator-reason-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.narrator-reason-row span {
+    font-size: 10px;
+    color: rgba(255,255,255,0.36);
+    letter-spacing: 0.4px;
+}
+
+.narrator-reason-row strong {
+    font-size: 12px;
+    line-height: 1.65;
+    color: rgba(255,255,255,0.84);
+    font-weight: 500;
+}
+
+.narrator-local-tip {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(0, 212, 255, 0.05);
+    border: 1px solid rgba(0, 212, 255, 0.12);
+}
+
+.narrator-local-tip__label {
+    display: inline-flex;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: rgba(0, 212, 255, 0.8);
+    margin-bottom: 6px;
+}
+
+.narrator-local-tip p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(255,255,255,0.78);
 }
 
 .narrator-fact {
@@ -1386,6 +1726,65 @@ onBeforeUnmount(() => {
 
 .fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.6s ease; }
 .fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateX(-50px); filter: blur(10px); }
+
+@media (max-width: 1280px) {
+  .script-panel {
+    width: min(340px, calc(100vw - 48px));
+  }
+
+  .narrator-panel {
+    right: 24px;
+    width: min(280px, calc(100vw - 48px));
+  }
+}
+
+@media (max-width: 1080px) {
+  .narrator-panel {
+    top: auto;
+    right: 24px;
+    bottom: 24px;
+    transform: none;
+    width: min(420px, calc(100vw - 48px));
+    max-height: 32vh;
+  }
+
+  .narrator-slide-enter-from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+
+  .narrator-slide-leave-to {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+@media (max-width: 760px) {
+  .script-panel {
+    left: 16px;
+    top: 16px;
+    width: min(360px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+  }
+
+  .narrator-panel {
+    left: 16px;
+    right: 16px;
+    bottom: 88px;
+    width: auto;
+    max-width: none;
+  }
+
+  .action-buttons {
+    left: 16px;
+    bottom: 16px;
+    flex-direction: row;
+  }
+
+  .tour-style-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 
 
 :deep(.map-filter-control) {

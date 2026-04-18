@@ -32,6 +32,8 @@ import {
   buildNarrativeViewportSummary,
   normalizeName,
   rankNarrativeNodes,
+  resolveNarrativeTourStyle,
+  resolveNodeTierLabel,
   resolveNodeRoleFromAoi,
   resolveNodeRoleFromPoi,
   resolveRoleLabel,
@@ -56,7 +58,7 @@ import {
   transformGeoJsonCoordinatesWgs84ToGcj02,
   wgs84ToGcj02,
 } from './gcj02.js'
-import { clipBoundaryToViewport, isPointInViewport } from './viewportClipping.js'
+import { clipBoundaryToViewport } from './viewportClipping.js'
 import type {
   NarrativeProbeRequest,
   NarrativeProbeResult,
@@ -73,6 +75,7 @@ import type {
   NarrativePopulationHotspot,
   NarrativeSurface,
   NarrativeTourTransition,
+  NarrativeTourStyle,
   NarrativeViewport,
   NarrativeViewportSummary,
 } from './types.js'
@@ -88,6 +91,22 @@ import type {
  *   ✗ "扫码关注公众号，领取 100 元优惠券"
  */
 const NARRATIVE_AD_PATTERN = /(营销中心|售楼处|售楼部|置业顾问|开盘|开盘大吉|开售|盛大开放|盛大开业|盛大开幕|隆重开业|震撼开盘|钜献|钜惠|限时抢|限时特|特价优惠|返利|返现|红包|抽奖|引爆全|引爆|加盟|招商|脱口秀连嗨|脱口秀|演唱会|票务|预约咨询|销售热线|免费领|新品上市|首付|月供|总价|户型|样板间|样板房|VIP|尊享|抢购|限购|限时优惠|团购|代理|扫码关注|关注公众号|二维码|小程序|APP下载|app下载|微信公众号|广告|招聘|优惠券|折扣券|入驻|引流|刷单)/u
+const NARRATIVE_FILE_ARTIFACT_PATTERN = /(?:\[(?:DOC|PDF|PPT|XLS|XLSX)\])|(?:^|[\\/\s])[^\\/\n]{1,160}\.(?:docx?|pdf|pptx?|xlsx?|xls|wps)\b/iu
+
+function looksLikeFileArtifact(text: string) {
+  const normalized = String(text || '').trim()
+  if (!normalized) return false
+  if (!NARRATIVE_FILE_ARTIFACT_PATTERN.test(normalized)) return false
+  return normalized.length <= 180 || !/[。！？；]/u.test(normalized)
+}
+
+function sanitizeNarrativeWebSnippet(snippet: string, nodeName: string, title: string) {
+  const normalized = String(snippet || '').trim()
+  if (!normalized) return null
+  if (looksLikeFileArtifact(normalized)) return null
+  if (!normalized.includes(nodeName) && !String(title || '').includes(nodeName)) return null
+  return normalized.slice(0, 120)
+}
 
 function extractLastUserText(messages: ChatRequestV4['messages']) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -120,6 +139,16 @@ function readViewport(request: ChatRequestV4): NarrativeViewport | null {
     neLon: Math.max(swLon, neLon),
     neLat: Math.max(swLat, neLat),
   }
+}
+
+function readNarrativeTourStyle(request: ChatRequestV4): NarrativeTourStyle {
+  const spatialContext = request.options?.spatialContext as Record<string, unknown> | undefined
+  return resolveNarrativeTourStyle(
+    spatialContext?.narrativeStyle
+    ?? spatialContext?.tourStyle
+    ?? request.options?.narrativeStyle
+    ?? request.options?.tourStyle,
+  )
 }
 
 function buildViewportScale(diagonalM: number) {
@@ -158,6 +187,26 @@ function buildNarrativeIntent(rawQuery: string, viewport: NarrativeViewport): De
       },
     },
   }
+}
+
+function extractNarrativeFactLabels(text: string, node: NarrativeNode) {
+  const labels: string[] = []
+  if (/(5A|AAAAA|五A级)/u.test(text)) labels.push('5A景区')
+  if (/(4A|AAAA|四A级)/u.test(text)) labels.push('4A景区')
+  if (/(3A|AAA|三A级)/u.test(text)) labels.push('3A景区')
+  if (/(世界遗产|世界文化遗产|世界自然遗产)/u.test(text)) labels.push('世界遗产')
+  if (/(全国重点文物保护单位|国家重点文物保护单位)/u.test(text)) labels.push('国保单位')
+  if (/(省级文物保护单位)/u.test(text)) labels.push('省保单位')
+  if (/(双一流)/u.test(text)) labels.push('双一流')
+  if (/(985)/u.test(text)) labels.push('985')
+  if (/(211)/u.test(text)) labels.push('211')
+  if (/(老字号|百年老店)/u.test(text)) labels.push('老字号')
+  if (/(历史街区|老街|古镇)/u.test(text)) labels.push('历史街区')
+  if (/(网红|打卡|人气|热门|必去|必逛)/u.test(text)) labels.push('人气打卡')
+  if (/(旗舰|旗舰级|头部|标杆|示范)/u.test(text)) {
+    labels.push(node.role === 'commercial_anchor' ? '商业标杆' : '重点标杆')
+  }
+  return [...new Set(labels)].slice(0, 3)
 }
 
 function buildSyntheticAnchor(viewport: NarrativeViewport): ResolvedAnchor {
@@ -538,8 +587,9 @@ export class NarrativeRuntime implements ChatRuntime {
       encoderSceneTags: encoderResult?.sceneTags ?? [],
       encoderDominantBuckets: encoderResult?.dominantBuckets ?? [],
       candidates: rankedCandidates,
+      requestedStyle: 'classic_must_see',
     })
-    const rankResult = rankNarrativeNodes(rankedCandidates, viewportSummary, 15)
+    const rankResult = rankNarrativeNodes(rankedCandidates, viewportSummary, 18)
     const selectedIds = new Set(rankResult.selectedNodes.map((node) => node.id))
     const droppedIds = rankedCandidates
       .filter((node) => !selectedIds.has(node.id))
@@ -709,6 +759,7 @@ export class NarrativeRuntime implements ChatRuntime {
 
     const center = buildViewportCenter(viewport)
     const boundary = buildViewportBoundary(viewport)
+    const requestedStyle = readNarrativeTourStyle(request)
     const intent = buildNarrativeIntent(rawQuery, viewport)
     const anchor = buildSyntheticAnchor(viewport)
     const logger = createLogger().child({
@@ -798,6 +849,7 @@ export class NarrativeRuntime implements ChatRuntime {
       encoderSceneTags: encoderPayload.sceneTags,
       encoderDominantBuckets: encoderPayload.dominantBuckets,
       candidates: encoderCandidates,
+      requestedStyle,
     })
 
     await writer.reasoning({
@@ -810,11 +862,11 @@ export class NarrativeRuntime implements ChatRuntime {
       message: '正在挑选候选解说节点...',
     })
 
-    // 统一升级到 top 15（区域概览 + 15 个解说节点 = 16 步）
+    // 统一升级到 top 18（区域概览 + 18 个解说节点 = 19 步）
     const rankResult = rankNarrativeNodes(
       encoderCandidates,
       viewportSummary,
-      15,
+      18,
     )
     const selectedNodes = rankResult.selectedNodes
 
@@ -890,6 +942,8 @@ export class NarrativeRuntime implements ChatRuntime {
       result_count: enrichedNodes.length,
       candidate_count: encoderCandidates.length,
       narrative_mode: rankResult.narrativeMode,
+      tour_style: requestedStyle,
+      tour_style_label: viewportSummary.requestedStyleLabel,
       scene_mix: viewportSummary.sceneMix,
       viewport_diagonal_m: buildViewportDiagonalM(viewport),
       duration_ms: Date.now() - startedAt,
@@ -913,6 +967,8 @@ export class NarrativeRuntime implements ChatRuntime {
             ...areaView.meta,
             surface: 'narrative',
             narrativeMode: rankResult.narrativeMode,
+            tourStyle: requestedStyle,
+            tourStyleLabel: viewportSummary.requestedStyleLabel,
           },
         },
         narrative_tour: {
@@ -922,6 +978,8 @@ export class NarrativeRuntime implements ChatRuntime {
           selected_nodes: enrichedNodes,
           transitions,
           narrative_mode: rankResult.narrativeMode,
+          tour_style: requestedStyle,
+          tour_style_label: viewportSummary.requestedStyleLabel,
           narrative_steps: narrativeSteps,
         },
       },
@@ -1082,8 +1140,9 @@ export class NarrativeRuntime implements ChatRuntime {
       const transition = index > 0 ? input.transitions[index - 1] : null
       const parts = [
         `节点${index + 1}：${node.name}（${node.roleLabel}）`,
+        `层级：${resolveNodeTierLabel(node.tier)}`,
         `品类：${node.categorySub || node.categoryMain || '未知'}`,
-        `代表理由：${node.selectionReason || node.encoderSummary || node.reasons.join('、')}`,
+        `代表理由：${node.selectionReason || node.reasons.join('、')}`,
       ]
       const factLabels = node.webFacts?.labels || []
       if (factLabels.length > 0) {
@@ -1099,14 +1158,25 @@ export class NarrativeRuntime implements ChatRuntime {
       return parts.join('；')
     }).join('\n')
 
-    const systemPrompt = `你是一位专业的城市空间解说员。根据提供的确定性空间证据，为每个导览节点生成一段自然流畅的解说词。
-要求：
-1. 每段解说词 30-60 字，口语化，适合语音播报
-2. 必须基于提供的证据，不要编造信息
-3. 体现区域气质、代表性、转场逻辑
-4. 用 JSON 格式输出：{"overview":"区域概览解说","nodes":{"节点id":"该节点解说词"}}`
+    const styleGuide = input.viewportSummary.requestedStyle === 'local_vibe'
+      ? '风格像熟门熟路的本地朋友，少一点官方讲解腔，多一点“为什么值得顺路带你看这里”。'
+      : input.viewportSummary.requestedStyle === 'business_leisure'
+        ? '风格要把人流、停留、逛街和休闲的节奏讲出来，像在带人挑一条会逛得舒服的线。'
+        : input.viewportSummary.requestedStyle === 'humanities_walk'
+          ? '风格要更慢、更有留白和画面感，像在带人散步，不要写成旅游口号。'
+          : '风格要像成熟讲解员，先抓骨架，再顺势把区域气质讲开。'
 
-    const userPrompt = `区域画像：${input.viewportSummary.summarySentence}
+    const systemPrompt = `你是一位懂城市片区气质的中文导览撰稿人。根据提供的确定性空间证据，为每个导览节点生成自然、带一点文学气息、但绝不乱编的解说词。
+要求：
+1. 概览 55-95 字；每个节点 45-85 字，适合语音播报。
+2. 只允许使用给定证据，不要脑补历史、排名、荣誉、故事。
+3. 不要反复出现“代表点 / 主线 / 结构”这类模板词，不要写成百科介绍。
+4. 要写出“为什么值得停一下”，并让转场自然。
+5. ${styleGuide}
+6. 只输出 JSON：{"overview":"区域概览解说","nodes":{"节点id":"该节点解说词"}}`
+
+    const userPrompt = `导览风格：${input.viewportSummary.requestedStyleLabel}
+区域画像：${input.viewportSummary.summarySentence}
 场景标签：${input.viewportSummary.sceneMix.join('、')}
 ${nodeDescriptions}`
 
@@ -1142,8 +1212,10 @@ ${nodeDescriptions}`
 
   private inferSceneBucketFromText(text: string) {
     if (/(景观|景区|滨水|湖|公园|风景|scenic|park|water)/iu.test(text)) return '景观'
+    if (/(老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院)/u.test(text)) return '文化'
+    if (/(神学院|佛学院|道学院|修道院|修院|神哲学院)/u.test(text)) return '宗教'
     if (/(校园|高校|大学|学院|education|campus)/iu.test(text)) return '校园'
-    if (/(商业|商圈|零售|购物|retail|mall|commercial)/iu.test(text)) return '商业'
+    if (/(商业|商圈|零售|购物|retail|mall|commercial|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|plaza)/iu.test(text)) return '商业'
     if (/(生活|社区|居住|餐饮|配套|residential|daily|food)/iu.test(text)) return '生活'
     if (/(交通|地铁|公交|枢纽|station|transit)/iu.test(text)) return '交通'
     return '片区'
@@ -1305,6 +1377,9 @@ ${nodeDescriptions}`
           ? { lon: Number(representativePoi.longitude), lat: Number(representativePoi.latitude) }
           : { lon: cellCenterLon, lat: cellCenterLat }
         const childCount = cell.childPoiIds.length
+        const memberPoints = childPois
+          .map((poi) => ({ lon: Number(poi.longitude), lat: Number(poi.latitude) }))
+          .filter((pt) => Number.isFinite(pt.lon) && Number.isFinite(pt.lat))
         const densityBonus = Math.min(Math.log2(Math.max(childCount, 1) + 1) * 0.04, 0.16)
         const score = Number((resolveRoleWeight(role) + cell.searchScore * 0.15 + densityBonus).toFixed(3))
 
@@ -1327,6 +1402,7 @@ ${nodeDescriptions}`
           hotness: 'low' as const,
           cellId: cell.cellId,
           childPoiIds: cell.childPoiIds,
+          memberPoints,
         } satisfies NarrativeNode
         nodes.push(node)
         const entityKey = this.buildNarrativeEntityKey(node.name)
@@ -1655,6 +1731,44 @@ ${nodeDescriptions}`
             error: error instanceof Error ? error.message : String(error),
           })
         }
+
+        try {
+          const sql = buildNarrativeAreaTemplateSql({
+            templateName: 'narrative_keyword_road_block_union',
+            viewport,
+            center: node.center,
+            limit: 1,
+            keyword,
+            searchRadiusM: 500,
+          })
+          const result = await this.executeSkill<{ rows: Record<string, unknown>[] }>(
+            postgis, 'execute_spatial_sql', { sql }, context,
+          )
+          const rows = Array.isArray(result?.rows) ? result.rows : []
+          const row = rows[0]
+          if (row?.boundary_geojson) {
+            const blockCount = Number(row.block_count || 0)
+            const areaM2 = Number(row.area_m2 || 0)
+            if (blockCount >= 1 && areaM2 >= 800) {
+              const boundary = parseBoundaryGeoJson(row.boundary_geojson, 'road_block')
+              if (boundary) {
+                context.logger.info('keywordRoadBlockUnion hit', {
+                  nodeId: node.id,
+                  keyword,
+                  blockCount,
+                  areaM2,
+                })
+                return { nodeId: node.id, boundary }
+              }
+            }
+          }
+        } catch (error) {
+          context.logger.warn('keywordRoadBlockUnion failed, fallback to aggregate_morphology', {
+            nodeId: node.id,
+            keyword,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
 
       // --- 阶段 2：聚合边界（DBSCAN + ConcaveHull + Landuse 吸附）---
@@ -1730,17 +1844,23 @@ ${nodeDescriptions}`
     const survivors: NarrativeNode[] = []
     for (const node of nodes) {
       if (!node.boundary) {
-        // 本来就没 boundary → 看 center 是否至少在视口里；不在就直接淘汰
-        if (isPointInViewport(node.center, viewport)) {
-          survivors.push(node)
-        } else {
-          context.logger.info('narrative: drop node without boundary and center outside viewport', {
-            nodeId: node.id,
-            name: node.name,
-            source: node.source,
-            role: node.role,
-          })
-        }
+        context.logger.info('narrative: drop node without concrete boundary', {
+          nodeId: node.id,
+          name: node.name,
+          source: node.source,
+          role: node.role,
+        })
+        continue
+      }
+
+      if (node.boundary.source === 'point_halo') {
+        context.logger.info('narrative: drop node with point halo boundary', {
+          nodeId: node.id,
+          name: node.name,
+          source: node.source,
+          role: node.role,
+          boundarySource: node.boundary.source,
+        })
         continue
       }
 
@@ -1758,11 +1878,8 @@ ${nodeDescriptions}`
         continue
       }
 
-      // 裁剪成功 → 替换 boundary + 重算 center 到视口内视觉中心
-      node.boundary = clipped
       const centroid = computeBoundaryCentroid(clipped)
-      if (centroid) node.center = centroid
-      survivors.push(node)
+      survivors.push(centroid ? { ...node, center: centroid } : node)
     }
 
     if (survivors.length < nodes.length) {
@@ -1814,8 +1931,15 @@ ${nodeDescriptions}`
       .replace(/\s+/gu, '')
       .trim()
     if (!cleaned) return ''
-    const { brand } = extractBrandFromName(cleaned)
-    const base = brand || cleaned.replace(/(东区|西区|南区|北区|主校区|新校区|老校区|校区|分校|教学点)$/u, '')
+    const preserveExact = /(医学院|医学部|临床学院|护理学院|药学院|公共卫生学院|口腔医学院|口腔医院|附属医院|附属.*医院|小区|家属区|家属院|社区|住宅区|居民区|生活区|新村|宿舍区)/u.test(cleaned)
+    const { brand } = preserveExact ? { brand: null } : extractBrandFromName(cleaned)
+    const scenicNormalized = cleaned.replace(/(湿地公园|森林公园|主题公园|国家公园|文化园|旅游区|风景区|景区|景点|公园)$/u, '')
+    const scenicBase = scenicNormalized && scenicNormalized.length >= 2 && /(湖|江|河|湿地|公园|景区|景点|风景区|旅游区)/u.test(cleaned)
+      ? scenicNormalized
+      : null
+    const base = preserveExact
+      ? cleaned
+      : (brand || scenicBase || cleaned.replace(/(东区|西区|南区|北区|主校区|新校区|老校区|校区|分校|教学点)$/u, ''))
     return base.replace(/[\-—_·•]/gu, '').trim().toLowerCase()
   }
 
@@ -1913,11 +2037,15 @@ ${nodeDescriptions}`
     // 优先级排序：校园/景区/商业 > 行政/交通 > 餐饮/生活 > 其他
     const priority = (poi: EvidenceItem) => {
       const text = `${poi.name || ''} ${poi.categoryMain || ''} ${poi.categorySub || ''}`
-      if (/(大学|学院)/u.test(text) && !/(小学|中学|幼儿园|附小|附中|实验学校|国际学校)/u.test(text)) return 0
-      if (/(景区|景点|公园|风景区|旅游区|博物馆|纪念馆)/u.test(text)) return 1
-      if (/(商圈|步行街|广场|购物中心|商业街|商场)/u.test(text)) return 2
-      if (/(地铁站|公交站|交通枢纽)/u.test(text)) return 3
-      if (/(医院|图书馆|体育|文化|社区|街道|政务)/u.test(text)) return 4
+      if (/(医学院|医学部|临床学院|护理学院|药学院|公共卫生学院|口腔医学院|口腔医院|附属医院|附属.*医院)/u.test(text)) return 0
+      if (/(小区|家属区|家属院|社区|住宅区|居民区|生活区|新村|宿舍区)/u.test(text)) return 99
+      if (/(线网管理服务中心|管理服务中心|管理中心|运营中心|客服中心|接待中心|调度中心|指挥中心)/u.test(text)) return 99
+      if (/(老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院)/u.test(text)) return 8
+      if (/(大学|学院)/u.test(text) && !/(小学|中学|幼儿园|附小|附中|实验学校|国际学校|老年大学|开放大学|社区学院|继续教育学院)/u.test(text)) return 1
+      if (/(景区|景点|公园|风景区|旅游区|博物馆|纪念馆)/u.test(text)) return 2
+      if (/(商圈|步行街|广场|购物中心|商业街|商场|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|K11|SKP|Mall|Plaza)/iu.test(text)) return 3
+      if (/(地铁站|换乘站|公交站|交通枢纽|轨道交通)/u.test(text)) return 4
+      if (/(医院|图书馆|体育|文化|街道|政务)/u.test(text)) return 5
       if (/^(公共类|餐饮类|购物类|住宿类|交通类|教育类|景观类|公共服务|生活服务|购物服务|餐饮服务|住宿服务)$/u.test(String(poi.name || '').trim())) return 98
       if (/(小学|中学|幼儿园|附小|附中|实验学校|国际学校)/u.test(text)) return 97
       // 排除噪音
@@ -1947,9 +2075,11 @@ ${nodeDescriptions}`
 
   private inferRoleFromCell(cell: NarrativeCellEntity): string {
     const text = `${cell.cellName} ${cell.dominantCategory} ${cell.aoiType} ${cell.sceneTags.join(' ')}`
+    if (/(老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院)/u.test(text)) return 'culture_anchor'
+    if (/(神学院|佛学院|道学院|修道院|修院|神哲学院)/u.test(text)) return 'religious_anchor'
     if (/(校园|高校|大学|学院|education|campus)/iu.test(text)) return 'campus_anchor'
     if (/(景观|景区|滨水|湖|公园|风景|scenic|park|water)/iu.test(text)) return 'scenic_landmark'
-    if (/(商业|商圈|零售|购物|retail|mall|commercial)/iu.test(text)) return 'commercial_anchor'
+    if (/(商业|商圈|零售|购物|retail|mall|commercial|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|plaza)/iu.test(text)) return 'commercial_anchor'
     if (/(交通|地铁|公交|枢纽|station|transit)/iu.test(text)) return 'transit_connector'
     if (/(生活|社区|居住|餐饮|配套|residential|daily|food)/iu.test(text)) return 'local_life_anchor'
     return 'district_anchor'
@@ -2082,26 +2212,21 @@ ${nodeDescriptions}`
         const snippets: string[] = []
         const labels: string[] = []
         for (const item of items) {
-          const snippet = String(item.snippet || item.title || '').trim()
-          const title = String(item.title || '')
-          const text = `${title} ${snippet}`
+          const title = String(item.title || '').trim()
+          const rawSnippet = String(item.snippet || '').trim()
+          const snippet = sanitizeNarrativeWebSnippet(rawSnippet, node.name, title)
+          const text = [title, rawSnippet].filter(Boolean).join(' ')
 
           // 广告/营销/推广类文案过滤：这类 snippet 与区域导览事实无关，
           // 若混入 voice_text / webFactHint，会出现"保利·公园上城营销中心盛大开放"
           // 这类明显错误的解说词。命中广告特征就整条跳过，不再参与 snippet / label。
           if (NARRATIVE_AD_PATTERN.test(text)) continue
+          if (looksLikeFileArtifact(title) || looksLikeFileArtifact(rawSnippet)) continue
 
-          if (snippet && snippet.includes(node.name)) {
-            snippets.push(snippet.slice(0, 120))
+          if (snippet) {
+            snippets.push(snippet)
           }
-          // 从搜索结果中提取事实标签
-          if (/(5A|AAAA|五A级|国家级|世界遗产|重点文物|历史名城|千年|百年)/u.test(text)) labels.push('国家级')
-          if (/(4A|AAAA|四A级)/u.test(text)) labels.push('4A景区')
-          if (/(3A|AAA|三A级)/u.test(text)) labels.push('3A景区')
-          if (/(重点|示范|标杆|旗舰|旗舰级|头部)/u.test(text)) labels.push('重点标杆')
-          if (/(老字号|百年老店|老街|古镇|历史街区)/u.test(text)) labels.push('历史底蕴')
-          if (/(名校|985|211|双一流|重点大学|重点中学)/u.test(text)) labels.push('名校')
-          if (/(网红|打卡|人气|热门|必去|必逛)/u.test(text)) labels.push('人气打卡')
+          labels.push(...extractNarrativeFactLabels(text, node))
         }
 
         return {

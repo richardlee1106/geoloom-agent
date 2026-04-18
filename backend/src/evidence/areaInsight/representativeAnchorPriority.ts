@@ -17,6 +17,16 @@ const MEDICAL_PATTERNS = [
   /hospital|medical|clinic|healthcare/i,
 ]
 
+const CONTINUING_EDUCATION_PATTERNS = [
+  /老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院/u,
+  /continuing education|open university|community college|lifelong learning/i,
+]
+
+const RELIGIOUS_EDUCATION_PATTERNS = [
+  /神学院|佛学院|道学院|修道院|修院|神哲学院/u,
+  /seminary|theological school|divinity school|monastery/i,
+]
+
 const CAMPUS_PATTERNS = [
   /大学|学院|学校|校园|校区/u,
   /university|college|school|campus/i,
@@ -28,7 +38,7 @@ const SCENIC_PATTERNS = [
 ]
 
 const COMMERCIAL_PATTERNS = [
-  /商圈|步行街|商业街|购物中心|商场|广场|天地|奥特莱斯|mall|plaza/u,
+  /商圈|步行街|商业街|购物中心|购物广场|商业广场|商场|广场|天地|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza/u,
   /shopping|retail|commercial|business|mall|plaza/i,
 ]
 
@@ -83,6 +93,10 @@ export function classifyRepresentativeAnchorType(input: {
     .filter(Boolean)
     .join(' ')
 
+  const nameText = trimText(input.name)
+  if (matchesAny(`${nameText} ${structured}`, CONTINUING_EDUCATION_PATTERNS)) return 'other'
+  if (matchesAny(`${nameText} ${structured}`, RELIGIOUS_EDUCATION_PATTERNS)) return 'other'
+
   if (matchesAny(structured, STATION_PATTERNS)) return 'station'
   if (matchesAny(structured, MEDICAL_PATTERNS)) return 'medical'
   if (matchesAny(structured, CAMPUS_PATTERNS)) return 'campus'
@@ -94,12 +108,14 @@ export function classifyRepresentativeAnchorType(input: {
   }
 
   const combined = [
-    trimText(input.name),
+    nameText,
     structured,
   ]
     .filter(Boolean)
     .join(' ')
 
+  if (matchesAny(combined, CONTINUING_EDUCATION_PATTERNS)) return 'other'
+  if (matchesAny(combined, RELIGIOUS_EDUCATION_PATTERNS)) return 'other'
   if (matchesAny(combined, MEDICAL_PATTERNS)) return 'medical'
   if (matchesAny(combined, CAMPUS_PATTERNS)) return 'campus'
   if (matchesAny(combined, SCENIC_PATTERNS)) return 'scenic'
