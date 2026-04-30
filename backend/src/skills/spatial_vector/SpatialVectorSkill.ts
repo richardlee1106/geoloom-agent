@@ -48,7 +48,19 @@ const actions: Record<string, SkillActionDefinition> = {
     outputSchema: {
       type: 'object',
       properties: {
-        regions: { type: 'array', items: { type: 'object' } },
+        regions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              region_id: { type: 'string' },
+              name: { type: 'string' },
+              score: { type: 'number' },
+              summary: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
         semantic_evidence: {
           type: 'object',
           properties: {

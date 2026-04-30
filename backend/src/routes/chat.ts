@@ -71,19 +71,45 @@ export async function registerChatRoutes(
     const traceId = String(body.options?.requestId || randomUUID())
     const stream = new PassThrough()
     const writer = deps.chat.createWriter(stream, traceId)
+    let streamClosed = false
+    let heartbeat: NodeJS.Timeout | null = null
+
+    const closeStream = () => {
+      if (streamClosed) return
+      streamClosed = true
+      if (heartbeat) {
+        clearInterval(heartbeat)
+        heartbeat = null
+      }
+      writer.close()
+    }
+
+    heartbeat = setInterval(() => {
+      if (streamClosed || stream.destroyed || stream.writableEnded) {
+        closeStream()
+        return
+      }
+      try {
+        stream.write(': keepalive\n\n')
+      } catch {
+        closeStream()
+      }
+    }, 15000)
+    heartbeat.unref?.()
 
     reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
     reply.raw.setHeader('Cache-Control', 'no-cache, no-transform')
     reply.raw.setHeader('Connection', 'keep-alive')
     reply.raw.setHeader('X-Trace-Id', traceId)
     reply.send(stream)
+    reply.raw.on('close', closeStream)
 
     try {
       await deps.chat.handle(body, writer)
     } catch (error) {
       await writer.error(error)
     } finally {
-      writer.close()
+      closeStream()
     }
 
     return reply

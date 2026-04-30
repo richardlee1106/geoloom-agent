@@ -13,6 +13,7 @@
 import { AI_API_BASE_URL, SPATIAL_API_BASE_URL } from '../config';
 import { validateSSEEventPayload } from '../../shared/sseEventSchema';
 import { sendV3ChatStream, checkV3Service, getV3Models, getV3Status } from './v3aiService';
+import { buildV4ChatRequestPayload } from './v4RequestOptions';
 
 type AnyRecord = Record<string, unknown>
 type SpatialPoint = [number, number]
@@ -379,11 +380,11 @@ export async function sendChatMessageStream(
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
+    body: JSON.stringify(buildV4ChatRequestPayload({
       messages,
       poiFeatures,
       options: normalizedOptions
-    })
+    }))
   })
 
   if (!response.ok) {

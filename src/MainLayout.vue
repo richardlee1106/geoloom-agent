@@ -45,20 +45,15 @@
       <div class="layout-anchor-center-left">
         <ControlPanel ref="controlPanelRefMap"
                       panel-type="map"
-                      @data-loaded="handleDataLoaded"
                       @search="handleSearch"
                       @clear-search="handleClearSearch"
                       @save-result="handleSaveResult"
-                      @category-change="handleCategoryChange"
                       @loading-change="isLoading = $event"
                       v-model:filterEnabled="filterEnabled"
                       v-model:heatmapEnabled="heatmapEnabled"
                       v-model:weightEnabled="weightEnabled"
                       v-model:showWeightValue="showWeightValue"
-                      @data-removed="handleDataRemoved"
-                      :mapBounds="mapBounds"
-                      :selectedPolygon="selectedPolygon"
-                      :globalAnalysisEnabled="globalAnalysisEnabled" />
+                      />
       </div>
 
       <!-- 中线分隔符（已移除） -->
@@ -72,28 +67,21 @@
                       @reset="handleReset"
                       @save-result="handleSaveResult"
                       @vector-polygon-uploaded="handleVectorPolygonUploaded"
-                      @data-loaded="handleDataLoaded"
                       @search="handleSearch"
                       @clear-search="handleClearSearch"
                       @loading-change="isLoading = $event"
-                      @category-change="handleCategoryChange"
-                      @go-narrative="goToNarrative"
                       :on-run-algorithm="handleRunAlgorithm"
                       v-model:filterEnabled="filterEnabled"
                       v-model:heatmapEnabled="heatmapEnabled"
                       v-model:weightEnabled="weightEnabled"
                       v-model:showWeightValue="showWeightValue"
-                      @data-removed="handleDataRemoved"
-                      :mapBounds="mapBounds"
-                      :selectedPolygon="selectedPolygon"
-                      :globalAnalysisEnabled="globalAnalysisEnabled" />
+                      />
       </div>
     </header>
 
     <header class="mobile-header mobile-only-block">
       <ControlPanel ref="controlPanelRefMobile"
                     panel-type="mobile"
-                    @data-loaded="handleDataLoaded"
                     @toggle-draw="handleToggleDraw"
                     @debug-show="handleDebugShow"
                     @reset="handleReset"
@@ -101,16 +89,12 @@
                     @clear-search="handleClearSearch"
                     @save-result="handleSaveResult"
                     @loading-change="isLoading = $event"
-                    @category-change="handleCategoryChange"
                     :on-run-algorithm="handleRunAlgorithm"
                     v-model:filterEnabled="filterEnabled"
                     v-model:heatmapEnabled="heatmapEnabled"
                     v-model:weightEnabled="weightEnabled"
                     v-model:showWeightValue="showWeightValue"
-                    @data-removed="handleDataRemoved"
-                    :mapBounds="mapBounds"
-                    :selectedPolygon="selectedPolygon"
-                    :globalAnalysisEnabled="globalAnalysisEnabled" />
+                    />
     </header>
     <main 
       class="bottom-split" 
@@ -212,7 +196,6 @@
                   :user-location="userLocation"
                   :user-location-status="userLocationStatus"
                   :global-analysis-enabled="globalAnalysisEnabled"
-                  :selected-categories="selectedCategoryPath"
                   :regions="regions"
                   @close="toggleAiPanel"
                   @request-current-location="requestCurrentLocation"
@@ -324,7 +307,6 @@ const allPoiFeatures = shallowRef([]); // 所有加载的 POI 数据（优化：
 const selectedFeatures = shallowRef([]); // 当前选中 POI 集合（优化：使用 shallowRef）
 const polygonCenter = ref(null); // 选中多边形的中心点（屏幕像素坐标）
 const selectedPolygon = ref(null); // 选中多边形的经纬度坐标数组
-const selectedCategoryPath = ref([]); // 当前选中的 POI 分类路径
 
 // 交互状态
 const hoveredFeatureId = ref(null); // 当前悬停的要素（用于联动高亮）
@@ -482,10 +464,6 @@ async function ensureTagCloudReady() {
   return tagCloudRef.value;
 }
 
-// 叠加模式状态
-function goToNarrative() {
-  router.push('/narrative');
-}
 
 function stopCurrentLocationWatch() {
   if (geolocationWatchId === null) return;
@@ -820,23 +798,6 @@ function scheduleTagDataSync(features, { defer = false } = {}) {
   }
 
   window.setTimeout(() => commit(), 64);
-}
-
-function normalizeCategoryPaths(paths) {
-  if (!Array.isArray(paths) || paths.length === 0) return [];
-
-  if (Array.isArray(paths[0])) {
-    return paths
-      .filter(path => Array.isArray(path) && path.length > 0)
-      .map(path => [...path]);
-  }
-
-  return [paths];
-}
-
-function getSelectedCategoryLeaves(paths) {
-  const normalized = normalizeCategoryPaths(paths);
-  return [...new Set(normalized.map(path => path[path.length - 1]).filter(Boolean))];
 }
 
 function polygonToWKT(polygon, options = {}) {
@@ -1192,8 +1153,7 @@ function syncLegacySpatialStateFromConstraints() {
   circleRadiusMeters.value = null;
 }
 
-async function fetchManualFilteredFeatures(categories = [], options = {}) {
-  const normalizedCategories = Array.isArray(categories) ? categories : [];
+async function fetchManualFilteredFeatures(options = {}) {
   const requestLimit = Number.isFinite(Number(options.limit)) ? Number(options.limit) : 20000;
 
   const fetchByPayload = async (payload) => {
@@ -1234,7 +1194,6 @@ async function fetchManualFilteredFeatures(categories = [], options = {}) {
 
     if (regionPayloads.length > 0) {
       return fetchByPayload({
-        categories: normalizedCategories,
         limit: requestLimit,
         regions: regionPayloads
       });
@@ -1242,7 +1201,6 @@ async function fetchManualFilteredFeatures(categories = [], options = {}) {
   }
 
   const requestBody = {
-    categories: normalizedCategories,
     limit: requestLimit
   };
 
@@ -1261,13 +1219,6 @@ async function fetchManualFilteredFeatures(categories = [], options = {}) {
   }
 
   return fetchByPayload(requestBody);
-}
-
-
-function syncCategorySelectors(paths) {
-  controlPanelRefMap.value?.setCategorySelection?.(paths);
-  controlPanelRefTag.value?.setCategorySelection?.(paths);
-  controlPanelRefMobile.value?.setCategorySelection?.(paths);
 }
 
 const MAX_MANUAL_FETCH_LIMIT = 500000;
@@ -1358,23 +1309,6 @@ function boundsToBackend(bounds) {
   const [neLon, neLat] = toBackendPoint(normalized[2], normalized[3]);
 
   return normalizeBounds([swLon, swLat, neLon, neLat]);
-}
-
-function normalizeFeatureCategoryText(feature) {
-  const props = feature?.properties || {};
-  // 用 push 替代 filter().join() 减少临时数组分配，在万级 POI 场景下显著减GC 压力
-  const parts = [];
-  if (props.name) parts.push(props.name);
-  if (props['名称']) parts.push(props['名称']);
-  if (props.type) parts.push(props.type);
-  if (props['类型']) parts.push(props['类型']);
-  if (props.category_big) parts.push(props.category_big);
-  if (props.category_mid) parts.push(props.category_mid);
-  if (props.category_small) parts.push(props.category_small);
-  if (props['大类']) parts.push(props['大类']);
-  if (props['中类']) parts.push(props['中类']);
-  if (props['小类']) parts.push(props['小类']);
-  return parts.join(' ').toLowerCase();
 }
 
 function normalizeFeatureCoordinate(feature) {
@@ -1489,14 +1423,7 @@ function isPointWithinAnyConstraint(point, constraints) {
   });
 }
 
-function filterFeaturesClientSide(features, categoryLeaves) {
-  const normalizedCategories = Array.isArray(categoryLeaves)
-    ? categoryLeaves.map((cat) => String(cat).toLowerCase()).filter(Boolean)
-    : [];
-
-  const hasCategoryFilter = normalizedCategories.length > 0;
-  // 用 Set 做类别精确匹配前缀查找，替Array.some(includes) O(m) 搜索
-  const categorySet = hasCategoryFilter ? new Set(normalizedCategories) : null;
+function filterFeaturesClientSide(features) {
   const constraints = resolveSpatialConstraints();
   const hasConstraintFilter = constraints.length > 0;
   const bounds = Array.isArray(mapBounds.value) && mapBounds.value.length >= 4
@@ -1504,7 +1431,7 @@ function filterFeaturesClientSide(features, categoryLeaves) {
     : null;
 
   // 快速路径：无任何过滤条件时直接返回原数据
-  if (!hasConstraintFilter && !bounds && !hasCategoryFilter) {
+  if (!hasConstraintFilter && !bounds) {
     return Array.isArray(features) ? features : [];
   }
 
@@ -1526,22 +1453,7 @@ function filterFeaturesClientSide(features, categoryLeaves) {
       }
     }
 
-    if (!hasCategoryFilter) {
-      return true;
-    }
-
-    // 分词后用 Set.has 做精确匹配（覆盖单类别词匹配场景），
-    // 同时保留 includes 作为兜底模糊匹配
-    const categoryText = normalizeFeatureCategoryText(feature);
-    const words = categoryText.split(/\s+/);
-    for (let i = 0; i < normalizedCategories.length; i++) {
-      const cat = normalizedCategories[i];
-      // 优先精确匹配（O(1)），兜底子串匹配
-      if (categorySet.has(cat) && (words.includes(cat) || categoryText.includes(cat))) {
-        return true;
-      }
-    }
-    return false;
+    return true;
   });
 }
 
@@ -1581,13 +1493,9 @@ async function refreshManualSelectionSource(options = {}) {
   } = options;
 
   const requestToken = ++manualFilterRequestToken;
-  const categoryLeaves = getSelectedCategoryLeaves(selectedCategoryPath.value);
-  const hasCategoryFilter = categoryLeaves.length > 0;
   const hasCustomArea = hasManualSpatialSelection();
 
-  // 业约未选选未选时侄筛选乇氡Ｖ空?
-  // 页始时远取哟 20000 录没图一隆
-  if (!hasCustomArea && !hasCategoryFilter && !allowViewportFallback) {
+  if (!hasCustomArea && !allowViewportFallback) {
     return applySelectionResults([], {
       updateTagCloud,
       fitView: false,
@@ -1597,11 +1505,11 @@ async function refreshManualSelectionSource(options = {}) {
   }
 
   try {
-    const features = await fetchManualFilteredFeatures(categoryLeaves, { limit });
+    const features = await fetchManualFilteredFeatures({ limit });
     if (requestToken !== manualFilterRequestToken) return [];
 
     // 后端筛选结果仍进行一次前端严格裁剪，保证最终渲染 POI 100% 在约束内
-    const strictFeatures = filterFeaturesClientSide(features, categoryLeaves);
+    const strictFeatures = filterFeaturesClientSide(features);
     return applySelectionResults(strictFeatures, {
       updateTagCloud,
       fitView,
@@ -1612,7 +1520,7 @@ async function refreshManualSelectionSource(options = {}) {
     if (requestToken !== manualFilterRequestToken) return [];
 
     console.error('[App] 刷新手动筛选数据失败，回退到前端过滤', error);
-    const fallbackFeatures = filterFeaturesClientSide(allPoiFeatures.value, categoryLeaves);
+    const fallbackFeatures = filterFeaturesClientSide(allPoiFeatures.value);
     applySelectionResults(fallbackFeatures, {
       updateTagCloud,
       fitView,
@@ -1631,21 +1539,6 @@ async function refreshManualSelectionSource(options = {}) {
     return fallbackFeatures;
   }
 }
-
-async function handleCategoryChange(paths) {
-  const normalizedPaths = normalizeCategoryPaths(paths);
-  selectedCategoryPath.value = normalizedPaths;
-  syncCategorySelectors(normalizedPaths);
-
-  await refreshManualSelectionSource({
-    updateTagCloud: false,
-    fitView: false,
-    keepMapHighlight: false,
-    silent: true
-  });
-}
-
-const activeGroups = ref([]); // [{ name: 'A', features: [] }, ...]
 const heatmapEnabled = ref(false); // 新增热力图同步状态
 
 // 权重渲染状态
@@ -1693,10 +1586,9 @@ const filteredTagData = computed(() => {
   });
 });
 
-// Keep map rendering source aligned with AI analysis source under area/category constraints.
+// Keep map rendering source aligned with AI analysis source under active area constraints.
 const mapPoiFeatures = computed(() => {
-  const hasCategoryFilter = getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
-  if (hasCategoryFilter || hasManualSpatialSelection()) {
+  if (hasManualSpatialSelection()) {
     return selectedFeatures.value;
   }
   return allPoiFeatures.value;
@@ -1821,95 +1713,6 @@ const handleRunAlgorithm = async (payload) => {
 };
 
 /**
- * 处理数据加载完成
- * 当用户上传文件或加载预设数据后触发
- * @param {Object} payload - { success, name, features }
- */
-const handleDataLoaded = (payload) => {
-  if (payload && payload.success && payload.features) {
-    // 构造新数据
-    const newGroup = { 
-      name: payload.name, 
-      category: payload.category || payload.name, // 使用 category 作为唯一标识
-      features: payload.features 
-    };
-    
-    // 始终采用叠加/追加模式
-    // 检查该类别是否已加
-    const existsIndex = activeGroups.value.findIndex(g => g.category === newGroup.category);
-    
-    if (existsIndex >= 0) {
-      // 如果已存在，则更新数据（可能是重新加载）
-      activeGroups.value[existsIndex] = newGroup;
-    } else {
-      // 否则追加新组
-      activeGroups.value.push(newGroup);
-    }
-    
-    updateAllPoiFeatures();
-
-    // 分类数据变更后，重新同步“可分析 POI 池”，保证 AI 计数与词云来源一致
-    const hasCategoryFilter = getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
-    const hasCustomArea = hasManualSpatialSelection();
-    if (hasCategoryFilter || hasCustomArea) {
-      void refreshManualSelectionSource({
-        updateTagCloud: false,
-        fitView: false,
-        keepMapHighlight: false,
-        silent: true
-      });
-    }
-    
-    // 注意：这里只加载数据，不自动渲染红点
-  }
-};
-
-/**
- * 处理数据移除
- * 当用户取消勾选某个分类时触发
- * @param {string} categoryToRemove - 要移除的类别名称
- */
-const handleDataRemoved = (categoryToRemove) => {
-  if (!categoryToRemove) return;
-  
-  const initialLength = activeGroups.value.length;
-  activeGroups.value = activeGroups.value.filter(g => g.category !== categoryToRemove);
-  
-  if (activeGroups.value.length < initialLength) {
-    updateAllPoiFeatures();
-    void refreshManualSelectionSource({
-      updateTagCloud: false,
-      fitView: false,
-      keepMapHighlight: false,
-      silent: true
-    });
-    ElNotification.info({ title: '已移除', message: `移除图层: ${categoryToRemove}`, offset: 80 });
-  }
-};
-    
-
-
-/**
- * 更新所有POI 特征，合并所有活动分组并分配颜色索引
- */
-function updateAllPoiFeatures() {
-  let merged = [];
-  activeGroups.value.forEach((group, index) => {
-    // 为每个feature 添加 _groupIndex 属
-    const taggedFeatures = group.features.map(f => {
-      const newProps = { ...f.properties, _groupIndex: index };
-      return { ...f, properties: newProps };
-    });
-    merged = merged.concat(taggedFeatures);
-  });
-  allPoiFeatures.value = merged;
-  
-  // MapContainer 组件会自动监听poiFeatures 变化并根据当前geometry 重新筛选
-}
-
-
-
-/**
  * 处理权重变化事件
  * @param {Object} payload - { enabled, showValue, weightType?, needLoad? }
  */
@@ -1951,8 +1754,7 @@ const handleSearch = async (keyword) => {
   if (!keyword || !keyword.trim()) {
     // 恢复显示所有选中
     tagData.value = selectedFeatures.value;
-    const shouldKeepFilterStateOnly = hasManualSpatialSelection()
-      || getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
+    const shouldKeepFilterStateOnly = hasManualSpatialSelection();
     if (mapComponent.value) {
       if (shouldKeepFilterStateOnly) {
         mapComponent.value.clearHighlights?.();
@@ -1971,7 +1773,6 @@ const handleSearch = async (keyword) => {
   try {
     const constraints = resolveSpatialConstraints();
     const singleConstraint = constraints.length === 1 ? constraints[0] : null;
-    const selectedCategoryLeaves = getSelectedCategoryLeaves(selectedCategoryPath.value);
 
     const boundary = singleConstraint?.kind === 'polygon'
       ? singleConstraint.points
@@ -2027,7 +1828,7 @@ const handleSearch = async (keyword) => {
     }
     
     // 简单查询成功：直接渲染结果
-    const filtered = filterFeaturesClientSide(result.pois || [], selectedCategoryLeaves);
+    const filtered = filterFeaturesClientSide(result.pois || []);
     
     tagData.value = filtered;
     if (mapComponent.value) {
@@ -2055,8 +1856,7 @@ const handleSearch = async (keyword) => {
 const handleClearSearch = () => {
   // 恢复显示所有选中
   tagData.value = selectedFeatures.value;
-  const shouldKeepFilterStateOnly = hasManualSpatialSelection()
-    || getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
+  const shouldKeepFilterStateOnly = hasManualSpatialSelection();
   // 通知子组件清除搜索结果
   if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   if (mapComponent.value) {
@@ -2450,17 +2250,14 @@ const handleMapMoveEnd = throttle((bounds) => {
     if (view) mapZoom.value = view.getZoom();
   }
 
-  const hasCategoryFilter = getSelectedCategoryLeaves(selectedCategoryPath.value).length > 0;
-
-  if (!hasManualSpatialSelection() && hasCategoryFilter) {
-    void refreshManualSelectionSource({
-      updateTagCloud: false,
-      fitView: false,
-      keepMapHighlight: false,
-      silent: true,
-      limit: MAX_MANUAL_FETCH_LIMIT
-    });
-  }
+  void refreshManualSelectionSource({
+    updateTagCloud: false,
+    fitView: false,
+    keepMapHighlight: false,
+    silent: true,
+    allowViewportFallback: true,
+    limit: MAX_MANUAL_FETCH_LIMIT
+  });
 }, 500);
 
 /**
@@ -2597,7 +2394,7 @@ const handleMapReady = (mapInstance) => {
  */
 function handleDebugShow(groupName) {
   if (!allPoiFeatures.value.length) {
-    ElNotification.warning({ title: '提示', message: '请先加载地理语义分组数据', offset: 80 });
+    ElNotification.warning({ title: '提示', message: '当前没有可调试显示的 POI 数据', offset: 80 });
     return;
   }
   console.log('[App] 调试显示所有要素');
@@ -2660,7 +2457,10 @@ function handleRenderAIResult(data) {
   // 2: 莸 (呒)
   else if (typeof data[0] === 'string') {
     const nameSet = new Set(data);
-    featuresToRender = allPoiFeatures.value.filter(p => 
+    const candidateFeatures = selectedFeatures.value.length > 0
+      ? selectedFeatures.value
+      : allPoiFeatures.value;
+    featuresToRender = candidateFeatures.filter(p =>
       p.properties && (nameSet.has(p.properties['名称']) || nameSet.has(p.properties.name))
     );
     
@@ -2716,11 +2516,8 @@ function handleReset() {
   circleCenterGeo.value = null;
   circleRadiusMeters.value = null;
 
-  // 清空分类约束与已加载分组，并同步三个控制面板
-  selectedCategoryPath.value = [];
-  activeGroups.value = [];
+  // 清空当前已加载的主路由 POI
   allPoiFeatures.value = [];
-  syncCategorySelectors([]);
 
   // 清空地图上的选区和高亮
   if (mapComponent.value) {

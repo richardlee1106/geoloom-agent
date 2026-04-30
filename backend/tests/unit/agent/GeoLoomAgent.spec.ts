@@ -1702,8 +1702,9 @@ it('uses town cell annotations to diversify nearby poi ordering instead of keepi
 
     expect(answer).toContain('武汉大学校园片区')
     expect(synthesisPrompt).toContain('请只基于下面证据写最终回答')
-    expect(synthesisPrompt).toContain('## 区域主语 / ## 关键特征 / ## 热点与结构 / ## 机会与风险')
+    expect(synthesisPrompt).toContain('## 区域主语 / ## 关键特征 / ## 热点与结构 / ## 补充说明')
     expect(synthesisPrompt).toContain('片区特征: 校园主导、多核活力')
+    expect(synthesisPrompt).toContain('默认做中性片区总结')
     expect(synthesisPrompt).not.toContain('机械兜底草稿')
     expect(synthesisPrompt).not.toContain('置信度:')
   })
@@ -1723,6 +1724,24 @@ it('uses town cell annotations to diversify nearby poi ordering instead of keepi
     expect(result.usedRenderedAnswer).toBe(true)
     expect(result.answer).toContain('## 推荐结论')
     expect(result.answer).toContain('## 就近可选')
+  })
+
+  it('preserves the plain-text answer when the agent is intentionally returning an insufficient-evidence explanation', () => {
+    const agent = new GeoLoomAgent({
+      registry: new SkillRegistry(),
+      version: 'test',
+    })
+
+    const result = (agent as any).ensureMarkdownAnswer({
+      answer: '当前证据还不够稳定，我先不直接下结论，建议补充更明确的范围或参考区域。',
+      renderedAnswer: '## 结论\n\n这里会被误替换成结构化兜底内容。',
+      queryType: 'area_overview',
+      answerSource: 'insufficient_evidence',
+    })
+
+    expect(result.usedRenderedAnswer).toBe(false)
+    expect(result.answer).toContain('当前证据还不够稳定')
+    expect(result.answer).not.toContain('这里会被误替换成结构化兜底内容')
   })
 
   it('still rejects area-overview answers that miss both the subject and the evidence cues', () => {

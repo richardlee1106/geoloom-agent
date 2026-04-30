@@ -169,4 +169,49 @@ describe('RequirementResolver', () => {
     const discoverySpec = result.executionSpecs.find((spec) => spec.atom === 'web.poi_discovery')
     expect(discoverySpec).toBeUndefined()
   })
+
+  it('requires anchor resolution before running place-based area_overview probes', () => {
+    const resolver = new RequirementResolver()
+    const result = resolver.resolve({
+      contract: {
+        narrative: '围绕用户问题组织回答。',
+        meta: {
+          scope: 'place',
+          depth: 'prescriptive',
+          forbiddenBlocks: [],
+          estimatedAtomCount: 7,
+          trackingId: 'contract_test_004',
+          needsWebEvidence: false,
+          webSearchStrategy: 'none',
+        },
+      },
+      intent: {
+        queryType: 'area_overview',
+        intentMode: 'deterministic_visible_loop',
+        rawQuery: '武汉大学附近适合补什么配套？请简洁说明理由。',
+        placeName: '武汉大学',
+        anchorSource: 'place',
+        targetCategory: '区域洞察',
+        radiusM: 1200,
+        needsClarification: false,
+        clarificationHint: null,
+      },
+    })
+
+    expect(result.requiredAtoms).toEqual(expect.arrayContaining([
+      'anchor.resolved',
+      'area.category_histogram',
+      'area.representative_samples',
+      'area.hotspots',
+      'area.competition_density',
+      'area.aoi_context',
+      'area.landuse_context',
+    ]))
+
+    const areaSpecs = result.executionSpecs.filter((spec) => spec.atom.startsWith('area.'))
+    expect(areaSpecs).not.toHaveLength(0)
+    for (const spec of areaSpecs) {
+      expect(spec.dependsOn).toEqual(expect.arrayContaining(['anchor.resolved']))
+    }
+  })
 })

@@ -30,7 +30,7 @@ describe('SkillManifestLoader', () => {
     const spatialEncoder = manifests.find((item) => item.name === 'spatial_encoder')
     const spatialVector = manifests.find((item) => item.name === 'spatial_vector')
 
-    expect(postgis?.promptSnippet).toMatch(/先拿结构证据|主导业态|热点|异常点|机会/)
+    expect(postgis?.promptSnippet).toMatch(/先区分问题类型|普通片区总结|区域主语|结构分布|代表性样本/)
     expect(spatialEncoder?.promptSnippet).toMatch(/语义辅助证据|不能冒充硬事实/)
     expect(spatialVector?.promptSnippet).toMatch(/候选集|不是最终确定性结论/)
   })

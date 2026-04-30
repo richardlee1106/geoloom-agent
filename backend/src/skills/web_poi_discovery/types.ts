@@ -176,7 +176,8 @@ export interface PoiDiscoveryResult {
 
 /** Skill 配置 */
 export interface WebPoiDiscoveryConfig {
-  tavilyApiKey: string
+  tavilyApiKey?: string
+  tavilyApiKeys?: string[]
   tavilyTimeoutMs: number
   /** LLM provider（用于 mention 提取） */
   llmBaseUrl: string

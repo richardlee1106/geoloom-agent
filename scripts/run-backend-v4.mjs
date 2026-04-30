@@ -42,10 +42,10 @@ if (script === 'dev') {
 }
 
 const child = spawn(
-  script === 'dev' ? 'node' : `npm --prefix backend run ${script}`,
+  script === 'dev' ? 'node' : 'npm',
   script === 'dev'
     ? ['dist/src/server.js']
-    : [],
+    : ['run', script],
   {
     cwd: new URL('../backend', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'),
     stdio: 'inherit',

@@ -32,6 +32,7 @@ export type QueryType =
   | 'area_overview'
   | 'similar_regions'
   | 'compare_places'
+  | 'composite_recommendation'
   | 'unsupported'
 
 export type IntentMode =
@@ -282,6 +283,23 @@ export interface RegionFeatureTag {
   detail?: string | null
 }
 
+export interface SimilarRegionDimension {
+  key: string
+  label: string
+  score: number
+  detail?: string | null
+}
+
+export interface SimilarRegionEvidenceItem {
+  regionId?: string | null
+  name: string
+  score: number
+  summary?: string
+  rank?: number | null
+  tags?: string[]
+  dimensions?: SimilarRegionDimension[]
+}
+
 export interface PoiProfileInput {
   name: string
   categoryMain?: string | null
@@ -326,7 +344,7 @@ export interface EvidenceView {
   secondaryAnchor?: EvidenceAnchor
   pairs?: ComparisonPair[]
   buckets?: Array<{ label: string, value: number }>
-  regions?: Array<{ name: string, score: number, summary?: string }>
+  regions?: SimilarRegionEvidenceItem[]
   boundary?: Record<string, unknown> | null
   spatialClusters?: { hotspots: Record<string, unknown>[] } | null
   vernacularRegions?: Record<string, unknown>[]

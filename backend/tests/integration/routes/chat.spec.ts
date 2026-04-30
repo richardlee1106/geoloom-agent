@@ -261,6 +261,88 @@ function buildTestApp(options: {
           }
         }
 
+        if (sql.includes('corridor_score_m') && sql.includes("category_main = '餐饮美食'")) {
+          return {
+            rows: [
+              {
+                id: 5101,
+                name: '赵师傅热干面·三角路店',
+                category_main: '餐饮美食',
+                category_sub: '快餐厅',
+                longitude: 114.3215,
+                latitude: 30.5848,
+                distance_m: 96,
+                distance_to_start_m: 410,
+                distance_to_end_m: 180,
+                corridor_score_m: 590,
+                destination_distance_m: 4680,
+              },
+              {
+                id: 5102,
+                name: '江边小馆',
+                category_main: '餐饮美食',
+                category_sub: '中餐厅',
+                longitude: 114.3251,
+                latitude: 30.5839,
+                distance_m: 128,
+                distance_to_start_m: 320,
+                distance_to_end_m: 240,
+                corridor_score_m: 560,
+                destination_distance_m: 4520,
+              },
+              {
+                id: 5103,
+                name: '三角路烧烤铺',
+                category_main: '餐饮美食',
+                category_sub: '烧烤',
+                longitude: 114.3238,
+                latitude: 30.5844,
+                distance_m: 142,
+                distance_to_start_m: 360,
+                distance_to_end_m: 210,
+                corridor_score_m: 570,
+                destination_distance_m: 4610,
+              },
+            ],
+            rowCount: 3,
+          }
+        }
+
+        if (sql.includes("category_sub = '服装鞋帽皮具店'")) {
+          return {
+            rows: [
+              {
+                id: 6101,
+                name: 'MO&Co.武汉万象城店',
+                category_main: '购物服务',
+                category_sub: '服装鞋帽皮具店',
+                longitude: 114.3562,
+                latitude: 30.5906,
+                distance_m: 65,
+              },
+              {
+                id: 6102,
+                name: 'UR武汉万象城店',
+                category_main: '购物服务',
+                category_sub: '服装鞋帽皮具店',
+                longitude: 114.3567,
+                latitude: 30.5902,
+                distance_m: 92,
+              },
+              {
+                id: 6103,
+                name: 'Edition女装集合店',
+                category_main: '购物服务',
+                category_sub: '服装鞋帽皮具店',
+                longitude: 114.3558,
+                latitude: 30.5904,
+                distance_m: 118,
+              },
+            ],
+            rowCount: 3,
+          }
+        }
+
         if (sql.includes('餐饮美食')) {
           return {
             rows: [
@@ -389,6 +471,32 @@ function buildTestApp(options: {
           ]
         }
 
+        if (placeName === '湖北大学地铁站') {
+          return [
+            {
+              id: 102,
+              name: '湖北大学地铁站',
+              lon: 114.3309,
+              lat: 30.5770,
+              category_main: '交通设施服务',
+              category_sub: '地铁站',
+            },
+          ]
+        }
+
+        if (placeName === '三角路地铁站') {
+          return [
+            {
+              id: 103,
+              name: '三角路地铁站',
+              lon: 114.3218,
+              lat: 30.5842,
+              category_main: '交通设施服务',
+              category_sub: '地铁站',
+            },
+          ]
+        }
+
         if (placeName === '光谷步行街') {
           return [
             {
@@ -398,6 +506,19 @@ function buildTestApp(options: {
               lat: 30.507681,
               category_main: '购物服务',
               category_sub: '购物相关场所',
+            },
+          ]
+        }
+
+        if (placeName === '万象城') {
+          return [
+            {
+              id: 201,
+              name: '武汉万象城',
+              lon: 114.3565,
+              lat: 30.5908,
+              category_main: '购物服务',
+              category_sub: '商场',
             },
           ]
         }
@@ -578,6 +699,42 @@ describe('POST /api/geo/chat', () => {
     expect(refined.results.stats.query_type).toBe('nearby_poi')
     expect(refined.results.evidence_view.type).toBe('poi_list')
     expect(refined.tool_calls.length).toBeGreaterThan(0)
+
+    await app.close()
+  })
+
+  it('handles corridor dining plus destination fashion queries in the main route chat', async () => {
+    const app = buildTestApp()
+    await app.ready()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/geo/chat',
+      payload: {
+        messages: [{ role: 'user', content: '在湖北大学地铁站和三角路地铁站之间的美食店，吃完了我想我去万象城逛一逛，有哪些服装店值得逛一下？' }],
+        options: { requestId: 'req_chat_composite_001' },
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const events = parseSSE(response.body)
+    const preview = events.find((item) => item.event === 'intent_preview')?.data
+    const refined = events.find((item) => item.event === 'refined_result')?.data
+
+    expect(preview?.queryType).toBe('composite_recommendation')
+    expect(refined.results.stats.query_type).toBe('composite_recommendation')
+    expect(refined.answer).toMatch(/中途餐饮/)
+    expect(refined.answer).toMatch(/湖北大学地铁站/)
+    expect(refined.answer).toMatch(/三角路地铁站/)
+    expect(refined.answer).toMatch(/万象城/)
+    expect(refined.answer).toMatch(/赵师傅热干面·三角路店|江边小馆|三角路烧烤铺/)
+    expect(refined.answer).toMatch(/MO&Co\.武汉万象城店|UR武汉万象城店|Edition女装集合店/)
+    expect(refined.results.evidence_view.meta.composite_plan.destination.placeName).toMatch(/万象城/)
+    expect(refined.results.pois.some((item: { meta?: { compositeStage?: string } }) => item.meta?.compositeStage === 'corridor')).toBe(true)
+    expect(refined.results.pois.some((item: { meta?: { compositeStage?: string } }) => item.meta?.compositeStage === 'destination')).toBe(true)
+    expect(refined.tool_calls.filter((call: { action?: string }) => call.action === 'resolve_anchor')).toHaveLength(3)
+    expect(events.at(-1)?.event).toBe('done')
 
     await app.close()
   })
@@ -1037,6 +1194,9 @@ describe('POST /api/geo/chat', () => {
     expect(refined.results.evidence_view.type).toBe('semantic_candidate')
     expect(refined.results.stats.semantic_evidence_level).toBe('degraded')
     expect(refined.results.evidence_view.semanticEvidence.level).toBe('degraded')
+    expect(refined.results.evidence_view.regions.length).toBeGreaterThan(0)
+    expect(refined.results.evidence_view.regions[0].dimensions.length).toBeGreaterThan(0)
+    expect(refined.results.evidence_view.meta.referenceDimensions.length).toBeGreaterThan(0)
     expect(refined.answer).toMatch(/相似|片区/)
 
     await app.close()
@@ -1247,7 +1407,7 @@ describe('POST /api/geo/chat', () => {
       method: 'POST',
       url: '/api/geo/chat',
       payload: {
-        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。' }],
         options: {
           requestId: 'req_chat_area_001',
           spatialContext: {
@@ -1271,9 +1431,10 @@ describe('POST /api/geo/chat', () => {
     expect(refined.answer).toMatch(/## 区域主语/)
     expect(refined.answer).toMatch(/## 关键特征/)
     expect(refined.answer).toMatch(/## 热点与结构/)
-    expect(refined.answer).toMatch(/## 机会与风险/)
+    expect(refined.answer).toMatch(/## 补充说明/)
     expect(refined.answer).toMatch(/湖北大学/)
     expect(refined.answer).toMatch(/湖北大学地铁站E口|武昌鱼馆|校园便利店/)
+    expect(refined.answer).toMatch(/暂不展开经营判断/)
     expect(refined.answer).not.toMatch(/范围内 \d+ 个|高密点位/)
 
     await app.close()
@@ -1303,7 +1464,7 @@ describe('POST /api/geo/chat', () => {
       method: 'POST',
       url: '/api/geo/chat',
       payload: {
-        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。' }],
         options: {
           requestId: 'req_chat_area_001',
           spatialContext: {
@@ -1449,7 +1610,7 @@ describe('POST /api/geo/chat', () => {
       method: 'POST',
       url: '/api/geo/chat',
       payload: {
-        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。' }],
         options: {
           requestId: 'req_chat_area_overview_001',
           spatialContext: {
@@ -1473,9 +1634,10 @@ describe('POST /api/geo/chat', () => {
     expect(refined.answer).toMatch(/## 区域主语/)
     expect(refined.answer).toMatch(/## 关键特征/)
     expect(refined.answer).toMatch(/## 热点与结构/)
-    expect(refined.answer).toMatch(/## 机会与风险/)
+    expect(refined.answer).toMatch(/## 补充说明/)
     expect(refined.answer).toMatch(/湖北大学/)
     expect(refined.answer).toMatch(/湖北大学地铁站E口|武昌鱼馆|校园便利店/)
+    expect(refined.answer).toMatch(/暂不展开经营判断/)
     expect(refined.answer).not.toMatch(/范围内 \d+ 个|高密点位/)
     expect(refined.answer).not.toMatch(/热点网格1/)
 
@@ -1592,7 +1754,7 @@ describe('POST /api/geo/chat', () => {
       method: 'POST',
       url: '/api/geo/chat',
       payload: {
-        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+        messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。' }],
         options: {
           requestId: 'req_chat_area_overview_context_default_001',
           spatialContext: {

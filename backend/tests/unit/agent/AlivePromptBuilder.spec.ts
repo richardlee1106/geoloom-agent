@@ -46,7 +46,7 @@ describe('AlivePromptBuilder', () => {
         user: '用户希望你像真正的 agent 一样调用工具后再回答。',
       },
       memory: {
-        summary: '用户最近在问当前区域值不值得开店，以及主导业态和热点。',
+        summary: '用户最近在问当前区域是什么样的片区，以及主要特征和热点。',
         recentTurns: [],
       },
       skillSnippets: [
@@ -58,8 +58,9 @@ describe('AlivePromptBuilder', () => {
     expect(prompt).toContain('模型负责思考和编排')
     expect(prompt).toContain('先拿结构证据')
     expect(prompt).toContain('语义辅助证据')
-    expect(prompt).toContain('主导业态')
-    expect(prompt).toContain('机会')
+    expect(prompt).toContain('区域主语')
+    expect(prompt).toContain('关键特征')
+    expect(prompt).toContain('热点结构')
   })
 
   it('teaches the model to treat AOI and landuse as optional enhancement evidence instead of primary structural proof', () => {
@@ -108,10 +109,10 @@ describe('AlivePromptBuilder', () => {
 
     expect(prompt).toContain('片区总结')
     expect(prompt).toContain('开店')
-    expect(prompt).toContain('供给')
-    expect(prompt).toContain('竞争')
+    expect(prompt).toContain('供需竞争')
     expect(prompt).toContain('AOI')
-    expect(prompt).toContain('不要把“开店判断”答成“片区总结”的改写版')
+    expect(prompt).toContain('不要默认扩展到商机判断')
+    expect(prompt).toContain('只有用户明确在问开店')
   })
 
   it('teaches the model to distinguish query and analysis as two normal LLM-led paths instead of fallback modes', () => {

@@ -5,14 +5,9 @@ import type { ChatRuntime } from '../app.js'
 import { SSEWriter } from './SSEWriter.js'
 import type { ChatRequestV4 } from './types.js'
 
-function normalizeSurface(value: unknown) {
-  return String(value || '').trim().toLowerCase() === 'narrative' ? 'narrative' : 'default'
-}
-
 export class SurfaceChatRuntime implements ChatRuntime {
   constructor(private readonly options: {
     defaultRuntime: ChatRuntime
-    narrativeRuntime: ChatRuntime
   }) {}
 
   createWriter(stream: NodeJS.WritableStream, traceId = randomUUID()) {
@@ -24,16 +19,13 @@ export class SurfaceChatRuntime implements ChatRuntime {
   }
 
   async handle(request: ChatRequestV4, writer: SSEWriter) {
-    const runtime = normalizeSurface(request.options?.surface) === 'narrative'
-      ? this.options.narrativeRuntime
-      : this.options.defaultRuntime
-    await runtime.handle(request, writer)
+    await this.options.defaultRuntime.handle(request, writer)
   }
 
-  async getHealth() {
+  async getHealth(): Promise<Record<string, unknown>> {
+    const defaultHealth = await this.options.defaultRuntime.getHealth?.()
     return {
-      default: await this.options.defaultRuntime.getHealth?.(),
-      narrative: await this.options.narrativeRuntime.getHealth?.(),
+      ...(defaultHealth || {}),
     }
   }
 }

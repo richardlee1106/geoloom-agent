@@ -1,1808 +1,1910 @@
 <template>
-  <div class="narrative-mode-container">
-    
-    <div class="bg-gradient"></div>
-    <div class="grid-overlay"></div>
-    <div class="floating-orb orb-1"></div>
-    <div class="floating-orb orb-2"></div>
-
-    
-    <MapContainer 
-      ref="mapRef"
-      class="background-map"
-      :poiFeatures="poiFeatures"
-      :filterEnabled="true"
-      :globalAnalysisEnabled="true"
-      :showControls="false"
-      @map-ready="onMapReady"
-      @map-move-end="onMapMove"
-    />
-
-    
-    <div class="narrative-ui">
-      
-      <transition name="fade-slide">
-        <div v-if="scriptVisible" ref="aiPanelRef" class="script-panel" :class="{ 'generating': isGenerating }">
-          <div class="panel-header">
-            <div class="brand-mini">
-              <div class="brand-icon-mini">✨</div>
-              <div class="brand-text-mini">
-                <h1>AI 空间叙事</h1>
-                <span>SPACE NARRATIVE</span>
-              </div>
-            </div>
-            <el-button link @click="scriptVisible = false" class="close-btn">
-              <el-icon><Close /></el-icon>
-            </el-button>
-          </div>
-
-          <div class="tour-style-switcher">
-            <div class="tour-style-copy">
-              <span class="tour-style-copy__eyebrow">导览风格切换</span>
-              <p>同一视口，不同讲法。你可以先快速了解，也可以切到更像本地带路的版本。</p>
-            </div>
-            <div class="tour-style-group">
-              <button
-                v-for="option in TOUR_STYLE_OPTIONS"
-                :key="option.value"
-                class="tour-style-pill"
-                :class="{ active: selectedTourStyle === option.value }"
-                :disabled="isGenerating"
-                @click="selectTourStyle(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </div>
-          
-          <div class="script-content" ref="scriptContentRef">
-            
-            <div v-if="aiResponse" class="ai-text-response">
-              <div class="response-title">AI 分析报告</div>
-              <div class="response-body" v-html="formattedAiResponse"></div>
-            </div>
-
-            
-            <div v-if="narrativeSteps.length > 0" class="narrative-steps-section">
-              <div class="response-title">漫游脚本 · {{ currentTourStyleLabel }}</div>
-              <div class="modern-steps">
-                <div 
-                  v-for="(step, index) in narrativeSteps" 
-                  :key="index"
-                  class="modern-step-item"
-                  :class="{ 'active': currentStepIndex === index, 'finished': currentStepIndex > index }"
-                >
-                  <div class="step-line"></div>
-                  <div class="step-dot"></div>
-                  <div class="step-info">
-                    <div class="step-label">STEP {{ index + 1 }}</div>
-                    <div class="step-title">
-                      {{ step.focus === 'overview' ? '区域全景' : step.focus }}
-                      <span v-if="step.focus !== 'overview' && step.tierLabel" class="step-tier">{{ step.tierLabel }}</span>
-                    </div>
-                    <div v-if="step.tagline && step.focus !== 'overview'" class="step-tagline">{{ step.tagline }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            
-            <div v-if="!aiResponse && !isGenerating" class="empty-state">
-              <div class="empty-icon">💬</div>
-              <p>点击下方按钮，按当前视口与当前导览风格生成第一版区域导览骨架。</p>
-            </div>
-
-            
-            <div v-if="isGenerating" class="loading-state">
-              <div class="loader-spinner-mini"></div>
-              <span>正在生成区域导览骨架...</span>
-            </div>
-          </div>
-
-          <div class="panel-footer">
-            <div class="action-row">
-              <button 
-                class="btn-modern btn-generate" 
-                :disabled="isGenerating"
-                @click="handleGenerate"
-              >
-                <el-icon v-if="isGenerating" class="is-loading"><Loading /></el-icon>
-                <el-icon v-else><MagicStick /></el-icon>
-                {{ isGenerating ? '导览生成中...' : '生成导览骨架' }}
-              </button>
-              <button 
-                v-if="narrativeSteps.length > 0" 
-                class="btn-modern btn-play-narrative"
-                :class="{ 'playing': isPlaying }"
-                @click="playNarrative" 
-                :disabled="isPlaying"
-              >
-                <el-icon><VideoPlay /></el-icon>
-                {{ isPlaying ? '播放中...' : '开始漫游' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </transition>
-
-      
-      <transition name="narrator-slide">
-        <div v-if="isPlaying && currentVoiceText" ref="narratorPanelRef" class="narrator-panel">
-          <div class="narrator-accent-line"></div>
-          <div class="narrator-inner">
-            <div class="narrator-header">
-              <div class="narrator-meta">
-                <span class="narrator-eyebrow">当前镜头</span>
-                <span v-if="currentTierLabel" class="narrator-tier">{{ currentTierLabel }}</span>
-              </div>
-              <h2 class="narrator-focus">{{ currentNarrativeFocus }}</h2>
-              <div class="narrator-style">{{ currentTourStyleLabel }}</div>
-            </div>
-            <div class="narrator-body">
-              <p class="narrator-text">
-                {{ typedText }}<span class="typing-cursor"></span>
-              </p>
-              <div v-if="currentTagline" class="narrator-tagline">
-                <span>{{ currentTagline }}</span>
-              </div>
-              <div v-if="currentReasonCard" class="narrator-reason-card">
-                <div class="narrator-reason-card__title">推荐理由卡</div>
-                <div class="narrator-reason-card__grid">
-                  <div class="narrator-reason-row">
-                    <span>代表什么</span>
-                    <strong>{{ currentReasonCard.represents }}</strong>
-                  </div>
-                  <div class="narrator-reason-row">
-                    <span>为什么值得去</span>
-                    <strong>{{ currentReasonCard.whyWorthVisiting }}</strong>
-                  </div>
-                  <div class="narrator-reason-row">
-                    <span>适合什么时候去</span>
-                    <strong>{{ currentReasonCard.bestTime }}</strong>
-                  </div>
-                  <div class="narrator-reason-row">
-                    <span>和周边什么节点有关</span>
-                    <strong>{{ currentNearbyConnectionsText }}</strong>
-                  </div>
-                </div>
-              </div>
-              <div v-if="currentLocalTip" class="narrator-local-tip">
-                <span class="narrator-local-tip__label">本地人提醒</span>
-                <p>{{ currentLocalTip }}</p>
-              </div>
-              <div v-if="currentWebFactHint" class="narrator-fact">
-                <span class="fact-badge">{{ currentWebFactHint }}</span>
-              </div>
-              <div v-if="currentWebFactSnippet" class="narrator-web-source">
-                <div class="narrator-web-source__label">
-                  <el-icon class="narrator-web-source__icon"><Link /></el-icon>
-                  <span>网页来源</span>
-                </div>
-                <div class="narrator-web-source__quote">{{ currentWebFactSnippet }}</div>
-              </div>
-            </div>
-            <div class="narrator-footer">
-              <div class="voice-visualizer">
-                <div v-for="i in 5" :key="i" class="audio-bar" :style="{ animationDelay: (i * 0.2) + 's' }"></div>
-              </div>
-              <div class="narrator-controls">
-                <button
-                  class="narrator-step-btn"
-                  :disabled="currentStepIndex <= 0"
-                  @click="goPrevStep"
-                  title="上一个节点"
-                >
-                  <el-icon><ArrowLeft /></el-icon>
-                </button>
-                <div class="narrator-step-badge">{{ currentStepProgressLabel }}</div>
-                <button
-                  class="narrator-step-btn"
-                  :disabled="currentStepIndex >= narrativeSteps.length - 1"
-                  @click="goNextStep"
-                  title="下一个节点"
-                >
-                  <el-icon><ArrowRight /></el-icon>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </transition>
-      
-      
-      <div ref="actionButtonsRef" class="action-buttons">
-        <button class="round-tool-btn" @click="scriptVisible = !scriptVisible" :title="scriptVisible ? '隐藏面板' : '显示面板'">
-          <el-icon><View v-if="scriptVisible" /><Hide v-else /></el-icon>
-        </button>
-        <button class="round-tool-btn danger" @click="goBack" title="返回主页">
-          <el-icon><ArrowLeft /></el-icon>
-        </button>
+  <div class="narrative-shell">
+    <!-- 顶部栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">智能地图解说引擎</span>
+        <span class="brand-tag">BETA</span>
       </div>
+      <nav class="mode-switch">
+        <button
+          v-for="m in modes"
+          :key="m.key"
+          :class="['mode-btn', { active: mode === m.key }]"
+          @click="mode = m.key"
+        >
+          <span class="mode-icon" v-html="m.icon" />
+          <span>{{ m.label }}</span>
+        </button>
+      </nav>
+      <div class="topbar-actions">
+        <button class="action-btn" title="分享"><span v-html="ICONS.share" /><span>分享</span></button>
+        <button class="action-btn" title="收藏"><span v-html="ICONS.bookmark" /><span>收藏</span></button>
+        <button class="action-btn" title="设置"><span v-html="ICONS.settings" /><span>设置</span></button>
+      </div>
+    </header>
+
+    <!-- 中部主体：左 + 中 + 右 -->
+    <div class="main-grid">
+      <!-- 左面板 -->
+      <aside class="left-panel">
+        <!-- 1. 片区筛选 -->
+        <section class="panel-card">
+          <div class="card-head">
+            <span class="card-index">1</span>
+            <span class="card-title">片区筛选</span>
+            <span class="card-help" title="按行政区或自定义范围限定 narrative 候选片区">?</span>
+          </div>
+          <div class="search-row">
+            <span class="search-icon" v-html="ICONS.search" />
+            <input class="search-input" placeholder="搜索片区 / POI" />
+          </div>
+          <div class="select-group">
+            <label class="select-label">自定义范围</label>
+            <div class="select-row">
+              <button class="ghost-btn"><span v-html="ICONS.draw" /><span>绘制 AOI</span></button>
+              <button class="ghost-btn"><span v-html="ICONS.upload" /><span>上传文件</span></button>
+            </div>
+          </div>
+          <div class="region-info">
+            <div class="region-info-title">当前片区信息</div>
+            <div class="region-info-row">
+              <span>面积</span>
+              <strong>{{ activeRegionAreaText }}</strong>
+            </div>
+            <div class="region-info-row">
+              <span>POI</span>
+              <strong>{{ totalPoi.toLocaleString() }}</strong>
+            </div>
+            <div class="region-info-row">
+              <span>主体覆盖</span>
+              <strong>{{ Math.round(narrative.dominant_coverage * 100) }}%</strong>
+            </div>
+          </div>
+          <button class="primary-btn">应用片区</button>
+        </section>
+
+        <!-- 2. 点剔除与分层 -->
+        <section class="panel-card">
+          <div class="card-head">
+            <span class="card-index">2</span>
+            <span class="card-title">点剔除与分层</span>
+            <span class="card-help" title="按相关性阈值切换 5 档渲染">?</span>
+          </div>
+          <ul class="tier-list">
+            <li v-for="t in tierLegend" :key="t.key" class="tier-item">
+              <span class="tier-dot" :style="{ background: t.color, boxShadow: `0 0 8px ${t.color}` }" />
+              <span class="tier-label">{{ t.label }}</span>
+              <span class="tier-count">{{ tierStats[t.key] || 0 }}</span>
+            </li>
+          </ul>
+          <div class="slider-row">
+            <span class="slider-label">相关性阈值</span>
+            <span class="slider-value">{{ ui.relevanceThreshold.toFixed(2) }}</span>
+          </div>
+          <input class="slider-input" type="range" min="0" max="1" step="0.01" v-model.number="ui.relevanceThreshold" />
+          <div class="slider-ticks"><span>0%</span><span>50%</span><span>100%</span></div>
+
+          <div class="slider-row">
+            <span class="slider-label">透明度调节</span>
+            <span class="slider-value">{{ ui.opacityScale.toFixed(2) }}</span>
+          </div>
+          <input class="slider-input" type="range" min="0" max="1" step="0.01" v-model.number="ui.opacityScale" />
+          <div class="slider-ticks"><span>0%</span><span>50%</span><span>100%</span></div>
+        </section>
+
+        <!-- 4. 尺度与重心 -->
+        <section class="panel-card">
+          <div class="card-head">
+            <span class="card-index">4</span>
+            <span class="card-title">尺度与重心</span>
+          </div>
+          <div class="lod-row">
+            <span class="lod-key">当前尺度</span>
+            <span class="lod-val">{{ lodLabel }}</span>
+          </div>
+          <div class="lod-row">
+            <span class="lod-key">当前尺度档位</span>
+            <span class="lod-val accent">Level {{ Math.round(narrative.viewport.zoom) }}</span>
+          </div>
+          <div class="lod-bar">
+            <span>近景（深挖）</span>
+            <div class="lod-track"><div class="lod-knob" :style="{ left: lodKnobLeft }" /></div>
+            <span>远景（多讲）</span>
+          </div>
+          <div class="centroid-row">
+            <span class="centroid-key">重心策略</span>
+          </div>
+          <div class="centroid-tabs">
+            <button
+              v-for="o in centroidStrategyOptions"
+              :key="o.key"
+              :class="['centroid-tab', { active: ui.centroidStrategy === o.key }]"
+              @click="ui.centroidStrategy = o.key"
+            >{{ o.label }}</button>
+          </div>
+          <div class="centroid-hint">
+            当前视角中{{ activeRegion.display_name }}占比{{ Math.round(narrative.dominant_coverage * 100) }}%，系统将以其为重心，优先讲解核心内容，适当扩展周边。
+          </div>
+        </section>
+      </aside>
+
+      <!-- 中央地图区（2.5D 卫星影像视角） -->
+      <main class="map-stage">
+        <!-- 透视场：rotateX 让底图看起来是航拍倾斜的 -->
+        <div class="map-perspective-deck">
+          <div ref="mapContainerEl" class="map-canvas" :class="`mode-${baseLayerMode}`" />
+        </div>
+        <!-- 远端地平线渐变遮罩，让倾斜后的远端柔和过渡 -->
+        <div class="map-horizon-mask" aria-hidden="true" />
+        <!-- 视图边缘 vignette，加强中心聚焦 -->
+        <div class="map-vignette" aria-hidden="true" />
+
+        <!-- 当前视角覆盖分析（左上叠加，可折叠） -->
+        <div class="coverage-card" :class="{ collapsed: coverageCollapsed }">
+          <div class="coverage-head" @click="coverageCollapsed = !coverageCollapsed">
+            <span>当前视角覆盖分析</span>
+            <div class="coverage-head-actions">
+              <span class="card-help" @click.stop>?</span>
+              <button
+                type="button"
+                class="coverage-toggle"
+                :title="coverageCollapsed ? '展开' : '折叠'"
+                :aria-expanded="!coverageCollapsed"
+                @click.stop="coverageCollapsed = !coverageCollapsed"
+              >
+                <span v-html="coverageCollapsed ? ICONS.chevronDown : ICONS.chevronUp" />
+              </button>
+            </div>
+          </div>
+          <div v-show="!coverageCollapsed" class="coverage-body">
+            <svg class="donut" :width="120" :height="120" viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r="46" fill="none" stroke="#1e2742" stroke-width="14" />
+              <circle
+                cx="60" cy="60" r="46" fill="none"
+                stroke="#ef4444" stroke-width="14"
+                :stroke-dasharray="`${donutDash.core} 999`"
+                :stroke-dashoffset="donutOffsets.core"
+                transform="rotate(-90 60 60)"
+              />
+              <circle
+                cx="60" cy="60" r="46" fill="none"
+                stroke="#f59e0b" stroke-width="14"
+                :stroke-dasharray="`${donutDash.surround} 999`"
+                :stroke-dashoffset="donutOffsets.surround"
+                transform="rotate(-90 60 60)"
+              />
+              <circle
+                cx="60" cy="60" r="46" fill="none"
+                stroke="#3b82f6" stroke-width="14"
+                :stroke-dasharray="`${donutDash.others} 999`"
+                :stroke-dashoffset="donutOffsets.others"
+                transform="rotate(-90 60 60)"
+              />
+              <text x="60" y="56" text-anchor="middle" fill="#a3aac9" font-size="11">片区覆盖占比</text>
+              <text x="60" y="78" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">
+                {{ Math.round(coverageBreakdown.core_ratio * 100) }}%
+              </text>
+            </svg>
+            <ul class="coverage-legend">
+              <li><span class="dot core"></span><span>核心片区</span><strong>{{ Math.round(coverageBreakdown.core_ratio * 100) }}%</strong></li>
+              <li><span class="dot strong"></span><span>周边片区</span><strong>{{ Math.round(coverageBreakdown.surrounding_ratio * 100) }}%</strong></li>
+              <li><span class="dot weak"></span><span>其他片区</span><strong>{{ Math.round(coverageBreakdown.others_ratio * 100) }}%</strong></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 右上地图操作组 -->
+        <div class="map-controls">
+          <button class="map-ctl" title="指南针"><span v-html="ICONS.compass" /></button>
+          <div class="zoom-stack">
+            <button class="map-ctl" @click="zoomIn">+</button>
+            <button class="map-ctl" @click="zoomOut">−</button>
+          </div>
+          <button class="map-ctl active" title="3D">3D</button>
+          <button class="map-ctl" title="跟随"><span v-html="ICONS.locate" /></button>
+          <!-- 图层切换：矢量路网 ↔ 卫星影像（互斥，不叠加） -->
+          <button
+            class="map-ctl layer-toggle"
+            :class="{ active: baseLayerMode === 'satellite' }"
+            :title="baseLayerMode === 'vector' ? '当前：矢量地图，点击切换到卫星影像' : '当前：卫星影像，点击切换到矢量地图'"
+            @click="toggleBaseLayer"
+          >
+            <span v-html="ICONS.layers" />
+            <span class="layer-tag">{{ baseLayerMode === 'vector' ? '矢量' : '影像' }}</span>
+          </button>
+        </div>
+
+        <!-- 比例尺 -->
+        <div class="map-scale">500 m</div>
+
+        <!-- AI 助手触发 fab：仅负责在 canvas 右下角打开抽屉 -->
+        <button
+          v-show="!assistantOpen"
+          class="assistant-fab"
+          type="button"
+          title="AI 助手（Alt+A）"
+          @click="assistantOpen = true"
+        >
+          <span class="fab-letters">AI</span>
+        </button>
+      </main>
+
+      <!-- 右面板 -->
+      <aside class="right-panel">
+        <!-- 3. 智能解说 -->
+        <section class="panel-card">
+          <div class="card-head">
+            <span class="card-index">3</span>
+            <span class="card-title">智能解说</span>
+            <label class="auto-toggle">
+              <span>自动解说</span>
+              <input type="checkbox" v-model="ui.autoNarrate" />
+              <span class="toggle-knob" :class="{ on: ui.autoNarrate }" />
+            </label>
+          </div>
+
+          <div class="theme-row">
+            <span class="theme-label">当前解说主题（示例）</span>
+            <strong class="theme-text">「以{{ activeRegion.display_name }}为核心的文化教育圈」</strong>
+          </div>
+
+          <!-- 波形（mock 静态条） -->
+          <div class="waveform">
+            <span
+              v-for="(h, i) in waveformHeights"
+              :key="i"
+              class="wave-bar"
+              :class="{ active: i <= waveActive }"
+              :style="{ height: `${h}%` }"
+            />
+          </div>
+
+          <div class="narration-text">
+            <p>{{ typedText }}<span class="cursor" v-if="typing">▏</span></p>
+          </div>
+
+          <div class="seq-block">
+            <div class="seq-head">
+              <span class="seq-title">解说顺序（随机生成）</span>
+            </div>
+            <ul class="seq-list">
+              <li
+                v-for="(node, i) in narrative.path.nodes"
+                :key="node.region_id"
+                :class="['seq-item', { active: i === activeStepIndex }]"
+                @click="goToStep(i)"
+              >
+                <span class="seq-no">{{ i + 1 }}</span>
+                <span class="seq-name">{{ regionMap[node.region_id]?.display_name }}{{ i === 0 ? '（核心）' : '' }}</span>
+                <span class="seq-tag" :class="`tag-${node.narration_role}`">{{ regionMap[node.region_id]?.chapter_label }}</span>
+              </li>
+            </ul>
+            <p class="seq-foot">解说顺序每次可能不同</p>
+          </div>
+
+          <div class="settings-block">
+            <div class="settings-title">解说设置</div>
+            <div class="settings-row">解说时长</div>
+            <div class="duration-tabs">
+              <button
+                v-for="o in durationPresetOptions"
+                :key="o.key"
+                :class="['duration-tab', { active: ui.durationPreset === o.key }]"
+                @click="ui.durationPreset = o.key"
+              >
+                <strong>{{ o.label }}</strong>
+                <span>{{ o.hint }}</span>
+              </button>
+            </div>
+
+            <div class="settings-row">解说风格</div>
+            <div class="style-row">
+              <select class="select-input" v-model="ui.tonePreset">
+                <option v-for="o in tonePresetOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
+              </select>
+              <button class="ghost-btn" @click="reshuffle"><span v-html="ICONS.dice" /><span>随机一下</span></button>
+            </div>
+
+            <button class="primary-btn play-btn" @click="togglePlay">
+              {{ playing ? '暂停解说' : '开始解说' }}
+              <span v-html="playing ? ICONS.pause : ICONS.play" />
+            </button>
+          </div>
+        </section>
+
+        <!-- 上下文感知 -->
+        <section class="panel-card">
+          <div class="card-head">
+            <span class="card-title">上下文感知</span>
+          </div>
+          <ul class="ctx-list">
+            <li><span class="ctx-key">时间</span><span>{{ narrative.user_context.time_label }}</span></li>
+            <li><span class="ctx-key">天气</span><span>{{ narrative.user_context.weather_label }}</span></li>
+            <li><span class="ctx-key">兴趣偏好</span><span>{{ narrative.user_context.preference_label }}</span></li>
+            <li><span class="ctx-key">历史轨迹</span><span>{{ narrative.user_context.history_label }}</span></li>
+          </ul>
+          <div class="ctx-hint">
+            <span class="ctx-bullet" />
+            已结合当前上下文生成解说，每次生成结果可能不同。
+          </div>
+        </section>
+      </aside>
+
+      <!-- AI 助手抽屉：跨 center + right 两列，高度 = canvas 高，宽度 = canvas + 右面板宽
+           §7.4 / §8.4 契约：组件只读 narrative state，副作用通过 emit 回传 -->
+      <AssistantDock
+        v-if="assistantOpen"
+        :active-step-index="activeStepIndex"
+        :playing="playing"
+        :total-steps="narrative.path.nodes.length"
+        :chapters="chaptersForAssistant"
+        @close="assistantOpen = false"
+        @pause-request="onAssistantPause"
+        @resume-request="onAssistantResume"
+        @jump-to-step="goToStep"
+        @fly-to-region="flyToRegionById"
+      />
+
+      <!-- 底部时间线（仅占中央列宽度，左右面板可延伸到屏幕底部） -->
+      <footer class="bottom-bar">
+      <div class="timeline-wrap">
+        <button class="tl-arrow" @click="goPrev"><span v-html="ICONS.chevronLeft" /></button>
+        <ul ref="timelineEl" class="timeline">
+          <li
+            v-for="(node, i) in narrative.path.nodes"
+            :key="`tl-${node.region_id}`"
+            :class="['tl-card', { active: i === activeStepIndex }]"
+            @click="goToStep(i)"
+          >
+            <div class="tl-thumb" :style="{ background: regionGradient(i) }">
+              <span class="tl-no">{{ i + 1 }}</span>
+              <span class="tl-tag-mini">{{ regionMap[node.region_id]?.chapter_label }}</span>
+            </div>
+            <div class="tl-name">{{ i + 1 }} {{ regionMap[node.region_id]?.display_name }}</div>
+            <div class="tl-sub">{{ subtitleForRole(node.narration_role) }}</div>
+          </li>
+        </ul>
+        <button class="tl-arrow" @click="goNext"><span v-html="ICONS.chevronRight" /></button>
+      </div>
+
+      <div class="bottom-progress">
+        <div class="player-controls">
+          <button class="player-btn" @click="rewind"><span v-html="ICONS.rewind" /></button>
+          <button class="player-btn" @click="goPrev"><span v-html="ICONS.skipBack" /></button>
+          <button class="player-btn primary" @click="togglePlay"><span v-html="playing ? ICONS.pause : ICONS.play" /></button>
+          <button class="player-btn" @click="goNext"><span v-html="ICONS.skipForward" /></button>
+          <button class="player-btn" @click="forward"><span v-html="ICONS.forward" /></button>
+        </div>
+        <div class="progress-row">
+          <div class="progress-track" @click="onSeek">
+            <div class="progress-fill" :style="{ width: progressPercent + '%' }" />
+            <div class="progress-knob" :style="{ left: progressPercent + '%' }" />
+          </div>
+          <span class="progress-time">{{ formatTime(elapsedMs) }} / {{ formatTime(totalDurationMs) }}</span>
+          <span class="progress-rate">1.0x</span>
+        </div>
+      </div>
+      </footer>
     </div>
   </div>
 </template>
 
-<script setup>
-import { ref, computed, onMounted, onBeforeUnmount, shallowRef, watch, nextTick, defineAsyncComponent } from 'vue';
-import { useRouter } from 'vue-router';
-import { ElButton } from 'element-plus/es/components/button/index';
-import { ElIcon } from 'element-plus/es/components/icon/index';
-import { marked } from 'marked';
-import { ArrowLeft, ArrowRight, Close, Hide, Link, Loading, MagicStick, VideoPlay, View } from '@element-plus/icons-vue';
-import Feature from 'ol/Feature';
-import Polygon from 'ol/geom/Polygon';
-import MultiPolygon from 'ol/geom/MultiPolygon';
-import { Vector as VectorLayer } from 'ol/layer';
-import { fromLonLat, toLonLat } from 'ol/proj';
-import VectorSource from 'ol/source/Vector';
-import { Fill, Stroke, Style } from 'ol/style';
-import { sendChatMessageStream } from '../utils/aiService';
-import { NARRATIVE_TEXT_TEMPLATE_MARKDOWN, NARRATIVE_UI_ONLY_NOTICE } from '../utils/narrativeTextTemplate';
-import { normalizeMarkdownForRender } from '../utils/markdownContract';
-import { buildNarrativeSafePixelBounds } from '../utils/narrativeSafeViewport';
-import { useProjection } from '../composables/map/useProjection';
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
-// 底图为高德 GCJ02。前端发给后端的 viewport/center 必须是真 WGS84，
-// 因此需要 gcj02ToWgs84；后端统一把 boundary/node.center 都输出 GCJ02，
-// 前端直接 fromLonLat 即可贴合底图，不再做 wgs84ToGcj02 二次偏移。
-const { gcj02ToWgs84, wgs84ToGcj02 } = useProjection();
+import OlMap from 'ol/Map'
+import View from 'ol/View'
+import TileLayer from 'ol/layer/Tile'
+import XYZ from 'ol/source/XYZ'
+import VectorLayer from 'ol/layer/Vector'
+import VectorSource from 'ol/source/Vector'
+import Feature from 'ol/Feature'
+import Point from 'ol/geom/Point'
+import Polygon from 'ol/geom/Polygon'
+import { fromLonLat, transformExtent } from 'ol/proj'
+import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style'
 
-const MapContainer = defineAsyncComponent(() => import('../components/MapContainer.vue'));
+import {
+  allRenderablePois,
+  centroidStrategyOptions,
+  coverageBreakdown,
+  defaultUiSettings,
+  durationPresetOptions,
+  narrativeMock,
+  tierStats,
+  tonePresetOptions
+} from './narrative/mock/narrativeMockData'
+import AssistantDock from './narrative/AssistantDock.vue'
+import type {
+  NarrativeMode as ChatMode,
+  NarrativePoi,
+  NarrativeUiSettings,
+  PathNarrationRole,
+  PolygonRing,
+  VisualTier
+} from './narrative/types'
 
-const router = useRouter();
-const TOUR_STYLE_OPTIONS = [
-  { value: 'classic_must_see', label: '快速了解' },
-  { value: 'local_vibe', label: '本地人版本' },
-  { value: 'business_leisure', label: '商业休闲' },
-  { value: 'humanities_walk', label: '人文慢走' },
-];
-const mapRef = ref(null);
-const poiFeatures = ref([]);
-const narrativeSteps = ref([]);
-const aiResponse = ref(''); 
-const currentStepIndex = ref(-1);
-const isGenerating = ref(false);
-const isPlaying = ref(false);
-const scriptVisible = ref(true);
-const currentVoiceText = ref('');
-const boundaryData = ref(null);
-const scriptContentRef = ref(null); 
-const selectedTourStyle = ref('classic_must_see');
+// ============================================================================
+// 模式 + 状态
+// ============================================================================
+const narrative = narrativeMock
+const ui = reactive<NarrativeUiSettings>({ ...defaultUiSettings })
+const mode = ref<ChatMode>('explore')
 
+// 左上「当前视角覆盖分析」卡片的折叠状态（局部 UI state，不进 NarrativeUiSettings 契约）
+const coverageCollapsed = ref<boolean>(true)
 
-const typedText = ref('');
-const currentStep = computed(() => {
-  if (currentStepIndex.value < 0) return null;
-  return narrativeSteps.value[currentStepIndex.value] || null;
-});
-const currentTourStyleLabel = computed(() => {
-  return currentStep.value?.tourStyleLabel
-    || TOUR_STYLE_OPTIONS.find((item) => item.value === selectedTourStyle.value)?.label
-    || '快速了解';
-});
-const currentNarrativeFocus = computed(() => {
-  if (currentStep.value) {
-    const focus = currentStep.value.focus;
-    return focus === 'overview' ? '区域概览' : focus;
+const modes: Array<{ key: ChatMode; label: string; icon: string }> = [
+  { key: 'explore', label: '探索模式', icon: ICON_COMPASS() },
+  { key: 'narrate', label: '解说模式', icon: ICON_HEADPHONE() },
+  { key: 'compare', label: '对比模式', icon: ICON_COMPARE() }
+]
+
+const regionMap = computed(() =>
+  Object.fromEntries(narrative.regions.map((r) => [r.id, r]))
+)
+
+const activeStepIndex = ref(0)
+const activeRegion = computed(() => {
+  const node = narrative.path.nodes[activeStepIndex.value]
+  return regionMap.value[node?.region_id ?? narrative.regions[0].id] ?? narrative.regions[0]
+})
+
+// 时间线 DOM 引用：箭头切换 / 卡片点击 / 解说推进时，自动把激活卡片滚动到容器水平中央
+const timelineEl = ref<HTMLUListElement | null>(null)
+function scrollTimelineToActive() {
+  const container = timelineEl.value
+  if (!container) return
+  const cards = container.querySelectorAll<HTMLElement>('.tl-card')
+  const card = cards[activeStepIndex.value]
+  if (!card) return
+  const targetLeft = card.offsetLeft - (container.clientWidth - card.clientWidth) / 2
+  container.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' })
+}
+watch(activeStepIndex, () => {
+  // DOM 更新（active class 切换）之后再算偏移量
+  nextTick(scrollTimelineToActive)
+})
+
+// ============================================================================
+// AI 助手所需的上下文（仅前端展示用 props，不进 §8 主契约）
+// 阶段 3 接后端 /api/narrative/assistant 时，这部分由 server-side state 覆盖
+// ============================================================================
+const chaptersForAssistant = computed(() =>
+  narrative.path.nodes.map((node, i) => ({
+    region_id: node.region_id,
+    display_name: regionMap.value[node.region_id]?.display_name ?? node.region_id,
+    played: i < activeStepIndex.value
+  }))
+)
+
+function onAssistantPause() {
+  if (playing.value) togglePlay()
+}
+function onAssistantResume() {
+  if (!playing.value) togglePlay()
+}
+function flyToRegionById(regionId: string) {
+  if (!olMap) return
+  const r = regionMap.value[regionId]
+  if (!r) return
+  olMap.getView().animate({
+    center: fromLonLat([r.core_anchor.lon, r.core_anchor.lat]),
+    zoom: 15.5,
+    duration: 900
+  })
+}
+
+// AI 助手抽屉开关（fab 在 .map-stage 内 / 抽屉跨 center + right）
+const assistantOpen = ref<boolean>(false)
+function onAssistantKeydown(e: KeyboardEvent) {
+  if (e.altKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault()
+    assistantOpen.value = !assistantOpen.value
   }
-  return '空间叙事';
-});
-const currentTierLabel = computed(() => currentStep.value?.tierLabel || null);
-const currentReasonCard = computed(() => currentStep.value?.reasonCard || null);
-const currentLocalTip = computed(() => currentStep.value?.localTip || null);
-const currentNearbyConnectionsText = computed(() => {
-  const connections = Array.isArray(currentReasonCard.value?.nearbyConnections)
-    ? currentReasonCard.value.nearbyConnections.filter(Boolean)
-    : [];
-  return connections.length > 0 ? connections.join('、') : '可和周边节点顺着串讲';
-});
-const narrativeNodeCount = computed(() => narrativeSteps.value.filter((step) => step.focus !== 'overview').length);
-const currentStepProgressLabel = computed(() => {
-  const total = narrativeNodeCount.value;
-  if (total <= 0 || currentStepIndex.value < 0 || !currentStep.value) return `0 / ${total}`;
-  if (currentStep.value.focus === 'overview') return `总览 · ${total} 节点`;
-  const currentOrdinal = narrativeSteps.value
-    .slice(0, currentStepIndex.value + 1)
-    .filter((step) => step.focus !== 'overview')
-    .length;
-  return `${currentOrdinal} / ${total}`;
-});
+}
+window.addEventListener('keydown', onAssistantKeydown)
+onBeforeUnmount(() => window.removeEventListener('keydown', onAssistantKeydown))
 
-const overviewBoundarySource = new VectorSource();
-const overviewBoundaryLayer = new VectorLayer({
-  source: overviewBoundarySource,
-  updateWhileAnimating: true,
-  updateWhileInteracting: true,
-  renderBuffer: 256,
-  zIndex: 920,
-  style: [
-    new Style({
-      stroke: new Stroke({ color: 'rgba(56, 189, 248, 0.24)', width: 10 }),
-      fill: new Fill({ color: 'rgba(56, 189, 248, 0.04)' })
-    }),
-    new Style({
-      stroke: new Stroke({ color: 'rgba(56, 189, 248, 0.95)', width: 3, lineDash: [12, 10] }),
-      fill: new Fill({ color: 'rgba(56, 189, 248, 0.08)' })
-    })
+const totalPoi = computed(() => allRenderablePois.length)
+const activeRegionAreaText = computed(() => `${(8.62).toFixed(2)} km²`)
+
+const lodLabel = computed(() => {
+  switch (narrative.lod) {
+    case 'micro':
+      return '近景（深挖）'
+    case 'meso':
+      return '中景（横向）'
+    case 'macro':
+      return '远景（合并）'
+  }
+})
+
+const lodKnobLeft = computed(() => {
+  if (narrative.lod === 'micro') return '15%'
+  if (narrative.lod === 'meso') return '50%'
+  return '85%'
+})
+
+// ============================================================================
+// 覆盖环形图：dasharray 计算
+// ============================================================================
+const CIRC = 2 * Math.PI * 46
+const donutDash = computed(() => ({
+  core: coverageBreakdown.core_ratio * CIRC,
+  surround: coverageBreakdown.surrounding_ratio * CIRC,
+  others: coverageBreakdown.others_ratio * CIRC
+}))
+const donutOffsets = computed(() => ({
+  core: 0,
+  surround: -coverageBreakdown.core_ratio * CIRC,
+  others: -(coverageBreakdown.core_ratio + coverageBreakdown.surrounding_ratio) * CIRC
+}))
+
+// ============================================================================
+// 左面板：分层图例（label 不暴露 role 英文）
+// ============================================================================
+const tierLegend: Array<{ key: VisualTier; label: string; color: string }> = [
+  { key: 'core', label: '核心区域（高相关）', color: '#ef4444' },
+  { key: 'strong', label: '较强相关', color: '#f97316' },
+  { key: 'medium', label: '一般相关', color: '#eab308' },
+  { key: 'weak', label: '低相关（边缘）', color: '#3b82f6' },
+  { key: 'excluded', label: '已剔除', color: '#475569' }
+]
+
+// ============================================================================
+// 解说时间线 / 打字机 / 自动播放
+// ============================================================================
+const playing = ref(false)
+const typing = ref(false)
+const typedText = ref('')
+
+const elapsedMs = ref(0)
+const stepStartElapsedMs = ref(0)
+let typingTimer: ReturnType<typeof setInterval> | null = null
+let advanceTimer: ReturnType<typeof setTimeout> | null = null
+let progressTimer: ReturnType<typeof setInterval> | null = null
+
+const totalDurationMs = computed(() =>
+  narrative.narration.chapters.reduce((acc, c) => acc + (c.length_ms ?? 8000), 0)
+)
+
+const progressPercent = computed(() => {
+  if (totalDurationMs.value <= 0) return 0
+  return Math.min(100, (elapsedMs.value / totalDurationMs.value) * 100)
+})
+
+const waveformHeights = Array.from({ length: 32 }, (_, i) =>
+  30 + Math.round(Math.abs(Math.sin(i * 0.7)) * 60 + Math.cos(i * 1.3) * 12)
+)
+const waveActive = ref(0)
+
+function startTyping() {
+  stopTyping()
+  const chapter = narrative.narration.chapters[activeStepIndex.value]
+  if (!chapter) return
+  typedText.value = ''
+  typing.value = true
+  let idx = 0
+  const text = chapter.text
+  typingTimer = setInterval(() => {
+    if (idx >= text.length) {
+      stopTyping()
+      typing.value = false
+      return
+    }
+    typedText.value += text[idx]
+    idx += 1
+    waveActive.value = Math.floor((idx / text.length) * waveformHeights.length)
+  }, 60)
+}
+
+function stopTyping() {
+  if (typingTimer) {
+    clearInterval(typingTimer)
+    typingTimer = null
+  }
+}
+
+function clearAdvanceTimer() {
+  if (advanceTimer) {
+    clearTimeout(advanceTimer)
+    advanceTimer = null
+  }
+}
+
+function startProgress() {
+  stopProgress()
+  progressTimer = setInterval(() => {
+    if (!playing.value) return
+    elapsedMs.value += 100
+    const total = totalDurationMs.value
+    if (elapsedMs.value >= total) {
+      elapsedMs.value = total
+      stopAll()
+    }
+  }, 100)
+}
+
+function stopProgress() {
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+function applyStep(index: number) {
+  activeStepIndex.value = index
+  // 累计上一步的耗时基线
+  let acc = 0
+  for (let i = 0; i < index; i++) {
+    acc += narrative.narration.chapters[i]?.length_ms ?? 8000
+  }
+  stepStartElapsedMs.value = acc
+  elapsedMs.value = acc
+  flyToActiveRegion()
+  startTyping()
+  if (playing.value && ui.autoNarrate) {
+    const ms = narrative.narration.chapters[index]?.length_ms ?? 8000
+    clearAdvanceTimer()
+    advanceTimer = setTimeout(() => {
+      if (index < narrative.path.nodes.length - 1) {
+        applyStep(index + 1)
+      } else {
+        stopAll()
+      }
+    }, ms)
+  }
+}
+
+function togglePlay() {
+  if (playing.value) {
+    playing.value = false
+    stopTyping()
+    typing.value = false
+    clearAdvanceTimer()
+    return
+  }
+  playing.value = true
+  applyStep(activeStepIndex.value)
+  startProgress()
+}
+
+function stopAll() {
+  playing.value = false
+  stopTyping()
+  typing.value = false
+  clearAdvanceTimer()
+  stopProgress()
+}
+
+function goToStep(i: number) {
+  if (i < 0 || i >= narrative.path.nodes.length) return
+  applyStep(i)
+}
+
+function goPrev() {
+  goToStep(Math.max(0, activeStepIndex.value - 1))
+}
+
+function goNext() {
+  goToStep(Math.min(narrative.path.nodes.length - 1, activeStepIndex.value + 1))
+}
+
+function rewind() {
+  elapsedMs.value = Math.max(0, elapsedMs.value - 5000)
+}
+
+function forward() {
+  elapsedMs.value = Math.min(totalDurationMs.value, elapsedMs.value + 5000)
+}
+
+function onSeek(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  elapsedMs.value = ratio * totalDurationMs.value
+  // 找到对应章节
+  let acc = 0
+  for (let i = 0; i < narrative.narration.chapters.length; i++) {
+    acc += narrative.narration.chapters[i].length_ms ?? 8000
+    if (elapsedMs.value < acc) {
+      goToStep(i)
+      return
+    }
+  }
+  goToStep(narrative.path.nodes.length - 1)
+}
+
+function reshuffle() {
+  // mock 阶段仅用于演示"每次解说可能不同"的语义，重新触发打字机
+  stopAll()
+  activeStepIndex.value = 0
+  applyStep(0)
+}
+
+function regionGradient(i: number): string {
+  const palette = [
+    'linear-gradient(135deg,#ef4444,#b91c1c)',
+    'linear-gradient(135deg,#0ea5e9,#0c4a6e)',
+    'linear-gradient(135deg,#a855f7,#581c87)',
+    'linear-gradient(135deg,#f59e0b,#92400e)',
+    'linear-gradient(135deg,#10b981,#065f46)'
   ]
-});
-const narrativeNodeBoundarySource = new VectorSource();
-const narrativeNodeBoundaryLayer = new VectorLayer({
-  source: narrativeNodeBoundarySource,
-  updateWhileAnimating: true,
-  updateWhileInteracting: true,
-  renderBuffer: 256,
-  zIndex: 930,
-  style: [
-    new Style({
-      stroke: new Stroke({ color: 'rgba(0, 212, 255, 0.2)', width: 12 }),
-      fill: new Fill({ color: 'rgba(0, 212, 255, 0.03)' })
-    }),
-    new Style({
-      stroke: new Stroke({ color: 'rgba(0, 212, 255, 0.96)', width: 3.5 }),
-      fill: new Fill({ color: 'rgba(0, 212, 255, 0.06)' })
-    })
-  ]
-});
-
-const currentTagline = computed(() => {
-  return currentStep.value?.tagline || null;
-});
-
-const currentWebFactHint = computed(() => {
-  return currentStep.value?.webFactHint || null;
-});
-
-// 网页原文摘要（后端已过滤广告文案）——独立样式展示，
-// 避免混在打字机正文里让用户分不清“原文来自网页”和“地理分析结论”。
-const currentWebFactSnippet = computed(() => {
-  return currentStep.value?.webFactSnippet || null;
-});
-
-
-// 播放与打字机协同：
-// - autoAdvance=true：打字机完成后等 3s 自动推进到下一节点
-// - prev/next 手动切换时立即关掉 autoAdvance，不再追加定时器
-// - 节点已走完时等 3s 收尾清理 narrator panel
-const autoAdvance = ref(true);
-const isTyping = ref(false);
-const HOLD_AFTER_TYPING_MS = 3000;
-let typeInterval = null;
-let autoAdvanceTimer = null;
-
-const clearAutoAdvanceTimer = () => {
-  if (autoAdvanceTimer) {
-    clearTimeout(autoAdvanceTimer);
-    autoAdvanceTimer = null;
-  }
-};
-
-const typeText = (text) => {
-  clearInterval(typeInterval);
-  clearAutoAdvanceTimer();
-  typedText.value = '';
-  isTyping.value = true;
-  let i = 0;
-  typeInterval = setInterval(() => {
-    if (i < text.length) {
-      typedText.value += text[i];
-      i++;
-      return;
-    }
-    clearInterval(typeInterval);
-    isTyping.value = false;
-    if (!isPlaying.value || !autoAdvance.value) return;
-    const nextIndex = currentStepIndex.value + 1;
-    if (nextIndex < narrativeSteps.value.length) {
-      // 打字机完成 → 停留 3 秒 → 自动切换到下一个节点
-      autoAdvanceTimer = setTimeout(() => {
-        autoAdvanceTimer = null;
-        if (isPlaying.value && autoAdvance.value) {
-          currentStepIndex.value = nextIndex;
-        }
-      }, HOLD_AFTER_TYPING_MS);
-    } else {
-      // 已走到最后一步，等 3s 后收尾
-      autoAdvanceTimer = setTimeout(() => {
-        autoAdvanceTimer = null;
-        isPlaying.value = false;
-        autoAdvance.value = true;
-        currentStepIndex.value = -1;
-        currentVoiceText.value = '';
-        typedText.value = '';
-        renderNarrativeNodeBoundary(null);
-      }, HOLD_AFTER_TYPING_MS);
-    }
-  }, 50);
-};
-
-
-watch(currentVoiceText, (newVal) => {
-  if (newVal) {
-    typeText(newVal.replace(/<[^>]+>/g, ''));
-  }
-});
-
-
-const mapInstance = shallowRef(null);
-const fuzzyRegions = ref([]);
-const currentSubtitle = ref(''); 
-const subtitleHistory = ref([]); 
-const isSubtitleVisible = ref(false); 
-const subtitleContainerRef = ref(null); 
-const aiPanelRef = ref(null); 
-const narratorPanelRef = ref(null);
-const actionButtonsRef = ref(null);
-const subtitlePosition = ref({ x: 0, y: 0 }); 
-const subtitleSafeZone = ref({ left: 0, top: 0, right: 0, bottom: 0 }); 
-const currentViewport = ref(null);
-let narrativeBoundaryLayerAttached = false;
-
-const NARRATIVE_DEFAULT_QUERY = '请按导览顺序介绍当前区域，挑出最值得讲的代表节点。';
-
-
-function asObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  return palette[i % palette.length]
 }
 
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
+const ROLE_SUBTITLE: Record<PathNarrationRole, string> = {
+  core: '核心解说点',
+  related: '关联区域',
+  cultural: '历史文化区',
+  landmark: '城市地标',
+  educational: '百年学府',
+  ecological: '自然休闲空间'
+}
+function subtitleForRole(role: PathNarrationRole): string {
+  return ROLE_SUBTITLE[role] ?? ''
 }
 
-
-function pickBoundaryGeometry(...values) {
-  for (const value of values) {
-    const record = asObject(value);
-    if (record?.type === 'Polygon' || record?.type === 'MultiPolygon') {
-      return record;
-    }
-    const featureGeometry = asObject(record?.geometry);
-    if (record?.type === 'Feature' && (featureGeometry?.type === 'Polygon' || featureGeometry?.type === 'MultiPolygon')) {
-      return featureGeometry;
-    }
-    if (Array.isArray(value) && value.length >= 3 && value.every((pt) => Array.isArray(pt) && pt.length >= 2)) {
-      return {
-        type: 'Polygon',
-        coordinates: [value],
-      };
-    }
-  }
-  return null;
+function formatTime(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-function resolveBoundaryGeometry(boundary) {
-  const record = asObject(boundary);
-  const layers = asObject(record?.layers);
-  const transition = asObject(record?.transition || layers?.transition);
-  const outer = asObject(record?.outer || layers?.outer);
-  const core = asObject(record?.core || layers?.core);
-  return pickBoundaryGeometry(
-    record,
-    record?.representative_geojson,
-    transition?.geojson,
-    transition?.boundary,
-    outer?.geojson,
-    outer?.boundary,
-    core?.geojson,
-    core?.boundary,
-    record?.boundary_geojson,
-    record?.boundary,
-    record?.boundary_ring,
-  );
-}
+// ============================================================================
+// OpenLayers 地图：底图 + 三层光晕 + POI 5 档分层
+// ============================================================================
 
-function normalizeBoundaryPoint(point) {
-  if (!Array.isArray(point) || point.length < 2) return null;
-  const lon = Number(point[0]);
-  const lat = Number(point[1]);
-  return Number.isFinite(lon) && Number.isFinite(lat) ? [lon, lat] : null;
-}
-
-function normalizeClosedBoundaryRing(ringCandidate) {
-  const ring = asArray(ringCandidate)
-    .map((point) => normalizeBoundaryPoint(point))
-    .filter(Boolean);
-  if (ring.length < 3) return [];
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  if (!last || first[0] !== last[0] || first[1] !== last[1]) {
-    ring.push([first[0], first[1]]);
-  }
-  return ring.length >= 4 ? ring : [];
-}
-
-function toOlRingCoordinates(ringCandidate) {
-  // 后端 narrative 已统一把 boundary/node.center 输出为 GCJ02（与 POI 对齐），
-  // 前端直接 fromLonLat 投影即可贴合高德 GCJ02 底图，不再做 wgs84→gcj02。
-  return normalizeClosedBoundaryRing(ringCandidate)
-    .map(([lon, lat]) => fromLonLat([lon, lat]));
-}
-
-function toOlBoundaryGeometry(boundary) {
-  const geometry = resolveBoundaryGeometry(boundary);
-  if (!geometry || typeof geometry !== 'object') return null;
-  const coords = geometry.coordinates;
-  if (!Array.isArray(coords) || coords.length === 0) return null;
-  if (geometry.type === 'Polygon') {
-    const polygonCoords = coords
-      .map((ring) => toOlRingCoordinates(ring))
-      .filter((ring) => Array.isArray(ring) && ring.length >= 4);
-    return polygonCoords.length ? new Polygon(polygonCoords) : null;
-  }
-  if (geometry.type === 'MultiPolygon') {
-    const multiPolygonCoords = coords
-      .map((polygon) => asArray(polygon)
-        .map((ring) => toOlRingCoordinates(ring))
-        .filter((ring) => Array.isArray(ring) && ring.length >= 4))
-      .filter((polygon) => Array.isArray(polygon) && polygon.length > 0);
-    return multiPolygonCoords.length ? new MultiPolygon(multiPolygonCoords) : null;
-  }
-  return null;
-}
-
-function ensureNarrativeBoundaryLayers() {
-  if (!mapInstance.value || narrativeBoundaryLayerAttached) return;
-  mapInstance.value.addLayer(overviewBoundaryLayer);
-  mapInstance.value.addLayer(narrativeNodeBoundaryLayer);
-  narrativeBoundaryLayerAttached = true;
-}
-
-function syncBoundaryLayer(source, boundary) {
-  source.clear();
-  if (!mapInstance.value) return;
-  ensureNarrativeBoundaryLayers();
-  const geometry = toOlBoundaryGeometry(boundary);
-  if (!geometry) return;
-  source.addFeature(new Feature({ geometry }));
-}
-
-function cleanupNarrativeBoundaryLayers() {
-  overviewBoundarySource.clear();
-  narrativeNodeBoundarySource.clear();
-  if (!mapInstance.value || !narrativeBoundaryLayerAttached) return;
-  mapInstance.value.removeLayer(overviewBoundaryLayer);
-  mapInstance.value.removeLayer(narrativeNodeBoundaryLayer);
-  narrativeBoundaryLayerAttached = false;
-}
-
-function buildRelativeOverlayRect(element, containerRect, mapSize) {
-  if (!element?.getBoundingClientRect || !containerRect) return null;
-  const rect = element.getBoundingClientRect();
-  if (!rect?.width || !rect?.height) return null;
-  const mapWidth = Number(mapSize?.[0] || 0);
-  const mapHeight = Number(mapSize?.[1] || 0);
-  if (!mapWidth || !mapHeight) return null;
-  const left = Math.max(0, rect.left - containerRect.left);
-  const top = Math.max(0, rect.top - containerRect.top);
-  const right = Math.min(mapWidth, rect.right - containerRect.left);
-  const bottom = Math.min(mapHeight, rect.bottom - containerRect.top);
-  if (right - left < 1 || bottom - top < 1) return null;
-  return { left, top, right, bottom };
-}
-
-function updateNarrativeSafeZone(olMap) {
-  if (!olMap?.getSize) return;
-  const size = olMap.getSize();
-  if (!size) return;
-  const targetElement = olMap.getTargetElement?.();
-  const containerRect = targetElement?.getBoundingClientRect?.() || null;
-  const overlays = [];
-  if (containerRect) {
-    const scriptRect = scriptVisible.value
-      ? buildRelativeOverlayRect(aiPanelRef.value, containerRect, size)
-      : null;
-    const narratorRect = isPlaying.value && currentVoiceText.value
-      ? buildRelativeOverlayRect(narratorPanelRef.value, containerRect, size)
-      : null;
-    const actionRect = buildRelativeOverlayRect(actionButtonsRef.value, containerRect, size);
-    if (scriptRect) overlays.push(scriptRect);
-    if (narratorRect) overlays.push(narratorRect);
-    if (actionRect) overlays.push(actionRect);
-  }
-  const safePixels = buildNarrativeSafePixelBounds({
-    mapWidth: Number(size[0] || 0),
-    mapHeight: Number(size[1] || 0),
-    overlays,
-    padding: 24,
-    gap: 18,
-    minWidth: 320,
-    minHeight: 220,
-  });
-  if (safePixels) {
-    subtitleSafeZone.value = safePixels;
-    return;
-  }
-  subtitleSafeZone.value = {
-    left: 0,
-    top: 0,
-    right: Number(size[0] || 0),
-    bottom: Number(size[1] || 0),
-  };
-}
-
-function buildNarrativeFitPadding(olMap) {
-  const size = olMap?.getSize?.();
-  const safeZone = subtitleSafeZone.value || {};
-  const mapWidth = Number(size?.[0] || 0);
-  const mapHeight = Number(size?.[1] || 0);
-  return [
-    Math.max(28, Math.round(Number(safeZone.top || 0) + 28)),
-    Math.max(28, Math.round(mapWidth - Number(safeZone.right || mapWidth) + 28)),
-    Math.max(28, Math.round(mapHeight - Number(safeZone.bottom || mapHeight) + 28)),
-    Math.max(28, Math.round(Number(safeZone.left || 0) + 28)),
-  ];
-}
-
-function readViewportFromMap(olMap) {
-  if (!olMap?.getView || !olMap?.getSize) return null;
-  const size = olMap.getSize();
-  if (!size) return null;
-  updateNarrativeSafeZone(olMap);
-  const targetElement = olMap.getTargetElement?.();
-  const targetRect = targetElement?.getBoundingClientRect?.() || null;
-  const pixelWidth = Math.max(1, Math.round(Number(targetRect?.width || size[0] || 0)));
-  const pixelHeight = Math.max(1, Math.round(Number(targetRect?.height || size[1] || 0)));
-  // 底图是高德 GCJ02，toLonLat 3857→4326 得到的仍是 GCJ02 值；
-  // 发给后端前必须 gcj02→wgs84，否则后端查 WGS84 的 AOI/landuse
-  // 会把视野整体东南偏移 ~500m，导致蓝色 boundary 对不上用户的视口。
-  const bottomLeftCoord = olMap.getCoordinateFromPixel?.([0, pixelHeight]);
-  const topRightCoord = olMap.getCoordinateFromPixel?.([pixelWidth, 0]);
-  if (!Array.isArray(bottomLeftCoord) || !Array.isArray(topRightCoord)) return null;
-  const bl = toLonLat(bottomLeftCoord);
-  const tr = toLonLat(topRightCoord);
-  const [blLon, blLat] = gcj02ToWgs84(bl[0], bl[1]);
-  const [trLon, trLat] = gcj02ToWgs84(tr[0], tr[1]);
-  return [blLon, blLat, trLon, trLat];
-}
-
-function refreshViewportFromMap() {
-  mapRef.value?.refreshMapSize?.();
-  mapInstance.value?.updateSize?.();
-  if (!mapInstance.value) return;
-  currentViewport.value = readViewportFromMap(mapInstance.value);
-}
-
-function buildViewportCenter(viewport) {
-  if (!Array.isArray(viewport) || viewport.length < 4) return null;
-  return {
-    lon: (Number(viewport[0]) + Number(viewport[2])) / 2,
-    lat: (Number(viewport[1]) + Number(viewport[3])) / 2,
-  };
-}
-
-function buildViewportBoundaryPreview(viewport) {
-  if (!Array.isArray(viewport) || viewport.length < 4) return null;
-  const swLon = Number(viewport[0]);
-  const swLat = Number(viewport[1]);
-  const neLon = Number(viewport[2]);
-  const neLat = Number(viewport[3]);
-  if (![swLon, swLat, neLon, neLat].every(Number.isFinite)) return null;
-  const [swGcjLon, swGcjLat] = wgs84ToGcj02(swLon, swLat);
-  const [seGcjLon, seGcjLat] = wgs84ToGcj02(neLon, swLat);
-  const [neGcjLon, neGcjLat] = wgs84ToGcj02(neLon, neLat);
-  const [nwGcjLon, nwGcjLat] = wgs84ToGcj02(swLon, neLat);
-  return {
-    type: 'Polygon',
-    coordinates: [[
-      [swGcjLon, swGcjLat],
-      [seGcjLon, seGcjLat],
-      [neGcjLon, neGcjLat],
-      [nwGcjLon, nwGcjLat],
-      [swGcjLon, swGcjLat],
-    ]],
-  };
-}
-
-function buildPoiFeaturesFromPayload(items) {
-  return asArray(items).map((item, index) => {
-    const record = asObject(item) || {};
-    if (record.type === 'Feature' && record.geometry?.type === 'Point' && Array.isArray(record.geometry.coordinates)) {
-      return record;
-    }
-    const geometry = asObject(record.geometry);
-    const coordinates = Array.isArray(geometry?.coordinates)
-      ? geometry.coordinates
-      : (Number.isFinite(Number(record.longitude)) && Number.isFinite(Number(record.latitude))
-        ? [Number(record.longitude), Number(record.latitude)]
-        : null);
-    if (!coordinates) return null;
-    return {
-      type: 'Feature',
-      properties: {
-        id: record.id || `narrative-${index}`,
-        name: String(record.name || record.label || ''),
-        名称: String(record.name || record.label || ''),
-      },
-      geometry: {
-        type: 'Point',
-        coordinates,
-      },
-    };
-  }).filter(Boolean);
-}
-
-function applyNarrativeResult(payload) {
-  const root = asObject(payload) || {};
-  const results = asObject(root.results) || {};
-  const narrativeTour = asObject(results.narrative_tour) || {};
-  const steps = asArray(narrativeTour.narrative_steps);
-  const boundary = narrativeTour.boundary || results.boundary || null;
-  const pois = asArray(results.pois);
-  const clusters = asObject(results.spatial_clusters);
-  const responseTourStyle = String(narrativeTour.tour_style || results?.stats?.tour_style || '').trim();
-
-  if (typeof root.answer === 'string' && root.answer.trim()) {
-    aiResponse.value = root.answer;
-  }
-  if (responseTourStyle) {
-    selectedTourStyle.value = responseTourStyle;
-  }
-  if (steps.length > 0) {
-    narrativeSteps.value = steps;
-  }
-  if (resolveBoundaryGeometry(boundary)) {
-    boundaryData.value = boundary;
-  }
-  if (pois.length > 0) {
-    poiFeatures.value = buildPoiFeaturesFromPayload(pois);
-  }
-  const nextFuzzyRegions = asArray(results.fuzzy_regions || results.fuzzyRegions);
-  if (nextFuzzyRegions.length > 0) {
-    fuzzyRegions.value = nextFuzzyRegions;
-  }
-}
-
-function handleNarrativeMeta(type, data) {
-  if (type === 'refined_result') {
-    applyNarrativeResult(data);
-    return;
-  }
-  if (type === 'boundary' && resolveBoundaryGeometry(data)) {
-    boundaryData.value = data;
-    return;
-  }
-  if (type === 'pois') {
-    poiFeatures.value = buildPoiFeaturesFromPayload(data);
-    return;
-  }
-  if (type === 'fuzzy_regions') {
-    fuzzyRegions.value = asArray(data);
-  }
-}
-
-const NARRATIVE_TEMPLATE_CONTENT = `${NARRATIVE_UI_ONLY_NOTICE}
-
-${NARRATIVE_TEXT_TEMPLATE_MARKDOWN}`;
-
-const formattedAiResponse = computed(() => {
-  const normalized = normalizeMarkdownForRender(aiResponse.value || NARRATIVE_TEMPLATE_CONTENT);
-  return marked.parse(normalized);
-});
-
-
-watch(aiResponse, () => {
-  nextTick(() => {
-    if (scriptContentRef.value) {
-      scriptContentRef.value.scrollTop = scriptContentRef.value.scrollHeight;
-    }
-  });
-});
-
-watch(boundaryData, (nextBoundary) => {
-  syncBoundaryLayer(overviewBoundarySource, nextBoundary);
-});
-
-
-
-const onMapReady = async (olMap) => {
-  mapInstance.value = olMap;
-  refreshViewportFromMap();
-  ensureNarrativeBoundaryLayers();
-  syncBoundaryLayer(overviewBoundarySource, boundaryData.value);
-  if (currentStepIndex.value >= 0 && narrativeSteps.value[currentStepIndex.value]) {
-    await renderNarrativeNodeBoundary(narrativeSteps.value[currentStepIndex.value]);
-  }
-};
-
-const onMapMove = () => {
-  refreshViewportFromMap();
-};
-
-const scheduleViewportRefresh = () => {
-  nextTick(() => {
-    refreshViewportFromMap();
-  });
-};
-
-watch([scriptVisible, isPlaying, currentVoiceText, isGenerating, aiResponse, () => narrativeSteps.value.length], () => {
-  scheduleViewportRefresh();
-});
-
-onMounted(() => {
-  window.addEventListener('resize', scheduleViewportRefresh);
-});
-
-const selectTourStyle = async (style) => {
-  if (!style || selectedTourStyle.value === style) return;
-  selectedTourStyle.value = style;
-  if (isGenerating.value) return;
-  if (narrativeSteps.value.length > 0 || aiResponse.value) {
-    await handleGenerate();
-  }
-};
-
-const handleGenerate = async () => {
-  if (isGenerating.value) return;
-
-  await nextTick();
-  refreshViewportFromMap();
-
-  const viewport = Array.isArray(currentViewport.value) ? currentViewport.value : readViewportFromMap(mapInstance.value);
-  const center = buildViewportCenter(viewport);
-  if (!viewport || !center) {
-    aiResponse.value = '请先把地图移动到要解说的区域，再生成导览骨架。';
-    return;
-  }
-
-  // 把当前视口写入 localStorage，供 /narrative/probe 诊断页面复用
-  try {
-    localStorage.setItem('narrativeLastViewport', JSON.stringify(viewport));
-  } catch (e) {
-    console.warn('failed to persist narrativeLastViewport', e);
-  }
-
-  isGenerating.value = true;
-  narrativeSteps.value = [];
-  currentStepIndex.value = -1;
-  currentVoiceText.value = '';
-  boundaryData.value = null;
-  poiFeatures.value = [];
-  fuzzyRegions.value = [];
-  await renderNarrativeNodeBoundary(null);
-  aiResponse.value = '';
-
-  await nextTick();
-  const viewportBoundaryPreview = buildViewportBoundaryPreview(viewport);
-  if (viewportBoundaryPreview) {
-    boundaryData.value = viewportBoundaryPreview;
-  }
-
-  try {
-    const fullAnswer = await sendChatMessageStream(
-      [{ role: 'user', content: NARRATIVE_DEFAULT_QUERY }],
-      (chunk) => {
-        aiResponse.value += chunk;
-      },
-      {
-        surface: 'narrative',
-        spatialContext: {
-          viewport,
-          center,
-          narrativeStyle: selectedTourStyle.value,
-          tourStyle: selectedTourStyle.value,
-        },
-      },
-      [],
-      handleNarrativeMeta,
-    );
-
-    if (!aiResponse.value && fullAnswer) {
-      aiResponse.value = fullAnswer;
-    }
-  } catch (error) {
-    aiResponse.value = `导览生成失败：${error?.message || String(error || '未知错误')}`;
-  } finally {
-    isGenerating.value = false;
-  }
-};
-
+const mapContainerEl = ref<HTMLDivElement | null>(null)
+let olMap: OlMap | null = null
+let baseLayer: TileLayer<XYZ> | null = null
+let glowOuterLayer: VectorLayer | null = null
+let glowInnerLayer: VectorLayer | null = null
+let glowCoreLayer: VectorLayer | null = null
+let poiLayer: VectorLayer | null = null
+let labelLayer: VectorLayer | null = null
 
 /**
- * 渲染当前节点的模糊边界。空心单线描边，覆盖式更新（不累积）。
- * 支持 MultiPolygon 多环渲染（如武汉大学有多个分离校区）。
+ * 底图源：矢量路网 vs 卫星影像。两者互斥，不叠加。
+ * 通过右上角图层按钮切换。
  */
-const renderNarrativeNodeBoundary = async (boundary) => {
-  syncBoundaryLayer(narrativeNodeBoundarySource, boundary);
-  return toOlBoundaryGeometry(boundary);
-};
+const BASE_TILE_URL: Record<'vector' | 'satellite', string> = {
+  vector: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+  satellite: 'https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'
+}
+const baseLayerMode = ref<'vector' | 'satellite'>('vector')
 
-// 解析 step 的镜头目标坐标（GCJ02）。
-// 优先用 step.center（后端 narrative 已统一为 GCJ02），
-// 再回退到 fuzzyRegions / poiFeatures 的坐标，避免个别节点无 center 时镜头不动。
-const resolveStepTargetCoords = (step) => {
-  if (!step) return null;
-  const stepCenter = step.center;
-  if (stepCenter && Number.isFinite(Number(stepCenter.lon)) && Number.isFinite(Number(stepCenter.lat))) {
-    return [Number(stepCenter.lon), Number(stepCenter.lat)];
+function toggleBaseLayer() {
+  if (!baseLayer) return
+  baseLayerMode.value = baseLayerMode.value === 'vector' ? 'satellite' : 'vector'
+  baseLayer.setSource(new XYZ({
+    url: BASE_TILE_URL[baseLayerMode.value],
+    crossOrigin: 'anonymous'
+  }))
+}
+
+function ringToCoords(ring: PolygonRing): number[][][] {
+  return ring.rings.map((r) => r.map(([lon, lat]) => fromLonLat([lon, lat])))
+}
+
+function buildGlowFeature(ring: PolygonRing): Feature<Polygon> {
+  return new Feature({ geometry: new Polygon(ringToCoords(ring)) })
+}
+
+function styleForTier(tier: VisualTier, opacityScale: number): Style | null {
+  if (tier === 'excluded') return null
+  const palette: Record<Exclude<VisualTier, 'excluded'>, { fill: string; stroke: string; r: number; alpha: number }> = {
+    core: { fill: '#ef4444', stroke: '#fff', r: 7, alpha: 1 },
+    strong: { fill: '#f97316', stroke: 'rgba(255,255,255,0.85)', r: 5, alpha: 0.95 },
+    medium: { fill: '#eab308', stroke: 'rgba(255,255,255,0.55)', r: 4, alpha: 0.7 },
+    weak: { fill: '#3b82f6', stroke: 'rgba(255,255,255,0.25)', r: 3, alpha: 0.4 }
   }
-  if (fuzzyRegions.value?.length > 0) {
-    const targetRegion = fuzzyRegions.value.find((r) =>
-      r.id === step.region_id
-      || r.name === step.focus
-      || r.candidates?.bestGuess === step.focus,
-    );
-    if (targetRegion?.center) {
-      const { lon, lat } = targetRegion.center;
-      if (Number.isFinite(Number(lon)) && Number.isFinite(Number(lat))) {
-        return [Number(lon), Number(lat)];
-      }
-    }
+  const cfg = palette[tier]
+  const alpha = Math.max(0, Math.min(1, cfg.alpha * (0.55 + 0.9 * opacityScale)))
+  const fillRgba = hexToRgba(cfg.fill, alpha)
+  return new Style({
+    image: new CircleStyle({
+      radius: cfg.r,
+      fill: new Fill({ color: fillRgba }),
+      stroke: new Stroke({ color: cfg.stroke, width: tier === 'core' ? 2 : 1 })
+    })
+  })
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = hex.replace('#', '')
+  const r = parseInt(m.substring(0, 2), 16)
+  const g = parseInt(m.substring(2, 4), 16)
+  const b = parseInt(m.substring(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+function rebuildPoiLayer() {
+  if (!poiLayer) return
+  const src = poiLayer.getSource()!
+  src.clear()
+  const threshold = ui.relevanceThreshold
+  // 阈值映射：高于阈值才显示对应 tier
+  // weak >= 0.0 / medium >= 0.25 / strong >= 0.55 / core 永远显示
+  const tierMin: Record<VisualTier, number> = {
+    excluded: 99,
+    weak: 0,
+    medium: 0.25,
+    strong: 0.55,
+    core: 0
   }
-  const targetPoi = poiFeatures.value.find((p) => p?.properties?.name === step.focus);
-  if (targetPoi?.geometry?.coordinates) {
-    return targetPoi.geometry.coordinates;
+  for (const p of allRenderablePois) {
+    if (threshold > tierMin[p.tier]) continue
+    if (p.tier === 'excluded') continue
+    const f = new Feature({ geometry: new Point(fromLonLat([p.lon, p.lat])) })
+    const st = styleForTier(p.tier, ui.opacityScale)
+    if (!st) continue
+    f.setStyle(st)
+    f.set('tier', p.tier)
+    f.set('name', p.display_name)
+    src.addFeature(f)
   }
-  return null;
-};
+}
 
-// 应用某一步：同步 narrator 文本 + 渲染节点边界 + 镜头飞行。
-// 由 playNarrative / goPrevStep / goNextStep 共同驱动；autoAdvance 由 typeText 负责。
-const applyStep = async (index) => {
-  if (index < 0 || index >= narrativeSteps.value.length) return;
-  clearAutoAdvanceTimer();
-  const step = narrativeSteps.value[index];
-  if (!step) return;
-  currentVoiceText.value = step.voice_text || '';
-  const stepGeometry = await renderNarrativeNodeBoundary(step);
-  if (!mapInstance.value) return;
-  const view = mapInstance.value.getView();
-  if (step.focus === 'overview') {
-    view.animate({ zoom: 14, duration: 1500 });
-    return;
+function rebuildLabelLayer() {
+  if (!labelLayer) return
+  const src = labelLayer.getSource()!
+  src.clear()
+  for (const region of narrative.regions) {
+    const f = new Feature({
+      geometry: new Point(fromLonLat([region.core_anchor.lon, region.core_anchor.lat]))
+    })
+    f.setStyle(
+      new Style({
+        text: new Text({
+          text: region.display_name,
+          font: '600 13px "PingFang SC","Microsoft YaHei",sans-serif',
+          fill: new Fill({ color: '#fff' }),
+          stroke: new Stroke({ color: 'rgba(15,18,32,0.95)', width: 4 }),
+          offsetY: -16,
+          padding: [4, 8, 4, 8]
+        })
+      })
+    )
+    src.addFeature(f)
   }
-  if (stepGeometry) {
-    view.fit(stepGeometry, {
-      duration: 1500,
-      maxZoom: 16,
-      padding: buildNarrativeFitPadding(mapInstance.value),
-    });
-    return;
+}
+
+function rebuildGlowLayers() {
+  const outer = glowOuterLayer?.getSource()
+  const inner = glowInnerLayer?.getSource()
+  const core = glowCoreLayer?.getSource()
+  if (!outer || !inner || !core) return
+  outer.clear()
+  inner.clear()
+  core.clear()
+  for (const r of narrative.regions) {
+    outer.addFeature(buildGlowFeature(r.glow_layers.outer))
+    inner.addFeature(buildGlowFeature(r.glow_layers.inner))
+    core.addFeature(buildGlowFeature(r.glow_layers.core))
   }
-  const coords = resolveStepTargetCoords(step);
-  if (coords) {
-    view.animate({
-      center: fromLonLat(coords),
-      zoom: 16,
-      duration: 1500,
-    });
-  }
-};
+}
 
-// currentStepIndex 变化时自动触发镜头/边界/文案同步。
-// autoAdvance 由 typeText 完成时自己推动，这里只负责"单步副作用"。
-watch(currentStepIndex, async (newIndex) => {
-  if (newIndex < 0 || !isPlaying.value) return;
-  await applyStep(newIndex);
-});
+function flyToActiveRegion() {
+  if (!olMap) return
+  const r = activeRegion.value
+  const view = olMap.getView()
+  view.animate({
+    center: fromLonLat([r.core_anchor.lon, r.core_anchor.lat]),
+    zoom: 15.5,
+    duration: 900
+  })
+}
 
-const playNarrative = async () => {
-  if (narrativeSteps.value.length === 0 || isPlaying.value) return;
-  clearAutoAdvanceTimer();
-  isPlaying.value = true;
-  autoAdvance.value = true;
-  // 播放节点导览时，隐藏 viewport 外框，避免和节点边界视觉冲突
-  boundaryData.value = null;
-  // 赋值 currentStepIndex 会在下个 tick 触发 watch → applyStep，
-  // 这里不重复调用，避免 typeText 被启动两次。
-  currentStepIndex.value = 0;
-};
+function zoomIn() {
+  if (!olMap) return
+  const v = olMap.getView()
+  v.animate({ zoom: (v.getZoom() ?? 14) + 1, duration: 240 })
+}
 
-const goPrevStep = async () => {
-  if (!isPlaying.value || narrativeSteps.value.length === 0) return;
-  if (currentStepIndex.value <= 0) return;
-  autoAdvance.value = false;
-  clearAutoAdvanceTimer();
-  currentStepIndex.value -= 1;
-};
+function zoomOut() {
+  if (!olMap) return
+  const v = olMap.getView()
+  v.animate({ zoom: (v.getZoom() ?? 14) - 1, duration: 240 })
+}
 
-const goNextStep = async () => {
-  if (!isPlaying.value || narrativeSteps.value.length === 0) return;
-  if (currentStepIndex.value >= narrativeSteps.value.length - 1) return;
-  autoAdvance.value = false;
-  clearAutoAdvanceTimer();
-  currentStepIndex.value += 1;
-};
+function initMap() {
+  if (!mapContainerEl.value) return
+  // 单一底图：默认矢量路网，可通过右上角「图层」按钮切到卫星影像。
+  // 不做叠加，保持画面干净。
+  baseLayer = new TileLayer({
+    source: new XYZ({
+      url: BASE_TILE_URL[baseLayerMode.value],
+      crossOrigin: 'anonymous'
+    })
+  })
 
+  glowOuterLayer = new VectorLayer({
+    source: new VectorSource(),
+    style: new Style({
+      fill: new Fill({ color: 'rgba(59,130,246,0.10)' }),
+      stroke: new Stroke({ color: 'rgba(59,130,246,0.18)', width: 1 })
+    }),
+    zIndex: 5
+  })
+  glowInnerLayer = new VectorLayer({
+    source: new VectorSource(),
+    style: new Style({
+      fill: new Fill({ color: 'rgba(245,158,11,0.16)' }),
+      stroke: new Stroke({ color: 'rgba(245,158,11,0.30)', width: 1 })
+    }),
+    zIndex: 6
+  })
+  glowCoreLayer = new VectorLayer({
+    source: new VectorSource(),
+    style: new Style({
+      fill: new Fill({ color: 'rgba(239,68,68,0.30)' }),
+      stroke: new Stroke({ color: 'rgba(239,68,68,0.65)', width: 1.5 })
+    }),
+    zIndex: 7
+  })
+  poiLayer = new VectorLayer({ source: new VectorSource(), zIndex: 10 })
+  labelLayer = new VectorLayer({ source: new VectorSource(), zIndex: 20, declutter: true })
 
-const goBack = () => router.push('/');
+  // LOD 限制（按规范 §0.2 + 用户约束）：
+  // - 最大范围（minZoom 方向）：武汉市行政区划 bbox，视野不能拖出市域之外
+  // - 最小范围（maxZoom 方向）：17 级
+  //
+  // TODO(阶段 3)：接入 docker PostGIS 的 districts 表后，把这个常量换成
+  //   SELECT ST_AsGeoJSON(ST_Envelope(geom)) FROM districts WHERE name='武汉市'
+  //   的真实结果，由后端通过 NarrativeResponse.admin_boundary 字段下发。
+  const WUHAN_CITY_BBOX_4326: [number, number, number, number] = [113.7, 29.9, 115.1, 31.4]
+  const adminExtent3857 = transformExtent(WUHAN_CITY_BBOX_4326, 'EPSG:4326', 'EPSG:3857')
+
+  olMap = new OlMap({
+    target: mapContainerEl.value,
+    layers: [baseLayer, glowOuterLayer, glowInnerLayer, glowCoreLayer, poiLayer, labelLayer],
+    controls: [],
+    view: new View({
+      center: fromLonLat(narrative.viewport.center),
+      zoom: narrative.viewport.zoom,
+      // minZoom 10：武汉市 bbox 大约 1.4° × 1.5°，zoom 10 时能完整看到全市
+      minZoom: 10,
+      maxZoom: 17,
+      extent: adminExtent3857,
+      // 严格限制视野矩形不能拖出武汉市，不仅仅是中心点
+      constrainOnlyCenter: false,
+      showFullExtent: true
+    })
+  })
+
+  rebuildGlowLayers()
+  rebuildPoiLayer()
+  rebuildLabelLayer()
+}
+
+watch(() => [ui.relevanceThreshold, ui.opacityScale], () => {
+  rebuildPoiLayer()
+})
+
+onMounted(() => {
+  initMap()
+  applyStep(0)
+})
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', scheduleViewportRefresh);
-  cleanupNarrativeBoundaryLayers();
-});
+  stopAll()
+  if (olMap) {
+    olMap.setTarget(undefined)
+    olMap = null
+  }
+})
 
+// ============================================================================
+// 内嵌 SVG 图标（避免引入额外图标库）
+// ============================================================================
+function ICON_COMPASS() {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><polygon points="9,9 15,15 13,7"/></svg>`
+}
+function ICON_HEADPHONE() {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 14v-3a9 9 0 1 1 18 0v3"/><rect x="2" y="14" width="5" height="6" rx="1.2"/><rect x="17" y="14" width="5" height="6" rx="1.2"/></svg>`
+}
+function ICON_COMPARE() {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="8" height="14"/><rect x="13" y="5" width="8" height="14"/><line x1="12" y1="2" x2="12" y2="22"/></svg>`
+}
+
+const ICONS = {
+  share: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>`,
+  bookmark: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.3a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.7 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  draw: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17.25V21h3.75L17 10.75 13.25 7 3 17.25z"/><path d="M14.7 5.3l3 3"/></svg>`,
+  upload: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
+  compass: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><polygon points="9,9 15,15 13,7"/></svg>`,
+  locate: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>`,
+  layers: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 22 8.5 12 15 2 8.5 12 2"/><polyline points="2 15.5 12 22 22 15.5"/></svg>`,
+  dice: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="16" cy="16" r="1.4" fill="currentColor"/><circle cx="16" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="16" r="1.4" fill="currentColor"/></svg>`,
+  play: `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="6 4 20 12 6 20"/></svg>`,
+  pause: `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>`,
+  rewind: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="11 19 2 12 11 5"/><polygon points="22 19 13 12 22 5"/></svg>`,
+  forward: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="13 5 22 12 13 19"/><polygon points="2 5 11 12 2 19"/></svg>`,
+  skipBack: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="19 20 9 12 19 4"/><rect x="5" y="4" width="2" height="16"/></svg>`,
+  skipForward: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="2" height="16"/></svg>`,
+  chevronLeft: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`,
+  chevronRight: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`,
+  chevronUp: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 15 12 9 18 15"/></svg>`,
+  chevronDown: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`
+}
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+/* ============================================================================
+   主题变量
+   ============================================================================ */
+.narrative-shell {
+  /* 扁平化色板：实色阶梯，不用 alpha + blur 制造拟态 */
+  --bg-base: #0a0e1a;            /* 整页背景（最深） */
+  --bg-deep: #0a0e1a;            /* 旧引用兼容，与 base 同色 */
+  --bg-panel: #131927;           /* 主面板：左 / 右 / 底栏 / topbar */
+  --bg-card: #1a2236;            /* 嵌套卡片 */
+  --bg-elevated: #232c45;        /* hover / active 高亮 */
+  --bg-overlay: #131927;         /* 地图上方覆盖控件（实色，与 panel 一致） */
 
-.narrative-mode-container {
-    position: relative;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
-    background: #0a0a12;
-    font-family: 'Inter', 'Noto Sans SC', sans-serif;
-    color: rgba(255, 255, 255, 0.95);
+  /* 边框：实色硬边，无柔光 */
+  --bd: #2a3348;
+  --bd-strong: #3a455e;
+  --bd-accent: #3b82f6;
+
+  --txt: #e6eaf6;
+  --txt-mute: #8a93b6;
+  --txt-faint: #5a6386;
+  --primary: #3b82f6;
+  --primary-dim: rgba(59, 130, 246, 0.16);  /* 仅用于 hover bg / 弱填充 */
+  --core: #ef4444;
+  --strong: #f97316;
+  --medium: #eab308;
+  --weak: #3b82f6;
+
+  position: absolute;
+  inset: 0;
+  /* 扁平化：整页改为实色，不再用 radial-gradient 模拟深度 */
+  background: var(--bg-base);
+  color: var(--txt);
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  overflow: hidden;
+  font-size: 13px;
 }
 
+/* ============================================================================
+   顶部栏
+   ============================================================================ */
+.topbar {
+  display: grid;
+  grid-template-columns: 320px 1fr 320px;
+  align-items: center;
+  padding: 0 18px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--bd);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #3b82f6, #06b6d4);
+  position: relative;
+}
+.brand-mark::before {
+  content: '';
+  position: absolute; inset: 4px;
+  border: 1.5px solid rgba(255,255,255,0.85);
+  border-radius: 3px;
+}
+.brand-name { font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
+.brand-tag {
+  font-size: 10px; padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59,130,246,0.18);
+  color: #7ab0ff;
+  border: 1px solid rgba(59,130,246,0.3);
+}
+.mode-switch {
+  display: flex; gap: 8px; justify-self: center;
+  background: var(--bg-card);
+  padding: 4px; border-radius: 10px;
+  border: 1px solid var(--bd);
+}
+.mode-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px; font-size: 13px;
+  background: transparent; border: 0; color: var(--txt-mute);
+  border-radius: 7px; cursor: pointer;
+  transition: all 0.2s ease;
+}
+.mode-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+.mode-icon { display: inline-flex; align-items: center; }
+.topbar-actions { display: flex; gap: 6px; justify-self: end; }
+.action-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 10px; background: transparent; color: var(--txt-mute);
+  border: 1px solid transparent; border-radius: 7px; cursor: pointer; font-size: 12px;
+}
+.action-btn:hover { background: rgba(255,255,255,0.04); color: var(--txt); border-color: var(--bd); }
 
-.bg-gradient {
-    position: fixed;
-    inset: 0;
-    background: 
-        radial-gradient(ellipse 80% 50% at 20% 40%, rgba(0, 212, 255, 0.08) 0%, transparent 50%),
-        radial-gradient(ellipse 60% 40% at 80% 60%, rgba(123, 44, 191, 0.06) 0%, transparent 50%),
-        radial-gradient(ellipse 50% 30% at 50% 100%, rgba(0, 212, 255, 0.04) 0%, transparent 50%);
-    animation: bgPulse 20s ease-in-out infinite;
-    pointer-events: none;
-    z-index: 1;
+/* ============================================================================
+   主体三栏 + 中央列内嵌底栏
+   左右面板纵向跨满 main-grid（顶到底），底栏只占中央列下方
+   ============================================================================ */
+.main-grid {
+  display: grid;
+  grid-template-columns: 300px 1fr 320px;
+  grid-template-rows: 1fr 168px;
+  grid-template-areas:
+    "left center right"
+    "left bottom right";
+  min-height: 0;
+  gap: 12px;
+  padding: 12px;
+}
+.left-panel { grid-area: left; }
+.right-panel { grid-area: right; }
+.map-stage { grid-area: center; }
+.bottom-bar { grid-area: bottom; }
+
+.left-panel, .right-panel {
+  display: flex; flex-direction: column;
+  gap: 12px; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  padding-right: 2px;
+}
+.left-panel::-webkit-scrollbar, .right-panel::-webkit-scrollbar { width: 4px; }
+.left-panel::-webkit-scrollbar-thumb, .right-panel::-webkit-scrollbar-thumb { background: rgba(120,140,200,0.2); border-radius: 2px; }
+
+.panel-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  padding: 14px;
 }
 
-@keyframes bgPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.8; transform: scale(1.05); }
+.card-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
+}
+.card-index {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  background: rgba(59,130,246,0.16);
+  color: #7ab0ff;
+  border: 1px solid rgba(59,130,246,0.35);
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600;
+}
+.card-title { font-size: 13.5px; font-weight: 600; flex: 1; }
+.card-help {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+  color: var(--txt-mute);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; cursor: help;
 }
 
-.grid-overlay {
-    position: fixed;
-    inset: 0;
-    background-image: 
-        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 60px 60px;
-    mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 0%, transparent 70%);
-    pointer-events: none;
-    z-index: 2;
+/* ----- 片区筛选 ----- */
+.search-row {
+  position: relative; margin-bottom: 12px;
+}
+.search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--txt-faint); display: inline-flex;
+}
+.search-input {
+  width: 100%; padding: 8px 10px 8px 30px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 7px; color: var(--txt);
+  font-size: 12.5px;
+  outline: none;
+}
+.search-input::placeholder { color: var(--txt-faint); }
+.search-input:focus { border-color: var(--primary); }
+
+.select-group { margin-bottom: 12px; }
+.select-label {
+  display: block; font-size: 12px;
+  color: var(--txt-mute); margin-bottom: 6px;
+}
+.select-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-card);
+  color: var(--txt);
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  font-size: 12.5px;
+  outline: none;
+  margin-bottom: 6px;
+}
+.select-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ghost-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 7px 8px;
+  background: var(--bg-card);
+  color: var(--txt);
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghost-btn:hover { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.4); }
+
+.region-info {
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.region-info-title {
+  font-size: 11.5px; color: var(--txt-mute); margin-bottom: 6px;
+}
+.region-info-row {
+  display: flex; justify-content: space-between;
+  font-size: 12.5px; padding: 3px 0;
+}
+.region-info-row strong { color: #fff; font-weight: 600; }
+
+.primary-btn {
+  width: 100%;
+  padding: 9px 12px;
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  color: #fff; border: 0; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.primary-btn:hover { background: #2563eb; }
+
+/* ----- 点剔除与分层 ----- */
+.tier-list { list-style: none; padding: 0; margin: 0 0 14px 0; }
+.tier-item {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 12.5px;
+  color: var(--txt);
+}
+.tier-dot { width: 9px; height: 9px; border-radius: 50%; }
+.tier-label { color: var(--txt-mute); }
+.tier-count { color: #fff; font-weight: 600; font-feature-settings: 'tnum'; }
+
+.slider-row {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--txt-mute);
+  margin: 10px 0 6px;
+}
+.slider-value { color: #fff; font-weight: 600; font-feature-settings: 'tnum'; }
+.slider-input {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary), rgba(59,130,246,0.2));
+  border-radius: 2px;
+  outline: none;
+}
+.slider-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%; background: #fff;
+  border: 3px solid var(--primary);
+  cursor: pointer;
+}
+.slider-ticks {
+  display: flex; justify-content: space-between;
+  font-size: 10.5px; color: var(--txt-faint);
+  margin-top: 4px;
 }
 
-.floating-orb {
-    position: fixed;
-    width: 300px;
-    height: 300px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(0,212,255,0.1) 0%, transparent 70%);
-    pointer-events: none;
-    animation: float 15s ease-in-out infinite;
-    z-index: 3;
+/* ----- 尺度与重心 ----- */
+.lod-row {
+  display: flex; justify-content: space-between;
+  font-size: 12.5px; padding: 3px 0;
+}
+.lod-row .lod-key { color: var(--txt-mute); }
+.lod-row .lod-val { color: #fff; font-weight: 500; }
+.lod-row .lod-val.accent { color: #7ab0ff; }
+.lod-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px; align-items: center;
+  font-size: 11px; color: var(--txt-mute);
+  margin: 10px 0 12px;
+}
+.lod-track {
+  position: relative; height: 4px;
+  background: rgba(120,140,200,0.18);
+  border-radius: 2px;
+}
+.lod-knob {
+  position: absolute; top: -4px;
+  width: 12px; height: 12px;
+  background: var(--primary);
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+.centroid-row { font-size: 12px; color: var(--txt-mute); margin: 8px 0 6px; }
+.centroid-tabs {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 4px; padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+}
+.centroid-tab {
+  padding: 6px 8px; background: transparent; color: var(--txt-mute);
+  border: 0; border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+.centroid-tab.active { background: rgba(59,130,246,0.22); color: #fff; }
+.centroid-hint {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(59,130,246,0.10);
+  border: 1px solid rgba(59,130,246,0.22);
+  border-radius: 8px;
+  font-size: 11.5px; color: #b4cdfb;
+  line-height: 1.55;
+  position: relative;
+}
+.centroid-hint::before {
+  content: 'i'; display: inline-flex;
+  align-items: center; justify-content: center;
+  width: 14px; height: 14px;
+  background: #3b82f6; color: #fff;
+  border-radius: 50%; font-style: italic; font-size: 10px;
+  margin-right: 6px;
 }
 
-.floating-orb.orb-1 { top: 10%; left: 10%; animation-delay: 0s; }
-.floating-orb.orb-2 { bottom: 20%; right: 10%; animation-delay: -5s; }
-
-@keyframes float {
-    0%, 100% { transform: translate(0, 0) scale(1); }
-    25% { transform: translate(30px, -30px) scale(1.1); }
-    50% { transform: translate(-20px, 20px) scale(0.9); }
-    75% { transform: translate(20px, 30px) scale(1.05); }
+/* ============================================================================
+   中央地图（2.5D 卫星影像航拍视角）
+   ============================================================================ */
+.map-stage {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--bd-strong);
+  background: #0a0e1c;
+  min-height: 0;
+  /* 给透视层一个深度场 */
+  perspective: 2200px;
+  perspective-origin: 50% 60%;
 }
 
-
-.background-map {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    filter: brightness(0.6) grayscale(0.2) contrast(1.1);
+/* 透视场：包住真正的 OL canvas，让 rotateX 不影响兄弟控件层 */
+.map-perspective-deck {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: auto;
 }
 
-
-
-.narrative-ui {
-    position: absolute;
-    inset: 0;
-    z-index: 10;
-    pointer-events: none;
+/* OL canvas 本体：rotateX 30° 模拟航拍倾斜
+   scale 1.18 补偿倾斜后视觉宽度收缩，避免边缘露背景
+   transform-origin 偏下，让"前景"留在画面下方、"远景"延伸到上方 */
+.map-canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 78%;
+  transform: rotateX(30deg) scale(1.18) translateZ(0);
+  transform-style: preserve-3d;
+  will-change: transform;
 }
 
-.narrative-ui > * { pointer-events: auto; }
-
-
-.script-panel {
-    position: absolute;
-    left: 24px;
-    top: 24px;
-    width: min(380px, calc(100vw - 48px));
-    max-width: calc(100vw - 48px);
-    max-height: calc(100vh - 48px);
-    background: rgba(10, 10, 18, 0.75);
-    backdrop-filter: blur(30px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 24px;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-    z-index: 20;
-    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    overflow: hidden;
+:deep(.ol-viewport) { background: #0a0e1c; }
+/* 矢量底图：不加 filter，保持高德矢量原本的亮度和色彩 */
+.map-canvas.mode-vector :deep(.ol-viewport) { filter: none; }
+/* 卫星底图：略压暗 + 加饱和，让 POI/光晕在卫星纹理上更醒目 */
+.map-canvas.mode-satellite :deep(.ol-viewport) {
+  filter: saturate(1.08) contrast(1.06) brightness(0.88);
 }
 
-.script-panel.generating {
-    border-color: rgba(0, 212, 255, 0.4);
-    box-shadow: 0 0 40px rgba(0, 212, 255, 0.15);
-}
-
-.panel-header {
-    padding: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
-}
-
-.tour-style-switcher {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 10px 24px 24px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-    background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 100%);
-}
-
-.tour-style-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-width: 320px;
-}
-
-.tour-style-copy__eyebrow {
-    font-size: 11px;
-    letter-spacing: 2.4px;
-    text-transform: uppercase;
-    color: rgba(0, 212, 255, 0.82);
-    font-weight: 700;
-}
-
-.tour-style-copy p {
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.7;
-    color: rgba(255,255,255,0.62);
-}
-
-.tour-style-group {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-}
-
-.tour-style-pill {
-    border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.04);
-    color: rgba(255,255,255,0.7);
-    border-radius: 999px;
-    padding: 9px 14px;
-    font-size: 11px;
-    line-height: 1;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: all 0.25s ease;
-}
-
-.tour-style-pill:hover:not(:disabled) {
-    background: rgba(255,255,255,0.08);
-    color: #fff;
-    transform: translateY(-1px);
-}
-
-.tour-style-pill.active {
-    background: linear-gradient(135deg, rgba(0, 212, 255, 0.22) 0%, rgba(123, 44, 191, 0.28) 100%);
-    border-color: rgba(0, 212, 255, 0.32);
-    color: #fff;
-    box-shadow: 0 8px 18px rgba(0, 212, 255, 0.12);
-}
-
-.tour-style-pill:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
-.brand-mini { display: flex; align-items: center; gap: 12px; }
-.brand-icon-mini {
-    width: 36px;
-    height: 36px;
-    background: linear-gradient(135deg, #00d4ff, #7b2cbf);
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    box-shadow: 0 4px 12px rgba(0, 212, 255, 0.3);
-}
-
-.brand-text-mini h1 { font-size: 15px; font-weight: 700; color: #fff; margin: 0; letter-spacing: 0.5px; }
-.brand-text-mini span { font-size: 9px; color: rgba(255, 255, 255, 0.5); text-transform: uppercase; letter-spacing: 1.5px; }
-
-.script-content {
-    flex: 1;
-    padding: 0 24px 24px;
-    overflow-y: auto;
-    scrollbar-width: none;
-}
-
-.script-content::-webkit-scrollbar { display: none; }
-
-.response-title {
-    font-size: 11px;
-    color: #00d4ff;
-    font-weight: 700;
-    letter-spacing: 2px;
-    margin: 24px 0 16px;
-    opacity: 0.8;
-}
-
-.ai-text-response {
-    color: rgba(255,255,255,0.8);
-    font-size: 14px;
-    line-height: 1.8;
-}
-
-
-.modern-steps { display: flex; flex-direction: column; gap: 4px; }
-.modern-step-item {
-    position: relative;
-    padding: 12px 0 12px 32px;
-    transition: all 0.3s ease;
-}
-
-.step-line {
-    position: absolute;
-    left: 7px;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: rgba(255,255,255,0.1);
-}
-
-.modern-step-item:first-child .step-line { top: 20px; }
-.modern-step-item:last-child .step-line { bottom: auto; height: 20px; }
-
-.step-dot {
-    position: absolute;
-    left: 4px;
-    top: 20px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.3);
-    border: 2px solid #0a0a12;
-    z-index: 2;
-    transition: all 0.4s ease;
-}
-
-.modern-step-item.active .step-dot {
-    background: #00d4ff;
-    box-shadow: 0 0 10px #00d4ff;
-    transform: scale(1.4);
-}
-
-.modern-step-item.finished .step-dot { background: #7b2cbf; }
-
-.step-label { font-size: 9px; color: rgba(255, 255, 255, 0.5); font-weight: 700; letter-spacing: 1px; margin-bottom: 2px; }
-.step-title { font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500; transition: all 0.3s ease; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.modern-step-item.active .step-title { color: #fff; font-weight: 600; }
-
-.step-tier {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 8px;
-    border-radius: 999px;
-    font-size: 10px;
-    letter-spacing: 0.4px;
-    color: rgba(0, 212, 255, 0.92);
-    background: rgba(0, 212, 255, 0.1);
-    border: 1px solid rgba(0, 212, 255, 0.2);
-}
-
-.step-tagline {
-    margin-top: 4px;
-    font-size: 11px;
-    line-height: 1.45;
-    color: rgba(255,255,255,0.42);
-}
-
-.fact-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 8px;
-    background: rgba(0,212,255,0.12);
-    color: rgba(0,212,255,0.85);
-    border: 1px solid rgba(0,212,255,0.25);
-    letter-spacing: 0.3px;
-}
-
-
-.panel-footer {
-    padding: 24px;
-    background: rgba(0,0,0,0.2);
-    border-top: 1px solid rgba(255,255,255,0.05);
-}
-
-.action-row { display: flex; flex-direction: column; gap: 12px; }
-
-.btn-modern {
-    width: 100%;
-    padding: 14px;
-    border: none;
-    border-radius: 14px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    letter-spacing: 0.5px;
-}
-
-.btn-generate {
-    background: rgba(255,255,255,0.05);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.1);
-}
-
-.btn-generate:hover { background: rgba(255,255,255,0.1); transform: translateY(-2px); }
-
-.btn-play-narrative {
-    background: linear-gradient(135deg, #00d4ff 0%, #7b2cbf 100%);
-    color: #fff;
-    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3);
-}
-
-.btn-play-narrative:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 212, 255, 0.4); }
-.btn-play-narrative:active { transform: translateY(0); }
-.btn-play-narrative.playing { background: rgba(255,255,255,0.1); box-shadow: none; color: rgba(255, 255, 255, 0.5); cursor: not-allowed; }
-
-
-/* ===== 右侧竖排旁白面板 ===== */
-.narrator-panel {
-    position: fixed;
-    right: 32px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: clamp(260px, 24vw, 320px);
-    max-width: calc(100vw - 48px);
-    max-height: 70vh;
-    display: flex;
-    flex-direction: row;
-    z-index: 100;
-    border-radius: 20px;
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255,255,255,0.1);
-}
-
-/* 左侧青色渐变光带 */
-.narrator-accent-line {
-    width: 3px;
-    min-height: 100%;
-    background: linear-gradient(
-        180deg,
-        transparent 0%,
-        rgba(0, 212, 255, 0.15) 15%,
-        #00d4ff 50%,
-        rgba(0, 212, 255, 0.15) 85%,
-        transparent 100%
+/* 远端地平线渐变：从顶部深蓝雾化到中段透明，强化"远处"感 */
+.map-horizon-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(11, 16, 32, 0.92) 0%,
+      rgba(11, 16, 32, 0.55) 8%,
+      rgba(11, 16, 32, 0.18) 22%,
+      rgba(11, 16, 32, 0) 38%,
+      rgba(11, 16, 32, 0) 100%
     );
-    flex-shrink: 0;
-    box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
 }
 
-.narrator-inner {
-    flex: 1;
-    background: rgba(10, 10, 18, 0.72);
-    backdrop-filter: blur(40px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-left: none;
-    border-radius: 0 20px 20px 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+/* 边缘晕影：四角微暗，中心通透，强化视觉焦点 */
+.map-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background:
+    radial-gradient(
+      120% 90% at 50% 65%,
+      rgba(0, 0, 0, 0) 50%,
+      rgba(0, 0, 0, 0.25) 80%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
 }
 
-.narrator-header {
-    padding: 20px 20px 0;
+.coverage-card {
+  position: absolute; top: 14px; left: 14px;
+  width: 280px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--bd-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  z-index: 5;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+/* 折叠态：仅保留头部，宽度收窄到刚好容下标题，避免遮挡地图 */
+.coverage-card.collapsed {
+  width: 220px;
+  padding: 10px 12px;
+}
+.coverage-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; color: var(--txt-mute);
+  margin-bottom: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.coverage-card.collapsed .coverage-head { margin-bottom: 0; }
+.coverage-head-actions {
+  display: flex; align-items: center; gap: 6px;
+}
+.coverage-toggle {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid var(--bd);
+  border-radius: 5px;
+  color: var(--txt-mute);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.coverage-toggle:hover {
+  color: #fff;
+  border-color: rgba(59,130,246,0.55);
+  background: rgba(59,130,246,0.18);
+}
+.coverage-body {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px; align-items: center;
+}
+.coverage-legend { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+.coverage-legend li {
+  display: grid; grid-template-columns: 10px 1fr auto;
+  gap: 8px; padding: 3px 0; align-items: center;
+}
+.coverage-legend .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.coverage-legend .dot.core { background: #ef4444; }
+.coverage-legend .dot.strong { background: #f97316; }
+.coverage-legend .dot.weak { background: #3b82f6; }
+.coverage-legend strong { color: #fff; font-weight: 600; font-feature-settings: 'tnum'; }
+
+.map-controls {
+  position: absolute; top: 14px; right: 14px;
+  display: flex; flex-direction: column;
+  gap: 6px; z-index: 5;
+}
+.map-ctl {
+  width: 36px; height: 36px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--bd);
+  color: var(--txt);
+  border-radius: 8px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+}
+.map-ctl:hover { background: var(--bg-elevated); }
+.map-ctl.active { background: var(--primary); border-color: var(--bd-accent); color: #fff; }
+.zoom-stack {
+  display: flex; flex-direction: column;
+  background: var(--bg-overlay);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.zoom-stack .map-ctl { border: 0; border-radius: 0; background: transparent; }
+.zoom-stack .map-ctl + .map-ctl { border-top: 1px solid var(--bd); }
+
+/* 图层切换按钮：图标 + 当前模式标签（矢量 / 影像）双层布局 */
+.map-ctl.layer-toggle {
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  height: 42px;
+  font-size: 11px;
+  line-height: 1;
+}
+.map-ctl.layer-toggle :deep(svg) { width: 16px; height: 16px; }
+.map-ctl.layer-toggle .layer-tag {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--txt-soft);
+  letter-spacing: 0.5px;
+}
+.map-ctl.layer-toggle.active .layer-tag { color: #fff; }
+
+.map-scale {
+  position: absolute; bottom: 12px; left: 14px;
+  font-size: 11px; color: var(--txt-mute);
+  padding: 4px 8px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  z-index: 5;
 }
 
-.narrator-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+/* AI 助手 fab：固定在 canvas 右下角 */
+.assistant-fab {
+  position: absolute;
+  right: 14px; bottom: 14px;
+  z-index: 20;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  border: 1px solid var(--bd-accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.assistant-fab:hover  { background: #2563eb; transform: translateY(-1px); }
+.assistant-fab:active { transform: translateY(0); }
+.fab-letters {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  line-height: 1;
 }
 
-.narrator-eyebrow {
-    font-size: 9px;
-    font-weight: 700;
-    color: #00d4ff;
-    text-transform: uppercase;
-    letter-spacing: 3px;
-    opacity: 0.65;
+/* ============================================================================
+   右面板（智能解说 + 上下文）
+   ============================================================================ */
+.auto-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--txt-mute); cursor: pointer;
+}
+.auto-toggle input { display: none; }
+.toggle-knob {
+  position: relative;
+  width: 30px; height: 16px;
+  background: rgba(120,140,200,0.25);
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+.toggle-knob::after {
+  content: '';
+  position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px;
+  background: #fff; border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+.toggle-knob.on { background: var(--primary); }
+.toggle-knob.on::after { transform: translateX(14px); }
+
+.theme-row { margin-bottom: 12px; }
+.theme-label { font-size: 12px; color: var(--txt-mute); }
+.theme-text { display: block; font-size: 14px; font-weight: 600; margin-top: 4px; line-height: 1.5; }
+
+.waveform {
+  display: flex; align-items: end; gap: 2px;
+  height: 56px; padding: 6px 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.wave-bar {
+  flex: 1;
+  background: rgba(120,140,200,0.4);
+  border-radius: 1px;
+  transition: background 0.2s ease;
+}
+.wave-bar.active { background: linear-gradient(180deg, #60a5fa, #3b82f6); }
+
+.narration-text {
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--txt);
+  min-height: 88px;
+  margin-bottom: 14px;
+}
+.narration-text p { margin: 0; }
+.cursor {
+  color: var(--primary);
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.seq-block { margin-bottom: 14px; }
+.seq-head { display: flex; justify-content: space-between; align-items: center; }
+.seq-title { font-size: 12.5px; color: var(--txt-mute); }
+.seq-list { list-style: none; padding: 0; margin: 8px 0 4px; }
+.seq-item {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 8px; align-items: center;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  background: var(--bg-card);
+  border: 1px solid transparent;
+  font-size: 12.5px;
+}
+.seq-item:hover { background: rgba(59,130,246,0.10); }
+.seq-item.active {
+  background: rgba(59,130,246,0.18);
+  border-color: rgba(59,130,246,0.45);
+}
+.seq-no {
+  width: 22px; height: 22px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+}
+.seq-item.active .seq-no { background: var(--primary); color: #fff; }
+.seq-name { color: var(--txt); }
+.seq-tag {
+  font-size: 10.5px; padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.tag-core { background: rgba(239,68,68,0.18); color: #fca5a5; }
+.tag-related, .tag-ecological { background: rgba(245,158,11,0.18); color: #fcd34d; }
+.tag-cultural { background: rgba(168,85,247,0.18); color: #d8b4fe; }
+.tag-landmark { background: rgba(34,197,94,0.18); color: #86efac; }
+.tag-educational { background: rgba(59,130,246,0.18); color: #93c5fd; }
+
+.seq-foot { font-size: 10.5px; color: var(--txt-faint); margin: 4px 0 0; }
+
+.settings-block { padding-top: 6px; border-top: 1px solid var(--bd); }
+.settings-title { font-size: 12.5px; color: var(--txt-mute); margin: 8px 0; }
+.settings-row { font-size: 11.5px; color: var(--txt-faint); margin-top: 8px; margin-bottom: 6px; }
+
+.duration-tabs {
+  display: flex; gap: 4px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+}
+.duration-tab {
+  flex: 1;
+  padding: 6px 6px;
+  background: transparent;
+  color: var(--txt-mute);
+  border: 0; border-radius: 5px;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 11.5px;
+}
+.duration-tab strong { color: var(--txt); font-weight: 500; }
+.duration-tab.active { background: rgba(59,130,246,0.2); }
+.duration-tab.active strong { color: #fff; }
+
+.style-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  margin-top: 4px;
+}
+.play-btn { margin-top: 12px; }
+
+/* 上下文 */
+.ctx-list { list-style: none; padding: 0; margin: 0; }
+.ctx-list li {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px; padding: 5px 0;
+  font-size: 12.5px; color: var(--txt);
+  border-bottom: 1px dashed rgba(120,140,200,0.12);
+}
+.ctx-list li:last-child { border-bottom: 0; }
+.ctx-key { color: var(--txt-mute); }
+.ctx-list li::before {
+  content: '·'; color: var(--primary); font-weight: 700;
+  position: absolute; margin-left: -10px;
+}
+.ctx-hint {
+  margin-top: 10px;
+  font-size: 11.5px; color: var(--txt-mute);
+  line-height: 1.55;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border-radius: 7px;
+  border: 1px solid var(--bd);
+  position: relative; padding-left: 24px;
+}
+.ctx-bullet {
+  position: absolute; left: 8px; top: 11px;
+  width: 8px; height: 8px;
+  background: var(--primary);
+  border-radius: 50%;
 }
 
-.narrator-focus {
-    font-size: 20px;
-    font-weight: 700;
-    margin: 6px 0 0;
-    letter-spacing: 1.5px;
-    background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.55) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    line-height: 1.3;
+/* ============================================================================
+   底部时间线
+   ============================================================================ */
+/* 卡片化：与 map-stage 同样的圆角和边框，视觉保持一致
+   两段：左侧时间线（拉伸）+ 右侧播放器进度条（固定宽度） */
+.bottom-bar {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  min-height: 0;
+  min-width: 0;
 }
 
-.narrator-tier {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 9px;
-    border-radius: 999px;
-    font-size: 10px;
-    color: rgba(0, 212, 255, 0.92);
-    border: 1px solid rgba(0, 212, 255, 0.26);
-    background: rgba(0, 212, 255, 0.09);
+.timeline-wrap {
+  display: grid;
+  grid-template-columns: 28px 1fr 28px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.tl-arrow {
+  width: 28px; height: 28px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  color: var(--txt-mute);
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tl-arrow:hover { color: #fff; background: rgba(59,130,246,0.15); }
+
+.timeline {
+  list-style: none; padding: 4px 0; margin: 0;
+  display: flex; gap: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.timeline::-webkit-scrollbar { display: none; }
+
+.tl-card {
+  flex: 0 0 132px;
+  background: var(--bg-card);
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  padding: 6px;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.tl-card:hover { background: var(--bg-elevated); border-color: var(--bd-accent); }
+.tl-card.active {
+  border-color: var(--bd-accent);
+  background: var(--bg-elevated);
+}
+.tl-thumb {
+  position: relative;
+  height: 60px;
+  border-radius: 7px;
+  overflow: hidden;
+}
+.tl-no {
+  position: absolute; top: 5px; left: 6px;
+  width: 18px; height: 18px;
+  background: rgba(0,0,0,0.55);
+  color: #fff; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+}
+.tl-tag-mini {
+  position: absolute; top: 5px; right: 5px;
+  font-size: 10px; padding: 1px 5px;
+  background: rgba(0,0,0,0.55);
+  color: #fff; border-radius: 4px;
+}
+.tl-name {
+  font-size: 12px; font-weight: 600; color: var(--txt);
+  margin-top: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tl-sub {
+  font-size: 10.5px; color: var(--txt-mute);
+  margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.narrator-style {
-    margin-top: 8px;
-    font-size: 11px;
-    color: rgba(255,255,255,0.42);
-    letter-spacing: 0.6px;
+/* 进度 + 控制 */
+.bottom-progress {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+.player-controls {
+  display: flex; gap: 6px; justify-content: center; align-items: center;
+}
+.player-btn {
+  width: 32px; height: 32px;
+  background: transparent; color: var(--txt-mute);
+  border: 1px solid var(--bd);
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.player-btn:hover { color: #fff; background: rgba(59,130,246,0.15); }
+.player-btn.primary {
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  color: #fff;
+  border-color: rgba(59,130,246,0.6);
+  width: 36px; height: 36px;
 }
 
-.narrator-body {
-    flex: 1;
-    padding: 16px 20px;
-    overflow-y: auto;
-    scrollbar-width: none;
+.progress-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px; align-items: center;
+  font-size: 11px; color: var(--txt-mute);
 }
-.narrator-body::-webkit-scrollbar { display: none; }
-
-.narrator-text {
-    font-size: 13px;
-    line-height: 1.85;
-    color: rgba(255,255,255,0.82);
-    font-weight: 400;
-    letter-spacing: 0.2px;
-    margin: 0;
-    min-height: 48px;
+.progress-track {
+  position: relative;
+  height: 4px;
+  background: rgba(120,140,200,0.18);
+  border-radius: 2px;
+  cursor: pointer;
 }
-
-.narrator-tagline {
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid rgba(255,255,255,0.06);
+.progress-fill {
+  position: absolute; left: 0; top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #60a5fa, #3b82f6);
+  border-radius: 2px;
 }
-.narrator-tagline span {
-    font-size: 11px;
-    line-height: 1.55;
-    color: rgba(255,255,255,0.45);
+.progress-knob {
+  position: absolute; top: -4px;
+  width: 12px; height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  border: 3px solid var(--primary);
 }
+.progress-time { font-feature-settings: 'tnum'; }
+.progress-rate { color: var(--txt-faint); }
 
-.narrator-reason-card {
-    margin-top: 14px;
-    padding: 14px;
-    border-radius: 14px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.06);
-}
-
-.narrator-reason-card__title {
-    font-size: 10px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: rgba(0, 212, 255, 0.78);
-    font-weight: 700;
-    margin-bottom: 10px;
-}
-
-.narrator-reason-card__grid {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.narrator-reason-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.narrator-reason-row span {
-    font-size: 10px;
-    color: rgba(255,255,255,0.36);
-    letter-spacing: 0.4px;
-}
-
-.narrator-reason-row strong {
-    font-size: 12px;
-    line-height: 1.65;
-    color: rgba(255,255,255,0.84);
-    font-weight: 500;
-}
-
-.narrator-local-tip {
-    margin-top: 12px;
-    padding: 12px 14px;
-    border-radius: 12px;
-    background: rgba(0, 212, 255, 0.05);
-    border: 1px solid rgba(0, 212, 255, 0.12);
-}
-
-.narrator-local-tip__label {
-    display: inline-flex;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    color: rgba(0, 212, 255, 0.8);
-    margin-bottom: 6px;
-}
-
-.narrator-local-tip p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.6;
-    color: rgba(255,255,255,0.78);
-}
-
-.narrator-fact {
-    margin-top: 8px;
-}
-
-/* 网页来源摘要：独立引用块样式，强视觉区分于打字机正文与事实标签。
-   左侧加一条主题色竖线作为 quote bar，顶部 label 用小字+图标标识"来自网页"。*/
-.narrator-web-source {
-    margin-top: 12px;
-    padding: 10px 12px 10px 14px;
-    border-left: 3px solid rgba(0, 212, 255, 0.7);
-    background: rgba(0, 212, 255, 0.06);
-    border-radius: 4px;
-    font-size: 12px;
-    line-height: 1.55;
-    color: rgba(255, 255, 255, 0.72);
-}
-
-.narrator-web-source__label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    color: rgba(0, 212, 255, 0.85);
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
-    text-transform: uppercase;
-}
-
-.narrator-web-source__icon {
-    font-size: 11px;
-}
-
-.narrator-web-source__quote {
-    font-size: 12px;
-    line-height: 1.6;
-    color: rgba(255, 255, 255, 0.78);
-    word-break: break-word;
-}
-
-.narrator-footer {
-    padding: 12px 20px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-top: 1px solid rgba(255,255,255,0.04);
-}
-
-.narrator-step-badge {
-    font-size: 10px;
-    font-weight: 600;
-    color: rgba(255,255,255,0.35);
-    letter-spacing: 0.5px;
-}
-
-.narrator-controls {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.narrator-step-btn {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(0, 212, 255, 0.28);
-    color: rgba(255, 255, 255, 0.78);
-    cursor: pointer;
-    font-size: 13px;
-    transition: background 0.2s ease, color 0.2s ease, border 0.2s ease, transform 0.15s ease;
-}
-
-.narrator-step-btn:hover:not(:disabled) {
-    background: rgba(0, 212, 255, 0.18);
-    color: #ffffff;
-    border-color: rgba(0, 212, 255, 0.7);
-    transform: translateY(-1px);
-}
-
-.narrator-step-btn:active:not(:disabled) {
-    transform: translateY(0);
-}
-
-.narrator-step-btn:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    border-color: rgba(255, 255, 255, 0.08);
-}
-
-.typing-cursor {
-    display: inline-block;
-    width: 3px;
-    height: 20px;
-    background: #00d4ff;
-    margin-left: 6px;
-    vertical-align: middle;
-    animation: blink 0.8s infinite;
-    box-shadow: 0 0 10px #00d4ff;
-}
-
-@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-
-
-.voice-visualizer { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
-.audio-bar {
-    width: 2.5px;
-    height: 6px;
-    background: #00d4ff;
-    border-radius: 2px;
-    animation: bar-dance 0.6s ease-in-out infinite alternate;
-    opacity: 0.7;
-}
-
-@keyframes bar-dance { from { height: 4px; opacity: 0.3; } to { height: 18px; opacity: 1; } }
-
-
-.action-buttons {
-    position: absolute;
-    left: 32px;
-    bottom: 32px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.round-tool-btn {
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    border: 1px solid rgba(255,255,255,0.1);
-    background: rgba(10, 10, 18, 0.6);
-    backdrop-filter: blur(20px);
-    color: #fff;
-    font-size: 20px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s ease;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-}
-
-.round-tool-btn:hover { background: #00d4ff; color: #fff; transform: scale(1.1) rotate(5deg); }
-.round-tool-btn.danger:hover { background: #ff6b6b; }
-
-
-.loader-spinner-mini {
-    width: 24px;
-    height: 24px;
-    border: 2px solid rgba(255,255,255,0.1);
-    border-top-color: #00d4ff;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.loading-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    padding: 40px 0;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 13px;
-}
-
-
-/* 旁白面板右侧滑入动画 */
-.narrator-slide-enter-active { transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
-.narrator-slide-leave-active { transition: all 0.4s ease-in; }
-.narrator-slide-enter-from { opacity: 0; transform: translateY(-50%) translateX(80px); }
-.narrator-slide-leave-to { opacity: 0; transform: translateY(-50%) translateX(40px); }
-
-.fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.6s ease; }
-.fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateX(-50px); filter: blur(10px); }
-
+/* 响应式：1280 以下收起左面板宽度，1080 以下右面板缩窄
+   底栏内部 2 段：时间线 1fr + 播放器固定宽度，窄屏时压缩播放器段 */
 @media (max-width: 1280px) {
-  .script-panel {
-    width: min(340px, calc(100vw - 48px));
-  }
-
-  .narrator-panel {
-    right: 24px;
-    width: min(280px, calc(100vw - 48px));
-  }
+  .main-grid { grid-template-columns: 270px 1fr 290px; }
+  .bottom-bar { grid-template-columns: 1fr 280px; }
 }
-
 @media (max-width: 1080px) {
-  .narrator-panel {
-    top: auto;
-    right: 24px;
-    bottom: 24px;
-    transform: none;
-    width: min(420px, calc(100vw - 48px));
-    max-height: 32vh;
-  }
-
-  .narrator-slide-enter-from {
-    opacity: 0;
-    transform: translateY(40px);
-  }
-
-  .narrator-slide-leave-to {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-}
-
-@media (max-width: 760px) {
-  .script-panel {
-    left: 16px;
-    top: 16px;
-    width: min(360px, calc(100vw - 32px));
-    max-height: calc(100vh - 32px);
-  }
-
-  .narrator-panel {
-    left: 16px;
-    right: 16px;
-    bottom: 88px;
-    width: auto;
-    max-width: none;
-  }
-
-  .action-buttons {
-    left: 16px;
-    bottom: 16px;
-    flex-direction: row;
-  }
-
-  .tour-style-group {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-
-:deep(.map-filter-control) {
-  display: none !important;
-}
-
-.response-body :deep(h3) {
-  color: #00f2ff;
-  font-size: 1.1rem;
-  margin: 16px 0 8px 0;
-}
-.response-body :deep(p) { margin-bottom: 12px; }
-.response-body :deep(ul) { padding-left: 20px; margin-bottom: 12px; }
-
-
-.script-content {
-    -ms-overflow-style: none; 
+  .main-grid { grid-template-columns: 240px 1fr 260px; }
+  .topbar { grid-template-columns: 240px 1fr 240px; }
+  .bottom-bar { grid-template-columns: 1fr 240px; }
 }
 </style>
-
-

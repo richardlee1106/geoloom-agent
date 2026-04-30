@@ -38,7 +38,7 @@ const SCENIC_PATTERNS = [
 ]
 
 const COMMERCIAL_PATTERNS = [
-  /商圈|步行街|商业街|购物中心|购物广场|商业广场|商场|广场|天地|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza/u,
+  /步行街|商业街|购物中心|购物广场|商业广场|商场|天地|汉街|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza|欧亚达|摩尔城/u,
   /shopping|retail|commercial|business|mall|plaza/i,
 ]
 

@@ -49,6 +49,19 @@ describe('useAiStreamDispatcher', () => {
       data: {
         results: {
           boundary: { type: 'Polygon' },
+          evidence_view: {
+            type: 'semantic_candidate',
+            anchor: {
+              resolvedPlaceName: '武汉大学',
+            },
+            regions: [
+              {
+                regionId: 'region_wuda',
+                name: '街道口-武大商圈',
+                score: 0.91,
+              },
+            ],
+          },
           stats: { cluster_count: 1 },
           tool_calls: [
             {
@@ -74,6 +87,12 @@ describe('useAiStreamDispatcher', () => {
     expect(message.toolCalls[0]).toMatchObject({
       skill: 'postgis',
       action: 'viewport_poi_scan',
+    })
+    expect(message.evidenceView).toMatchObject({
+      type: 'semantic_candidate',
+      anchor: {
+        resolvedPlaceName: '武汉大学',
+      },
     })
     expect(emitted.some((item) => item.eventName === 'ai-boundary')).toBe(true)
   })

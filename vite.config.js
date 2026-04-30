@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
     : mode === 'v3'
       ? 'http://127.0.0.1:3300'
       : 'http://127.0.0.1:3200')
+  const streamProxyTimeoutMs = 10 * 60 * 1000
 
   return {
     plugins: [
@@ -69,18 +70,23 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: '127.0.0.1',
-      port: 3000,
+      // 从 3000 改到 5173（vite 官方默认）：3000 在 Windows 经常被
+      // 客户端进程（如哔哩哔哩、IM 客户端）作为 ephemeral client port
+      // 出站到本地代理临时占用，导致 strictPort 启动失败。
+      port: 5173,
       strictPort: true,
       proxy: {
         '/api/geo': {
           target: proxyTarget,
           changeOrigin: true,
-          timeout: 120000,
+          timeout: streamProxyTimeoutMs,
+          proxyTimeout: streamProxyTimeoutMs,
         },
         '/api/ai': {
           target: proxyTarget,
           changeOrigin: true,
-          timeout: 120000,
+          timeout: streamProxyTimeoutMs,
+          proxyTimeout: streamProxyTimeoutMs,
         },
         '/api/category': {
           target: proxyTarget,
@@ -89,7 +95,8 @@ export default defineConfig(({ mode }) => {
         '/api/spatial': {
           target: proxyTarget,
           changeOrigin: true,
-          timeout: 120000,
+          timeout: streamProxyTimeoutMs,
+          proxyTimeout: streamProxyTimeoutMs,
         },
         '/api/search': {
           target: proxyTarget,

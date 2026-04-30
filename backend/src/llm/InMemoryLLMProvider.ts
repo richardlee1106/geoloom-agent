@@ -131,7 +131,7 @@ function buildIntentClassifierJson(query: string) {
     }
   }
 
-  if (/解读|分析|读懂|看看.*区域|这片区域|这片区|当前区域|当前片区|这里|此处/.test(rawQuery)) {
+  if (isStoreOpportunityQuery(rawQuery) || /解读|分析|读懂|看看.*区域|这片区域|这片区|当前区域|当前片区|这里|此处/.test(rawQuery)) {
     return {
       queryType: 'area_overview',
       anchorSource: hasSpatialView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',

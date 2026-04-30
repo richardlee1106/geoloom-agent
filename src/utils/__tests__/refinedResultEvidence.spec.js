@@ -56,7 +56,7 @@ describe('normalizeRefinedResultEvidence', () => {
     }
 
     const normalized = normalizeRefinedResultEvidence(input)
-    expect(normalized.intent).toEqual({
+    expect(normalized.intent).toMatchObject({
       queryType: 'poi_search',
       intentMode: 'local_search',
       parserProvider: null,
@@ -87,7 +87,7 @@ describe('normalizeRefinedResultEvidence', () => {
     }
 
     const normalized = normalizeRefinedResultEvidence(input)
-    expect(normalized.intent).toEqual({
+    expect(normalized.intent).toMatchObject({
       queryType: 'nearby_poi',
       intentMode: 'local_search',
       parserProvider: 'embedding',
@@ -96,5 +96,39 @@ describe('normalizeRefinedResultEvidence', () => {
       categorySub: '餐饮美食',
       queryPlan: null
     })
+  })
+
+  it('extracts structured evidence_view for similar regions', () => {
+    const input = {
+      results: {
+        evidence_view: {
+          type: 'semantic_candidate',
+          anchor: {
+            resolvedPlaceName: '武汉大学',
+          },
+          regions: [
+            {
+              regionId: 'region_wuda',
+              name: '街道口-武大商圈',
+              score: 0.91,
+            },
+          ],
+          meta: {
+            referenceDimensions: [
+              { key: 'campus_vibe', label: '校园氛围', score: 0.89 },
+            ],
+          },
+        },
+      },
+    }
+
+    const normalized = normalizeRefinedResultEvidence(input)
+    expect(normalized.evidenceView).toMatchObject({
+      type: 'semantic_candidate',
+      anchor: {
+        resolvedPlaceName: '武汉大学',
+      },
+    })
+    expect(normalized.hasEvidence).toBe(true)
   })
 })

@@ -250,6 +250,12 @@ let drawInteraction = null;
 // 注释说明
 let hoveredFeature = null; 
 
+function emitHover(feature) {
+  if (hoveredFeature === feature) return;
+  hoveredFeature = feature;
+  emit('hover-feature', feature || null);
+}
+
 const filterEnabled = ref(props.filterEnabled);
 
 const heatmapEnabled = ref(props.heatmapEnabled);

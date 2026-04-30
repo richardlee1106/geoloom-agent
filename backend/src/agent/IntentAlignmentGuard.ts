@@ -29,6 +29,13 @@ export class IntentAlignmentGuard {
     hasUserLocation: boolean
     hasExplicitRadius: boolean
   }): ClarificationResult {
+    const looksSpatialQuery = /附近|周边|旁边|这里|这边|这块|当前位置|最近|地铁|站点|区域|片区|商圈|业态|热点|供给|需求|竞争|开店|总结|解读|读懂|相似|类似|比较|对比|选区|地图/u
+      .test(input.rawQuery)
+
+    if (!looksSpatialQuery) {
+      return { needsClarification: false, reason: null, param: null, resolvedScope: { kind: 'ambiguous', hasExplicitBounds: false } }
+    }
+
     // 有明确边界 → 直接通过
     if (input.hasDrawnRegion) {
       return { needsClarification: false, reason: null, param: null, resolvedScope: { kind: 'drawn_region', hasExplicitBounds: true } }
@@ -40,16 +47,6 @@ export class IntentAlignmentGuard {
       return { needsClarification: false, reason: null, param: null, resolvedScope: { kind: 'viewport', hasExplicitBounds: true } }
     }
 
-    // 有位置但问"附近"类问题且无 radius
-    const isNearbyQuery = /附近|周边|旁边|身边|这里/u.test(input.rawQuery)
-    if (input.hasUserLocation && isNearbyQuery && !input.hasExplicitRadius) {
-      return {
-        needsClarification: true,
-        reason: '需要确认"附近"的具体范围，例如500米还是骑行10分钟。',
-        param: 'search_radius',
-        resolvedScope: null,
-      }
-    }
     if (input.hasUserLocation) {
       return { needsClarification: false, reason: null, param: null, resolvedScope: { kind: 'user_location', hasExplicitBounds: false } }
     }

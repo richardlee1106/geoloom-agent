@@ -6,6 +6,18 @@ import type { NLContract } from '../contract/types.js'
 import type { DeterministicIntent } from '../chat/types.js'
 import type { EvidenceAtom, AtomExecutionSpec } from './atoms.js'
 
+function needsAreaSemanticContextEvidence(intent: DeterministicIntent) {
+  if (intent.queryType !== 'area_overview') {
+    return false
+  }
+
+  return /居住|商业|混合|片区类型|更像.*片区|说明依据/u.test(String(intent.rawQuery || ''))
+}
+
+function needsPrimaryAnchorResolution(intent: DeterministicIntent) {
+  return intent.anchorSource === 'place' && Boolean(intent.placeName)
+}
+
 export interface ResolvedRequirements {
   requiredAtoms: EvidenceAtom[]
   optionalAtoms: EvidenceAtom[]
@@ -45,8 +57,8 @@ export class RequirementResolver {
         && webSearchStrategy === 'hybrid_with_discovery'
       ) {
         return this.buildResult(
-          ['anchor.resolved', 'poi.nearby_list', 'anchor.scope_cells', 'web.poi_discovery'],
-          ['web.tavily', 'web.entity_alignment', ...webAtoms.optional],
+          ['anchor.resolved', 'poi.nearby_list', ...webAtoms.required],
+          webAtoms.optional,
           'fast',
           input.intent,
         )
@@ -69,8 +81,16 @@ export class RequirementResolver {
     if (queryType === 'similar_regions') {
       const webAtoms = this.resolveWebAtoms(needsWebEvidence, webSearchStrategy, ['area.category_histogram'])
       return this.buildResult(
-        ['anchor.resolved', 'area.category_histogram', 'area.representative_samples', ...webAtoms.required],
-        ['area.region_encoding', ...webAtoms.optional],
+        [
+          'anchor.resolved',
+          'area.category_histogram',
+          'area.representative_samples',
+          'area.hotspots',
+          'area.aoi_context',
+          'area.landuse_context',
+          ...webAtoms.required,
+        ],
+        ['area.ring_distribution', 'area.region_encoding', ...webAtoms.optional],
         'deep',
         input.intent,
       )
@@ -79,9 +99,19 @@ export class RequirementResolver {
     // descriptive 型
     if (depth === 'descriptive') {
       const webAtoms = this.resolveWebAtoms(needsWebEvidence, webSearchStrategy, ['area.representative_samples'])
+      const semanticContextAtoms: EvidenceAtom[] = needsAreaSemanticContextEvidence(input.intent)
+        ? ['area.aoi_context', 'area.landuse_context']
+        : []
       return this.buildResult(
-        ['area.category_histogram', 'area.representative_samples', ...webAtoms.required],
-        ['area.aoi_context', ...webAtoms.optional],
+        this.withPrimaryAnchor([
+          'area.category_histogram',
+          'area.representative_samples',
+          ...semanticContextAtoms,
+          ...webAtoms.required,
+        ], input.intent),
+        needsAreaSemanticContextEvidence(input.intent)
+          ? webAtoms.optional
+          : ['area.aoi_context', ...webAtoms.optional],
         'fast',
         input.intent,
       )
@@ -91,7 +121,7 @@ export class RequirementResolver {
     if (depth === 'structural') {
       const webAtoms = this.resolveWebAtoms(needsWebEvidence, webSearchStrategy, ['area.representative_samples'])
       return this.buildResult(
-        [
+        this.withPrimaryAnchor([
           'area.category_histogram',
           'area.representative_samples',
           'area.hotspots',
@@ -99,7 +129,7 @@ export class RequirementResolver {
           'area.aoi_context',
           'area.landuse_context',
           ...webAtoms.required,
-        ],
+        ], input.intent),
         ['area.region_encoding', ...webAtoms.optional],
         'fast',
         input.intent,
@@ -110,7 +140,7 @@ export class RequirementResolver {
     if (depth === 'prescriptive') {
       const webAtoms = this.resolveWebAtoms(needsWebEvidence, webSearchStrategy, ['area.representative_samples'])
       return this.buildResult(
-        [
+        this.withPrimaryAnchor([
           'area.category_histogram',
           'area.representative_samples',
           'area.hotspots',
@@ -118,7 +148,7 @@ export class RequirementResolver {
           'area.aoi_context',
           'area.landuse_context',
           ...webAtoms.required,
-        ],
+        ], input.intent),
         ['area.ring_distribution', 'area.region_encoding', ...webAtoms.optional],
         'fast',
         input.intent,
@@ -127,11 +157,17 @@ export class RequirementResolver {
 
     // 兜底
     return this.buildResult(
-      ['area.category_histogram', 'area.representative_samples'],
+      this.withPrimaryAnchor(['area.category_histogram', 'area.representative_samples'], input.intent),
       [],
       'fast',
       input.intent,
     )
+  }
+
+  private withPrimaryAnchor(required: EvidenceAtom[], intent: DeterministicIntent): EvidenceAtom[] {
+    return needsPrimaryAnchorResolution(intent)
+      ? ['anchor.resolved', ...required]
+      : required
   }
 
   /**
@@ -213,6 +249,9 @@ export class RequirementResolver {
   }
 
   private atomToSpec(atom: EvidenceAtom, intent: DeterministicIntent): AtomExecutionSpec {
+    const primaryAnchorDeps: EvidenceAtom[] = needsPrimaryAnchorResolution(intent)
+      ? ['anchor.resolved']
+      : []
     const candidateReputationWebDeps: EvidenceAtom[] = (
       intent.queryType === 'nearby_poi'
       && intent.toolIntent === 'candidate_reputation'
@@ -248,37 +287,37 @@ export class RequirementResolver {
       'area.category_histogram': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_category_histogram', limit: 8 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.representative_samples': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_representative_sample', limit: 18 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.hotspots': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_h3_hotspots', limit: 5 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.ring_distribution': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_ring_distribution', limit: 8 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.competition_density': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_competition_density', limit: 8 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.aoi_context': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_aoi_context', limit: 5 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.landuse_context': {
         skill: 'postgis', action: 'execute_spatial_sql',
         payloadTemplate: { template: 'area_landuse_context', limit: 6 },
-        dependsOn: [], parallelizable: true,
+        dependsOn: primaryAnchorDeps, parallelizable: true,
       },
       'area.focused_samples': {
         skill: 'semantic_selector', action: 'select_area_evidence',

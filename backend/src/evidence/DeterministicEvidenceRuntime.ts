@@ -34,49 +34,28 @@ export class DeterministicEvidenceRuntime {
    */
   async execute(input: DeterministicRuntimeInput): Promise<ToolExecutionTrace[]> {
     this.atomResults.clear()
-    const specs = input.specs
-    const specAtoms = new Set(specs.map(s => s.atom))
     const traces: ToolExecutionTrace[] = []
-    const completed = new Set<EvidenceAtom>()
-    const inFlight = new Set<EvidenceAtom>()
+    const waves = this.buildWaves(input.specs)
 
-    // 依赖就绪检查：仅检查 plan 内的依赖
-    const depsReady = (spec: AtomExecutionSpec) =>
-      spec.dependsOn.filter(dep => specAtoms.has(dep)).every(dep => completed.has(dep))
-
-    // 启动所有依赖已就绪的 atom
-    const launchReady = () => {
-      for (const spec of specs) {
-        if (completed.has(spec.atom) || inFlight.has(spec.atom)) continue
-        if (!depsReady(spec)) continue
-        inFlight.add(spec.atom)
-        // 异步执行，完成后通知
-        const idx = traces.length // 估算位置，实际 push 时可能偏移
-        ;(async () => {
+    for (const wave of waves) {
+      const waveResults = await Promise.all(
+        wave.map(async (spec, index) => {
           await input.writer.stage('tool_run')
           await input.writer.thinking({
             status: 'start',
             message: `正在执行 ${spec.atom}...`,
           })
-          const trace = await this.executeAtom(spec, input, traces.length)
-          traces.push(trace)
-          if (trace.status === 'done' && trace.result != null) {
-            this.atomResults.set(spec.atom, trace.result)
-          }
-          completed.add(spec.atom)
-          inFlight.delete(spec.atom)
-          // 完成后立即尝试启动下游
-          launchReady()
-        })()
+          const trace = await this.executeAtom(spec, input, traces.length + index)
+          return { spec, trace }
+        }),
+      )
+
+      for (const { spec, trace } of waveResults) {
+        traces.push(trace)
+        if (trace.status === 'done' && trace.result != null) {
+          this.atomResults.set(spec.atom, trace.result)
+        }
       }
-    }
-
-    // 初始启动
-    launchReady()
-
-    // 等待所有 atom 完成
-    while (completed.size < specs.length) {
-      await new Promise(resolve => setTimeout(resolve, 10))
     }
 
     return traces

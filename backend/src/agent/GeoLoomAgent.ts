@@ -58,7 +58,18 @@ import type { NLContract } from '../contract/types.js'
 import { RequirementResolver } from '../evidence/RequirementResolver.js'
 import { DeterministicEvidenceRuntime } from '../evidence/DeterministicEvidenceRuntime.js'
 import { isSoftScopedNearbyIntent, resolveNearbyMacroScope } from '../evidence/nearbyScope.js'
+import { buildAreaOverviewView } from '../evidence/views/AreaOverviewView.js'
+import { buildSimilarRegionEvidence, buildSimilarRegionSearchText } from '../evidence/similarRegions.js'
 import { IntentAlignmentGuard } from './IntentAlignmentGuard.js'
+import {
+  appendAgentExecutionEvent,
+  appendToolTraceEvent,
+  createAgentExecutionJournal,
+  finalizeAgentExecutionJournal,
+  toAgentExecutionLogPayload,
+  type AgentExecutionStepStatus,
+  updateAgentExecutionStep,
+} from './executionJournal.js'
 import type { SkillRegistry } from '../skills/SkillRegistry.js'
 import {
   mergeSemanticEvidenceStatuses,
@@ -70,7 +81,7 @@ import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
 const SCHEMA_VERSION = 'v4.agent.v1'
 const DEFAULT_POI_COORD_SYS = 'gcj02'
 const DEFAULT_LLM_QUERY_MAX_ROUNDS = 4
-const DEFAULT_LLM_ANALYSIS_MAX_ROUNDS = 2
+const DEFAULT_LLM_ANALYSIS_MAX_ROUNDS = 6
 const STRUCTURED_CATEGORY_HINTS = [
   {
     key: 'coffee',
@@ -91,6 +102,11 @@ const STRUCTURED_CATEGORY_HINTS = [
     key: 'supermarket',
     label: '商超',
     aliases: ['商超', '超市', '商场', '便利店'],
+  },
+  {
+    key: 'fashion',
+    label: '服装店',
+    aliases: ['服装', '服装店', '服饰', '服饰店', '鞋帽', '箱包', '皮具', '买衣服'],
   },
   {
     key: 'metro_station',
@@ -116,6 +132,23 @@ const POSTGIS_TEMPLATE_FILE_MAP: Record<string, string> = {
   area_landuse_context: 'areaLanduseContext.sql',
 }
 const POSTGIS_TEMPLATE_CACHE = new Map<string, string>()
+
+interface CompositeRecommendationStagePlan {
+  stageText: string
+  categoryKey: string
+  targetCategory: string
+}
+
+interface CompositeRecommendationPlan {
+  rawQuery: string
+  corridor: CompositeRecommendationStagePlan & {
+    startPlaceName: string
+    endPlaceName: string
+  }
+  destination: CompositeRecommendationStagePlan & {
+    placeName: string
+  }
+}
 
 class ToolExecutionAbortError extends Error {
   constructor(message: string) {
@@ -151,6 +184,17 @@ function getDefaultLlmAnalysisTimeoutMs() {
 function getDefaultLlmSynthesisTimeoutMs() {
   const requestTimeoutMs = getDefaultLlmRequestTimeoutMs()
   return resolveTimeoutMs(process.env.LLM_SYNTHESIS_TIMEOUT_MS, Math.max(requestTimeoutMs, 18000))
+}
+
+function isProviderLedFastTrackEnabled() {
+  const normalized = String(process.env.GEOLOOM_PROVIDER_LED_FAST_TRACK || '').trim().toLowerCase()
+  if (!normalized) {
+    return true
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false
+  }
+  return ['1', 'true', 'yes', 'on'].includes(normalized)
 }
 
 function escapeSqlLiteral(value: string) {
@@ -699,7 +743,7 @@ function extractLastUserText(messages: ChatRequestV4['messages'] = []) {
 }
 
 function defaultRadiusForQueryType(queryType: DeterministicIntent['queryType']) {
-  if (queryType === 'area_overview' || queryType === 'similar_regions' || queryType === 'compare_places') {
+  if (queryType === 'area_overview' || queryType === 'similar_regions' || queryType === 'compare_places' || queryType === 'composite_recommendation') {
     return 1200
   }
   return 800
@@ -764,14 +808,189 @@ function shouldRelaxNearbyDistanceConstraint(
     && !spatialConstraint?.areaWkt
 }
 
+function looksLikeSpatialQuestion(rawQuery: string) {
+  return /附近|周边|旁边|这里|这边|这块|当前位置|最近|地铁|站点|区域|片区|商圈|业态|热点|供给|需求|竞争|开店|总结|解读|读懂|相似|类似|比较|对比|选区|地图/u
+    .test(String(rawQuery || ''))
+}
+
+function sanitizePlaceCandidate(value: unknown) {
+  let candidate = String(value || '').trim()
+  if (!candidate) return null
+  candidate = candidate
+    .replace(/^(请|帮我|请问|想看|想问|告诉我|比较|对比|看看|分析一下|分析|解读一下|解读|总结一下|总结|读懂一下|读懂|如果要在|如果在|在|到|去|离)+/u, '')
+    .replace(/[，。？?！!,:：]/g, '')
+    .trim()
+  if (!candidate || candidate.length < 2 || candidate.length > 20) return null
+  if (/^(我|这里|这边|这块|当前区域|当前片区|当前位置|附近|周边|旁边|最近)$/u.test(candidate)) {
+    return null
+  }
+  if (/这块|这里|这边|当前|有哪些|有什么|有没有|推荐|高分|口碑|评分/u.test(candidate)) {
+    return null
+  }
+  return candidate
+}
+
+function extractComparePlaceNames(rawQuery: string) {
+  const normalized = String(rawQuery || '').trim()
+  const match = normalized.match(/(?:比较|对比)\s*(.+?)\s*和\s*(.+?)(?:附近|周边|片区|区域|的|，|。|？|\?|$)/u)
+  if (!match) {
+    return { primary: null, secondary: null }
+  }
+  return {
+    primary: sanitizePlaceCandidate(match[1]),
+    secondary: sanitizePlaceCandidate(match[2]),
+  }
+}
+
+function extractExplicitPlaceName(rawQuery: string) {
+  const normalized = String(rawQuery || '').trim()
+  const patterns = [
+    /(?:解读|读懂|总结|看看|分析)(?:一下)?(.+?)(?:周边|附近|片区|区域)/u,
+    /^(.+?)(?:附近|周边|旁边|周围)/u,
+    /^(.+?)(?:最近的地铁站|地铁站是什么|地铁分布|餐饮活跃度|业态结构)/u,
+    /^(.+?)(?:美食|餐饮|咖啡|咖啡店|酒店|宾馆|景点|公园|商场|超市|便利店|书店|药店|医院|健身房|停车场|充电站)/u,
+    /和(.+?)(?:周边|附近)?(?:气质)?相似/u,
+  ]
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern)
+    const candidate = sanitizePlaceCandidate(match?.[1])
+    if (candidate) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+function inferStructuredCategoryFromRawQuery(rawQuery: string) {
+  const normalized = String(rawQuery || '').trim().toLowerCase()
+  if (!normalized) {
+    return { categoryKey: null, targetCategory: null }
+  }
+
+  for (const hint of STRUCTURED_CATEGORY_HINTS) {
+    if (hint.aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
+      return {
+        categoryKey: hint.key,
+        targetCategory: hint.label,
+      }
+    }
+  }
+
+  return { categoryKey: null, targetCategory: null }
+}
+
+function extractCompositeStageSplit(rawQuery: string) {
+  const normalized = String(rawQuery || '').trim()
+  if (!normalized) {
+    return null
+  }
+
+  const match = normalized.match(
+    /^(?<first>.+?)(?:[，,。；;]\s*)?(?:吃完(?:了)?|吃好(?:了)?|然后|之后|再|接着|顺路|后面|接下来)(?<second>.+)$/u,
+  )
+  if (!match?.groups) {
+    return null
+  }
+
+  const firstStage = String(match.groups.first || '').trim()
+  const secondStage = String(match.groups.second || '').trim()
+  if (!firstStage || !secondStage) {
+    return null
+  }
+
+  return { firstStage, secondStage }
+}
+
+function extractCompositeBetweenPlaceNames(stageText: string) {
+  const match = String(stageText || '').trim().match(/(?:在)?\s*(.+?)\s*和\s*(.+?)\s*之间/u)
+  if (!match) {
+    return { startPlaceName: null, endPlaceName: null }
+  }
+
+  return {
+    startPlaceName: sanitizePlaceCandidate(match[1]),
+    endPlaceName: sanitizePlaceCandidate(match[2]),
+  }
+}
+
+function extractCompositeDestinationPlaceName(stageText: string) {
+  const patterns = [
+    /(?:去|到)\s*(.+?)(?:逛一逛|逛逛|逛一下|逛街|逛|看看|转转|买东西|购物|买买|走走)(?:[，,。！？?]|$)/u,
+    /(?:去|到)\s*(.+?)(?:[，,。！？?]|$)/u,
+  ]
+
+  for (const pattern of patterns) {
+    const match = String(stageText || '').trim().match(pattern)
+    const candidate = sanitizePlaceCandidate(match?.[1])
+    if (candidate) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+function parseCompositeRecommendationQuery(rawQuery: string): CompositeRecommendationPlan | null {
+  const split = extractCompositeStageSplit(rawQuery)
+  if (!split) {
+    return null
+  }
+
+  const corridorAnchors = extractCompositeBetweenPlaceNames(split.firstStage)
+  const destinationPlaceName = extractCompositeDestinationPlaceName(split.secondStage)
+  const corridorCategory = inferStructuredCategoryFromRawQuery(split.firstStage)
+  const destinationCategory = inferStructuredCategoryFromRawQuery(split.secondStage)
+
+  if (
+    !corridorAnchors.startPlaceName
+    || !corridorAnchors.endPlaceName
+    || !destinationPlaceName
+    || !corridorCategory.categoryKey
+    || !destinationCategory.categoryKey
+  ) {
+    return null
+  }
+
+  return {
+    rawQuery,
+    corridor: {
+      stageText: split.firstStage,
+      startPlaceName: corridorAnchors.startPlaceName,
+      endPlaceName: corridorAnchors.endPlaceName,
+      categoryKey: corridorCategory.categoryKey,
+      targetCategory: corridorCategory.targetCategory || '候选点',
+    },
+    destination: {
+      stageText: split.secondStage,
+      placeName: destinationPlaceName,
+      categoryKey: destinationCategory.categoryKey,
+      targetCategory: destinationCategory.targetCategory || '候选点',
+    },
+  }
+}
+
 function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string): DeterministicIntent {
   const selectedCategories = normalizeSelectedCategories(request.options?.selectedCategories || [])
-  const { categoryKey, targetCategory } = inferCategoryFromSelections(selectedCategories)
+  const selectedCategoryHint = inferCategoryFromSelections(selectedCategories)
+  const rawCategoryHint = inferStructuredCategoryFromRawQuery(rawQuery)
+  const categoryKey = selectedCategoryHint.categoryKey || rawCategoryHint.categoryKey
+  const targetCategory = selectedCategoryHint.targetCategory || rawCategoryHint.targetCategory
   const hasMapView = Boolean(readMapViewAnchor(request))
   const hasUserLocation = Boolean(readUserLocation(request))
   const selectedRegionNames = readRequestRegions(request)
     .map((region) => readRegionName(region))
     .filter((name): name is string => Boolean(name))
+  const comparePlaces = extractComparePlaceNames(rawQuery)
+  const explicitPlaceName = extractExplicitPlaceName(rawQuery)
+  const nearestStationQuery = /地铁站/u.test(rawQuery) && /最近|离我最近|最近的/u.test(rawQuery)
+  const similarRegionQuery = /相似|类似|气质相似/u.test(rawQuery)
+    || (/像.+片区/u.test(rawQuery) && !/更像/u.test(rawQuery))
+  const compareQuery = /比较|对比|差异/u.test(rawQuery)
+  const areaInsightQuery = /读懂|解读|总结|主导业态|活力热点|异常点|机会|供给|需求|竞争|开什么店|更像.*片区|居住区|商业区|混合片区|业态结构/u.test(rawQuery)
+  const nearbyLookupQuery = /附近|周边|旁边|周围|这里|这边|这块|当前位置|我附近|有哪些|有什么|有没有|推荐/u.test(rawQuery)
+    || Boolean(categoryKey)
 
   let clarificationHint = '这轮我没有稳定理解你的自然语言意图。请直接说明你想查附近点位、最近地铁站、区域解读、相似片区，还是双地点对比。'
   if (hasMapView) {
@@ -782,28 +1001,94 @@ function buildStructuredFallbackIntent(request: ChatRequestV4, rawQuery: string)
     clarificationHint = `这轮我没有稳定理解你的自然语言意图，不过你当前选中了 ${selectedRegionNames.slice(0, 2).join(' 和 ')}。请重试，或明确说明你是想比较它们、解读其中一个，还是查询周边点位。`
   }
 
+  if (!looksLikeSpatialQuestion(rawQuery)) {
+    return {
+      queryType: 'unsupported',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery,
+      placeName: null,
+      anchorSource: hasMapView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',
+      secondaryPlaceName: null,
+      targetCategory: null,
+      comparisonTarget: null,
+      categoryKey: null,
+      radiusM: defaultRadiusForQueryType('nearby_poi'),
+      needsClarification: false,
+      clarificationHint: null,
+      needsWebSearch: false,
+      toolIntent: null,
+      searchIntentHint: null,
+    }
+  }
+
+  let queryType: DeterministicIntent['queryType'] = 'unsupported'
+  if (compareQuery && ((comparePlaces.primary && comparePlaces.secondary) || selectedRegionNames.length >= 2)) {
+    queryType = 'compare_places'
+  } else if (similarRegionQuery) {
+    queryType = 'similar_regions'
+  } else if (nearestStationQuery) {
+    queryType = 'nearest_station'
+  } else if (areaInsightQuery && (hasMapView || Boolean(explicitPlaceName) || selectedRegionNames.length > 0)) {
+    queryType = 'area_overview'
+  } else if (nearbyLookupQuery) {
+    queryType = 'nearby_poi'
+  }
+
+  let anchorSource: NonNullable<DeterministicIntent['anchorSource']> = hasMapView ? 'map_view' : hasUserLocation ? 'user_location' : 'place'
+  if (queryType === 'compare_places') {
+    anchorSource = (comparePlaces.primary && comparePlaces.secondary) ? 'place' : 'map_view'
+  } else if ((/我附近|离我最近|当前位置/u.test(rawQuery)) && hasUserLocation) {
+    anchorSource = 'user_location'
+  } else if (explicitPlaceName) {
+    anchorSource = 'place'
+  } else if (hasMapView && queryType !== 'unsupported') {
+    anchorSource = 'map_view'
+  }
+
+  const primaryPlaceName = queryType === 'compare_places'
+    ? (comparePlaces.primary || selectedRegionNames[0] || null)
+    : queryType === 'area_overview' && anchorSource === 'map_view'
+      ? (selectedRegionNames[0] || '当前区域')
+      : queryType === 'nearby_poi' && anchorSource === 'map_view'
+        ? (selectedRegionNames[0] || '当前区域')
+        : anchorSource === 'place'
+          ? explicitPlaceName
+          : null
+  const secondaryPlaceName = queryType === 'compare_places'
+    ? (comparePlaces.secondary || selectedRegionNames[1] || null)
+    : null
   const needsWebSearch = shouldSearchWeb(rawQuery)
-  const toolIntent = defaultToolIntentForQueryType('nearby_poi', needsWebSearch, rawQuery)
+  const toolIntent = defaultToolIntentForQueryType(queryType === 'unsupported' ? 'nearby_poi' : queryType, needsWebSearch, rawQuery)
+  const needsClarification = queryType !== 'unsupported' && (
+    (anchorSource === 'place' && !primaryPlaceName)
+    || (anchorSource === 'map_view' && !hasMapView && queryType !== 'compare_places')
+    || (anchorSource === 'user_location' && !hasUserLocation)
+    || (queryType === 'compare_places' && (!primaryPlaceName || !secondaryPlaceName))
+  )
 
   return {
-    queryType: 'unsupported',
-    intentMode: 'deterministic_visible_loop',
+    queryType,
+    intentMode: intentModeFromQueryType(queryType === 'unsupported' ? 'nearby_poi' : queryType),
     rawQuery,
-    placeName: null,
-    anchorSource: hasMapView ? 'map_view' : hasUserLocation ? 'user_location' : 'place',
-    secondaryPlaceName: null,
-    targetCategory,
+    placeName: primaryPlaceName,
+    anchorSource,
+    secondaryPlaceName,
+    targetCategory: queryType === 'area_overview'
+      ? '区域洞察'
+      : queryType === 'nearest_station'
+        ? '地铁站'
+        : targetCategory,
     comparisonTarget: null,
     categoryKey,
-    radiusM: defaultRadiusForQueryType('nearby_poi'),
-    needsClarification: true,
-    clarificationHint,
+    radiusM: defaultRadiusForQueryType(queryType === 'unsupported' ? 'nearby_poi' : queryType),
+    needsClarification,
+    clarificationHint: needsClarification ? clarificationHint : null,
     needsWebSearch,
     toolIntent,
     searchIntentHint: buildDefaultSearchIntentHint({
-      queryType: 'nearby_poi',
+      queryType: queryType === 'unsupported' ? 'nearby_poi' : queryType,
       toolIntent,
-      targetCategory,
+      targetCategory: queryType === 'nearest_station' ? '地铁站' : targetCategory,
       needsWebSearch,
     }),
   }
@@ -885,6 +1170,54 @@ function collectAreaInsightTemplateResults(toolCalls: ToolExecutionTrace[]) {
   return latestByTemplate
 }
 
+function mergeAreaInsightInput(
+  base: AreaInsightInput | undefined,
+  override: AreaInsightInput | undefined,
+): AreaInsightInput {
+  const baseValue = base || {}
+  const overrideValue = override || {}
+
+  const pickRows = (key: keyof AreaInsightInput) => {
+    const overrideRows = overrideValue[key]
+    if (Array.isArray(overrideRows)) {
+      return overrideRows as Record<string, unknown>[]
+    }
+    const baseRows = baseValue[key]
+    return Array.isArray(baseRows) ? baseRows as Record<string, unknown>[] : []
+  }
+
+  return {
+    categoryHistogram: pickRows('categoryHistogram'),
+    ringDistribution: pickRows('ringDistribution'),
+    representativeSamples: pickRows('representativeSamples'),
+    competitionDensity: pickRows('competitionDensity'),
+    hotspotCells: pickRows('hotspotCells'),
+    aoiContext: pickRows('aoiContext'),
+    landuseContext: pickRows('landuseContext'),
+  }
+}
+
+function preferNonEmptyComparisonPairs(...candidates: Array<ComparisonPair[] | null | undefined>) {
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      return candidate
+    }
+  }
+  return []
+}
+
+function readAreaInsightRows(
+  results: Map<string, Record<string, unknown>>,
+  templateName: string,
+) {
+  const primaryRows = results.get(templateName)?.rows as Record<string, unknown>[] | undefined
+  if (Array.isArray(primaryRows) && primaryRows.length > 0) {
+    return primaryRows
+  }
+  const viewportRows = results.get(`${templateName}_large_viewport`)?.rows as Record<string, unknown>[] | undefined
+  return Array.isArray(viewportRows) ? viewportRows : []
+}
+
 function collectLatestAreaEvidenceSelection(toolCalls: ToolExecutionTrace[]) {
   return [...toolCalls]
     .reverse()
@@ -895,6 +1228,32 @@ function collectLatestAreaEvidenceSelection(toolCalls: ToolExecutionTrace[]) {
       semantic_evidence?: SemanticEvidenceStatus
       diagnostics?: Record<string, unknown>
     } | undefined
+}
+
+function extractAssistantTextContent(message: LLMAssistantMessage | null | undefined) {
+  if (!message) return ''
+
+  const directContent = String(message.content || '').trim()
+  if (directContent) {
+    return directContent
+  }
+
+  const contentBlocks = Array.isArray(message.contentBlocks) ? message.contentBlocks : []
+  return contentBlocks
+    .filter((block) => ['text', 'output_text', 'final', 'message'].includes(String(block.type || '').trim().toLowerCase()))
+    .map((block) => String(block.text || block.content || block.message || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+}
+
+function serializeToolResultContent(content: unknown) {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  const serialized = JSON.stringify(content ?? {})
+  return typeof serialized === 'string' ? serialized : '{}'
 }
 
 function collectLatestLookupRows(
@@ -1105,6 +1464,85 @@ function readPoiProfileEncoding(result: unknown) {
   }
 }
 
+function readVectorRef(result: unknown) {
+  if (!result || typeof result !== 'object') {
+    return null
+  }
+
+  const vectorRef = String((result as Record<string, unknown>).vector_ref || (result as Record<string, unknown>).vectorRef || '').trim()
+  return vectorRef || null
+}
+
+function readSimilarRegionCandidates(result: unknown) {
+  if (!result || typeof result !== 'object') {
+    return []
+  }
+
+  const rawRegions = Array.isArray((result as Record<string, unknown>).regions)
+    ? (result as Record<string, unknown>).regions as unknown[]
+    : []
+
+  return rawRegions
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const region = item as Record<string, unknown>
+      const name = String(region.name || '').trim()
+      if (!name) return null
+      return {
+        regionId: String(region.region_id || region.regionId || region.id || '').trim() || null,
+        name,
+        score: Number.isFinite(Number(region.score)) ? Number(region.score) : null,
+        summary: String(region.summary || '').trim(),
+        tags: Array.isArray(region.tags)
+          ? region.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+          : [],
+      }
+    })
+    .filter((item): item is {
+      regionId: string | null
+      name: string
+      score: number | null
+      summary: string
+      tags: string[]
+    } => Boolean(item))
+}
+
+function readSimilarityScores(result: unknown) {
+  if (!result || typeof result !== 'object') {
+    return new Map<string, number>()
+  }
+
+  const rawScores = Array.isArray((result as Record<string, unknown>).scores)
+    ? (result as Record<string, unknown>).scores as unknown[]
+    : []
+  const scores = new Map<string, number>()
+
+  for (const item of rawScores) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const candidateId = String(record.candidate_id || record.candidateId || '').trim()
+    const score = Number(record.score)
+    if (!candidateId || !Number.isFinite(score)) continue
+    scores.set(candidateId, score)
+  }
+
+  return scores
+}
+
+function toResolvedAnchorFromEvidenceView(view: EvidenceView): ResolvedAnchor {
+  return {
+    place_name: view.anchor.placeName || view.anchor.resolvedPlaceName || view.anchor.displayName || '参考片区',
+    display_name: view.anchor.displayName || view.anchor.resolvedPlaceName || view.anchor.placeName || '参考片区',
+    role: 'primary',
+    source: view.anchor.source || 'semantic_candidate_view',
+    resolved_place_name: view.anchor.resolvedPlaceName || view.anchor.displayName || view.anchor.placeName || '参考片区',
+    poi_id: null,
+    lon: view.anchor.lon,
+    lat: view.anchor.lat,
+    coord_sys: view.anchor.coordSys || null,
+  }
+}
+
 function isFallbackToolTrace(trace: ToolExecutionTrace) {
   return String(trace.id || '').startsWith('fallback_')
 }
@@ -1135,6 +1573,7 @@ function formatIntentQueryType(queryType: DeterministicIntent['queryType']) {
   if (queryType === 'area_overview') return '区域解读'
   if (queryType === 'similar_regions') return '相似片区'
   if (queryType === 'compare_places') return '双地点比较'
+  if (queryType === 'composite_recommendation') return '复合行程推荐'
   return queryType
 }
 
@@ -1238,7 +1677,7 @@ function classifyTaskMode(input: {
   intent: DeterministicIntent
   rawQuery: string
 }): 'query' | 'analysis' {
-  if (['area_overview', 'compare_places', 'similar_regions'].includes(input.intent.queryType)) {
+  if (['area_overview', 'compare_places', 'similar_regions', 'composite_recommendation'].includes(input.intent.queryType)) {
     return 'analysis'
   }
 
@@ -1270,7 +1709,7 @@ function extractJsonObject(text: string) {
 }
 
 function isSupportedQueryType(value: unknown): value is DeterministicIntent['queryType'] {
-  return ['nearby_poi', 'nearest_station', 'area_overview', 'similar_regions', 'compare_places', 'unsupported']
+  return ['nearby_poi', 'nearest_station', 'area_overview', 'similar_regions', 'compare_places', 'composite_recommendation', 'unsupported']
     .includes(String(value || '').trim())
 }
 
@@ -1289,6 +1728,7 @@ function shouldSearchWeb(rawQuery: string) {
 
 function shouldPreferLlmIntentPlanner(input: {
   request: ChatRequestV4
+  rawQuery: string
   followUpHint?: RecentFollowUpIntentHint | null
   embeddingResult: EmbeddingIntentResult
 }) {
@@ -1297,7 +1737,12 @@ function shouldPreferLlmIntentPlanner(input: {
   }
 
   const hasSpatialView = Boolean(readMapViewAnchor(input.request))
+  const explicitPlaceName = extractExplicitPlaceName(input.rawQuery)
+  const rawCategoryHint = inferStructuredCategoryFromRawQuery(input.rawQuery)
   if (hasSpatialView) {
+    if (explicitPlaceName && (rawCategoryHint.categoryKey || /附近|周边|旁边|周围/u.test(input.rawQuery))) {
+      return false
+    }
     return true
   }
 
@@ -1396,7 +1841,7 @@ function readRecentIntentForFollowUp(snapshot: MemorySnapshot) {
     const queryType = isSupportedQueryType((record as Record<string, unknown>).queryType)
       ? (record as Record<string, unknown>).queryType as DeterministicIntent['queryType']
       : null
-    if (!queryType || queryType === 'unsupported' || queryType === 'compare_places') {
+    if (!queryType || queryType === 'unsupported' || queryType === 'compare_places' || queryType === 'composite_recommendation') {
       continue
     }
 
@@ -1493,6 +1938,10 @@ function inheritIntentForEllipticalFollowUp(input: {
   } satisfies DeterministicIntent
 }
 
+function isAreaStructureClassificationQuery(rawQuery: string) {
+  return /更像.*片区|居住片区|商业片区|混合片区|业态结构/u.test(String(rawQuery || ''))
+}
+
 function normalizeTopicHint(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const normalized = value.trim()
@@ -1500,7 +1949,9 @@ function normalizeTopicHint(value: unknown): string | null {
 }
 
 function intentModeFromQueryType(queryType: DeterministicIntent['queryType']): DeterministicIntent['intentMode'] {
-  return queryType === 'nearby_poi' ? 'deterministic_visible_loop' : 'agent_full_loop'
+  return queryType === 'nearby_poi' || queryType === 'composite_recommendation'
+    ? 'deterministic_visible_loop'
+    : 'agent_full_loop'
 }
 
 function defaultToolIntentForQueryType(
@@ -1720,6 +2171,90 @@ export class GeoLoomAgent {
     this.intentClassifier = options.intentClassifier
   }
 
+  private initializeExecutionJournal(input: {
+    state: AgentTurnState
+    rawQuery: string
+    intent: DeterministicIntent
+    taskMode: 'query' | 'analysis'
+    plannerSource: string
+    recommendedTrack: string
+    needsWebSearch: boolean
+    logger: ReturnType<typeof createLogger>
+  }) {
+    input.state.executionJournal = createAgentExecutionJournal({
+      rawQuery: input.rawQuery,
+      intent: input.intent,
+      taskMode: input.taskMode,
+      plannerSource: input.plannerSource,
+      recommendedTrack: input.recommendedTrack,
+      needsWebSearch: input.needsWebSearch,
+    })
+    appendAgentExecutionEvent(
+      input.state.executionJournal,
+      'note',
+      'execution_plan_initialized',
+      {
+        plannerSource: input.plannerSource,
+        recommendedTrack: input.recommendedTrack,
+        taskMode: input.taskMode,
+      },
+    )
+    input.logger.info('agent_plan', {
+      journal: toAgentExecutionLogPayload(input.state.executionJournal),
+    })
+  }
+
+  private noteExecutionStep(input: {
+    state: AgentTurnState
+    stepId: string
+    status: AgentExecutionStepStatus
+    detail?: string
+    logger?: ReturnType<typeof createLogger>
+    eventMessage?: string
+    eventMeta?: Record<string, unknown>
+  }) {
+    updateAgentExecutionStep(input.state.executionJournal, input.stepId, input.status, input.detail)
+    if (input.eventMessage) {
+      appendAgentExecutionEvent(
+        input.state.executionJournal,
+        'note',
+        input.eventMessage,
+        input.eventMeta,
+      )
+    }
+    if (input.logger && input.state.executionJournal) {
+      input.logger.debug('agent_step', {
+        stepId: input.stepId,
+        status: input.status,
+        detail: input.detail || null,
+      })
+    }
+  }
+
+  private finalizeExecutionJournal(input: {
+    state: AgentTurnState
+    logger?: ReturnType<typeof createLogger>
+    verificationStatus: 'allow' | 'clarify' | 'degraded'
+    verificationReason: string
+    answerGrounded: boolean
+    evidenceCount: number
+    answerSource?: string | null
+  }) {
+    finalizeAgentExecutionJournal(input.state.executionJournal, {
+      verificationStatus: input.verificationStatus,
+      verificationReason: input.verificationReason,
+      answerGrounded: input.answerGrounded,
+      evidenceCount: input.evidenceCount,
+      toolCallCount: input.state.toolCalls.length,
+      answerSource: input.answerSource || null,
+    })
+    if (input.logger && input.state.executionJournal) {
+      input.logger.info('agent_verification', {
+        journal: toAgentExecutionLogPayload(input.state.executionJournal),
+      })
+    }
+  }
+
   private buildSpatialConstraint(request: ChatRequestV4) {
     return buildSpatialConstraintFromRequest(request)
   }
@@ -1818,20 +2353,73 @@ export class GeoLoomAgent {
         needsClarification: true,
         clarificationHint: guardResult.reason,
       }
+      const guardState: AgentTurnState = {
+        requestId,
+        traceId,
+        sessionId: session.id,
+        toolCalls: [],
+        anchors: {},
+        spatialConstraint: undefined,
+        sqlValidationAttempts: 0,
+        sqlValidationPassed: 0,
+      }
+      this.initializeExecutionJournal({
+        state: guardState,
+        rawQuery: lastUserText,
+        intent: clarificationIntent,
+        taskMode: classifyTaskMode({
+          intent: clarificationIntent,
+          rawQuery: lastUserText,
+        }),
+        plannerSource: 'alignment_guard',
+        recommendedTrack: 'guardrail',
+        needsWebSearch: Boolean(clarificationIntent.needsWebSearch),
+        logger,
+      })
+      this.noteExecutionStep({
+        state: guardState,
+        stepId: 'understand_request',
+        status: 'completed',
+        detail: '已完成输入理解，但空间上下文守卫判定当前信息不足以继续执行。',
+        logger,
+        eventMessage: 'clarification_guard_triggered',
+        eventMeta: {
+          reason: guardResult.reason,
+        },
+      })
+      this.noteExecutionStep({
+        state: guardState,
+        stepId: 'resolve_scope',
+        status: 'failed',
+        detail: guardResult.reason || '当前输入缺少稳定空间上下文。',
+        logger,
+      })
       await this.finishWithoutEvidence({
         writer, answer: guardResult.reason!, intent: clarificationIntent,
         parserModel: 'structured-intent-fallback',
         parserProvider: 'rule',
-        state: {
-          requestId, traceId, sessionId: session.id,
-          toolCalls: [], anchors: {},
-          spatialConstraint: undefined,
-          sqlValidationAttempts: 0, sqlValidationPassed: 0,
-        },
+        state: guardState,
         startedAt, providerReady: this.provider.isReady(),
+        logger,
       })
       return
     }
+
+    if (await this.tryHandleCompositeRecommendation({
+      request,
+      writer,
+      startedAt,
+      requestId,
+      traceId,
+      sessionId: session.id,
+      rawQuery: lastUserText,
+      contextualUserText,
+      skillContext,
+      logger,
+    })) {
+      return
+    }
+
     // 阶段 0：意图理解计时开始
     const intentStartedAt = Date.now()
     const intentResolution = await this.resolveIntent({
@@ -1842,7 +2430,7 @@ export class GeoLoomAgent {
       providerReady: this.provider.isReady(),
     })
     const intentMs = Date.now() - intentStartedAt
-    const intent = intentResolution.intent
+    let intent = intentResolution.intent
     intent.viewportContext = deriveViewportContext(request) || intent.viewportContext
     const parserModel = intentResolution.source === 'embedding'
       ? 'embedding-intent-classifier'
@@ -1923,11 +2511,60 @@ export class GeoLoomAgent {
       sqlValidationAttempts: 0,
       sqlValidationPassed: 0,
     }
+    if (
+      intent.queryType === 'compare_places'
+      && spatialConstraint?.regions.length >= 2
+      && (intent.needsClarification || !intent.placeName || !intent.secondaryPlaceName)
+    ) {
+      intent = {
+        ...intent,
+        anchorSource: 'map_view',
+        placeName: intent.placeName || spatialConstraint.regions[0]?.name || null,
+        secondaryPlaceName: intent.secondaryPlaceName || spatialConstraint.regions[1]?.name || null,
+        needsClarification: false,
+        clarificationHint: null,
+      }
+    }
     if (intent.anchorSource === 'user_location' && requestUserLocation) {
       state.anchors.primary = buildUserLocationAnchor(requestUserLocation)
     } else if (intent.anchorSource === 'map_view' && requestMapViewAnchor) {
       state.anchors.primary = requestMapViewAnchor
     }
+    const taskMode = classifyTaskMode({
+      intent,
+      rawQuery: contextualUserText,
+    })
+    this.initializeExecutionJournal({
+      state,
+      rawQuery: lastUserText,
+      intent,
+      taskMode,
+      plannerSource: intentResolution.source,
+      recommendedTrack: requirements.recommendedTrack,
+      needsWebSearch: webEvidencePlanned,
+      logger,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'understand_request',
+      status: 'completed',
+      detail: `已识别为 ${intent.queryType}，锚点来源 ${intent.anchorSource || 'unknown'}，计划按 ${requirements.recommendedTrack} 路径执行。`,
+      logger,
+      eventMessage: 'intent_resolved',
+      eventMeta: {
+        queryType: intent.queryType,
+        anchorSource: intent.anchorSource || null,
+        plannerSource: intentResolution.source,
+        recommendedTrack: requirements.recommendedTrack,
+      },
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'resolve_scope',
+      status: 'running',
+      detail: '正在准备锚点、空间范围和执行上下文。',
+      logger,
+    })
     const previewAnchorLabel = intent.anchorSource === 'user_location' && requestUserLocation
       ? '当前位置'
       : intent.placeName
@@ -1977,8 +2614,8 @@ export class GeoLoomAgent {
     })
     await writer.reasoning({
       content: [
-        `NL 理解：将问题判为「${formatIntentQueryType(intent.queryType)}」`,
-        previewAnchorLabel ? `，锚点是「${previewAnchorLabel}」` : '',
+        previewAnchorLabel ? `锚点已经锁定为「${previewAnchorLabel}」` : `NL 理解：将问题判为「${formatIntentQueryType(intent.queryType)}」`,
+        previewAnchorLabel ? `，问题判为「${formatIntentQueryType(intent.queryType)}」` : '',
         intent.targetCategory ? `，目标类别是「${intent.targetCategory}」` : '',
         `，来源是 ${parserProvider === 'embedding' ? 'Embedding' : parserProvider === 'llm' ? 'LLM' : '规则'}${intentResolution.confidence != null ? `（${Math.round(intentResolution.confidence * 100)}%）` : ''}`,
         webRequirementMode === 'required'
@@ -1988,8 +2625,30 @@ export class GeoLoomAgent {
             : '，先基于本地空间证据。',
       ].join(''),
     })
+    if (intentResolution.usedFallbackProvider && intentResolution.fallbackReason) {
+      await writer.reasoning({
+        content: `上游意图解析暂时不可用，已回退到确定性链路继续完成：${intentResolution.fallbackReason}`,
+      })
+    }
 
     if (intent.queryType === 'unsupported' || intent.needsClarification) {
+      if (intent.needsClarification) {
+        this.noteExecutionStep({
+          state,
+          stepId: 'resolve_scope',
+          status: 'failed',
+          detail: intent.clarificationHint || '当前输入仍缺少继续执行所需的空间信息。',
+          logger,
+        })
+      } else {
+        this.noteExecutionStep({
+          state,
+          stepId: 'collect_evidence',
+          status: 'skipped',
+          detail: '当前问题超出已支持能力，本轮不进入取证。',
+          logger,
+        })
+      }
       const answer = intent.clarificationHint || this.buildUnsupportedAnswer()
       await this.finishWithoutEvidence({
         writer,
@@ -2015,10 +2674,6 @@ export class GeoLoomAgent {
       .map((summary) => this.options.registry.get(summary.name))
       .filter((skill): skill is SkillDefinition => Boolean(skill))
     const tools = buildToolSchemas({ skills, manifests })
-    const taskMode = classifyTaskMode({
-      intent,
-      rawQuery: contextualUserText,
-    })
     const toolLoopMaxRounds = this.resolveToolLoopMaxRounds(taskMode)
     const toolLoopTimeoutMs = taskMode === 'analysis'
       ? getDefaultLlmAnalysisTimeoutMs()
@@ -2053,9 +2708,27 @@ export class GeoLoomAgent {
         ? '已规划确定性 Fast Track，零 LLM 并行取证...'
         : '已规划 Deep Track，确定性取证 + LLM 补充...',
     })
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_evidence',
+      status: 'running',
+      detail: `正在按 ${requirements.recommendedTrack} 路径执行 ${requirements.executionSpecs.length} 个证据探针。`,
+      logger,
+    })
+    if (intent.queryType === 'area_overview' || webEvidencePlanned) {
+      this.noteExecutionStep({
+        state,
+        stepId: 'enrich_evidence',
+        status: 'running',
+        detail: intent.queryType === 'area_overview'
+          ? '正在补 AOI、用地、热点与语义证据。'
+          : '正在补充联网或外部对齐证据。',
+        logger,
+      })
+    }
 
     let execution: Awaited<ReturnType<typeof runFunctionCallingLoop>>
-    let toolLoopUsedFallbackProvider = false
+    let toolLoopUsedFallbackProvider = Boolean(intentResolution.usedFallbackProvider)
     // 阶段 0：证据采集计时开始
     const evidenceStartedAt = Date.now()
 
@@ -2064,21 +2737,82 @@ export class GeoLoomAgent {
       const result = await this.executeToolCall(call as ToolCallRequest, intent, state, skillContext)
       return { content: result.content, trace: result.trace }
     }
+    const executeProviderLoopToolCallDelegate = async (call: { id: string, name: string, arguments: Record<string, unknown> }) => {
+      const result = await this.executeToolCall(call as ToolCallRequest, intent, state, skillContext)
+      return {
+        content: serializeToolResultContent(result.content),
+        trace: result.trace,
+      }
+    }
+    const useProviderLedFastTrack = requirements.recommendedTrack === 'fast'
+      && isProviderLedFastTrackEnabled()
+      && this.provider.isReady()
+      && !(this.provider instanceof InMemoryLLMProvider)
+      && intentResolution.source !== 'llm'
 
     if (requirements.recommendedTrack === 'fast') {
-      // ── Fast Track：确定性并行执行，零 LLM ──
-      await writer.reasoning({
-        content: `Fast Track 启动：${requirements.requiredAtoms.join(', ')}，共 ${requirements.executionSpecs.length} 个探针并行执行。`,
-      })
-      const fastRuntime = new DeterministicEvidenceRuntime()
-      const traces = await fastRuntime.execute({
-        specs: requirements.executionSpecs,
-        intent,
-        state,
-        writer,
-        executeToolCall: executeToolCallDelegate,
-      })
-      execution = { assistantMessage: null, traces }
+      if (useProviderLedFastTrack) {
+        await writer.reasoning({
+          content: 'Fast Track 启动：当前使用自定义 provider，优先走 provider-led tool loop，避免把确定性兜底误当成 provider 已完成的证据链。',
+        })
+        try {
+          execution = await runFunctionCallingLoop({
+            provider: activeProvider,
+            tools,
+            maxRounds: toolLoopMaxRounds,
+            requestTimeoutMs: toolLoopTimeoutMs,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: toolLoopUserMessage },
+            ],
+            onAssistantMessage: async (assistantMessage, meta) => {
+              if (meta.finishReason !== 'tool_calls') return
+              const reasoningSnippet = extractAssistantReasoningSnippet(assistantMessage)
+              if (!reasoningSnippet) return
+              await writer.reasoning({
+                round: meta.round + 1,
+                content: reasoningSnippet,
+              })
+            },
+            onToolCall: async (call) => {
+              await writer.stage('tool_run')
+              await writer.reasoning({
+                content: describeToolIntent(call),
+              })
+              return executeProviderLoopToolCallDelegate(call)
+            },
+          })
+        } catch (error) {
+          if (error instanceof ToolExecutionAbortError) throw error
+          await writer.reasoning({
+            content: '自定义 provider 的 Fast Track tool loop 失败，已回退到确定性取证，避免整轮中断。',
+          })
+          const fastRuntime = new DeterministicEvidenceRuntime()
+          const traces = await fastRuntime.execute({
+            specs: requirements.executionSpecs,
+            intent,
+            state,
+            writer,
+            executeToolCall: executeToolCallDelegate,
+          })
+          execution = { assistantMessage: null, traces }
+          toolLoopUsedFallbackProvider = true
+        }
+      } else {
+        // ── Fast Track：确定性并行执行，零 LLM ──
+        await writer.reasoning({
+          content: `Fast Track 启动：${requirements.requiredAtoms.join(', ')}，共 ${requirements.executionSpecs.length} 个探针并行执行。`,
+        })
+        const fastRuntime = new DeterministicEvidenceRuntime()
+        const traces = await fastRuntime.execute({
+          specs: requirements.executionSpecs,
+          intent,
+          state,
+          writer,
+          executeToolCall: executeToolCallDelegate,
+        })
+        execution = { assistantMessage: null, traces }
+      }
     } else {
       // ── Deep Track：确定性先跑一轮，不足则最多 1 轮 LLM 补充（逃逸阀）──
       await writer.reasoning({
@@ -2136,7 +2870,7 @@ export class GeoLoomAgent {
               })
               const result = await this.executeToolCall(call, intent, state, skillContext)
               return {
-                content: JSON.stringify(result.content),
+                content: serializeToolResultContent(result.content),
                 trace: result.trace,
               }
             },
@@ -2174,8 +2908,99 @@ export class GeoLoomAgent {
       }
     }
 
+    if (
+      intent.queryType === 'nearest_station'
+      && intent.anchorSource === 'place'
+      && intent.placeName
+      && !hasCoordinates(state.anchors.primary)
+    ) {
+      await writer.reasoning({
+        content: 'provider 没有先完成锚点解析，正在按地点名补做最近地铁站兜底取证。',
+      })
+      try {
+        await this.executeToolCall({
+          id: 'fallback_resolve_anchor_primary',
+          name: 'postgis',
+          arguments: {
+            action: 'resolve_anchor',
+            payload: {
+              place_name: intent.placeName,
+              role: 'primary',
+            },
+          },
+        }, intent, state, skillContext)
+
+        if (hasCoordinates(state.anchors.primary)) {
+          await this.executeToolCall({
+            id: 'fallback_nearest_station_lookup',
+            name: 'postgis',
+            arguments: {
+              action: 'execute_spatial_sql',
+              payload: {
+                template: 'nearest_station',
+                category_key: 'metro_station',
+                limit: 8,
+              },
+            },
+          }, intent, state, skillContext)
+        }
+      } catch (error) {
+        if (error instanceof ToolExecutionAbortError) {
+          await writer.reasoning({
+            content: '最近地铁站兜底取证没有成功，接下来会按现有证据继续判断。',
+          })
+        } else {
+          throw error
+        }
+      }
+    }
+
     const primaryAnchor = state.anchors.primary
     const secondaryAnchor = state.anchors.secondary
+    this.noteExecutionStep({
+      state,
+      stepId: 'resolve_scope',
+      status: 'completed',
+      detail: hasCoordinates(primaryAnchor)
+        ? `已锁定主锚点 ${primaryAnchor?.resolved_place_name || primaryAnchor?.display_name || primaryAnchor?.place_name || intent.placeName || '目标地点'}。`
+        : `已完成范围准备，当前按 ${this.describeSpatialConstraint(state.spatialConstraint || null)} 执行。`,
+      logger,
+    })
+    const unresolvedPrimaryPlaceAnchor = intent.anchorSource === 'place'
+      && ['nearby_poi', 'nearest_station', 'area_overview'].includes(intent.queryType)
+      && !hasCoordinates(primaryAnchor)
+      && state.toolCalls.some((trace) =>
+        trace.skill === 'postgis'
+        && trace.action === 'resolve_anchor'
+        && trace.status === 'error'
+        && normalizeToolRole(trace.payload?.role) === 'primary',
+      )
+    if (unresolvedPrimaryPlaceAnchor) {
+      const clarificationIntent: DeterministicIntent = {
+        ...intent,
+        needsClarification: true,
+        clarificationHint: `我这轮没有定位到「${intent.placeName || '目标地点'}」。请告诉我更完整的地名，或者把地图移动到目标区域后再问我。`,
+      }
+      this.noteExecutionStep({
+        state,
+        stepId: 'resolve_scope',
+        status: 'failed',
+        detail: clarificationIntent.clarificationHint || '当前主锚点未能稳定解析。',
+        logger,
+      })
+      await this.finishWithoutEvidence({
+        writer,
+        answer: clarificationIntent.clarificationHint || `我这轮没有定位到「${intent.placeName || '目标地点'}」。请告诉我更完整的地名，或者把地图移动到目标区域后再问我。`,
+        intent: clarificationIntent,
+        parserModel,
+        parserProvider,
+        state,
+        startedAt,
+        providerReady: this.provider.isReady(),
+        logger,
+      })
+      return
+    }
     const evidenceView = await this.buildEvidenceView(intent, state, primaryAnchor, secondaryAnchor)
     await this.enrichAreaViewWithRegionEncodingIfNeeded({
       intent,
@@ -2191,9 +3016,40 @@ export class GeoLoomAgent {
       writer,
       view: evidenceView,
     })
+    await this.enrichSimilarRegionViewIfNeeded({
+      intent,
+      state,
+      context: skillContext,
+      writer,
+      view: evidenceView,
+    })
     state.evidenceView = evidenceView
 
     const evidenceCount = this.resolveEvidenceCount(evidenceView)
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_evidence',
+      status: 'completed',
+      detail: `已整理 ${evidenceCount} 条核心证据，累计工具调用 ${state.toolCalls.length} 次。`,
+      logger,
+      eventMessage: 'evidence_collected',
+      eventMeta: {
+        evidenceCount,
+        toolCallCount: state.toolCalls.length,
+        viewType: evidenceView.type,
+      },
+    })
+    if (intent.queryType === 'area_overview' || webEvidencePlanned) {
+      this.noteExecutionStep({
+        state,
+        stepId: 'enrich_evidence',
+        status: 'completed',
+        detail: intent.queryType === 'area_overview'
+          ? '已补充区域分析所需的结构化证据。'
+          : '已完成本轮外部证据补充与对齐。',
+        logger,
+      })
+    }
     console.log(`[诊断] evidenceCount=${evidenceCount}, items=${evidenceView.items.length}, type=${evidenceView.type}, anchor=${!!primaryAnchor}, hasCoord=${hasCoordinates(primaryAnchor)}`)
     const decision = this.confidenceGate.evaluate({
       anchorResolved: intent.queryType === 'similar_regions' || hasCoordinates(primaryAnchor),
@@ -2226,12 +3082,19 @@ export class GeoLoomAgent {
       rendered.pois.length || 0,
       this.resolveEvidenceCount(evidenceView),
     )
-    const llmAnswer = String(execution.assistantMessage?.content || '').trim()
+    const llmAnswer = extractAssistantTextContent(execution.assistantMessage)
     const shouldSkipFinalSynthesis = requirements.recommendedTrack === 'fast'
       && ['nearby_poi', 'nearest_station'].includes(intent.queryType)
       && renderedEvidenceCount > 0
     // 阶段 0：合成回答计时开始
     const synthesisStartedAt = Date.now()
+    this.noteExecutionStep({
+      state,
+      stepId: 'synthesize_answer',
+      status: 'running',
+      detail: '正在整合证据并选择最终回答来源。',
+      logger,
+    })
     const synthesizedAnswer = decision.status === 'allow' && !shouldSkipFinalSynthesis
       ? await this.synthesizeGroundedAnswer({
         provider: this.provider,
@@ -2248,8 +3111,16 @@ export class GeoLoomAgent {
     const groundedSynthesizedAnswer = synthesizedAnswer && this.isAnswerGrounded(synthesizedAnswer, evidenceView)
       ? synthesizedAnswer
       : null
+    const providerMentionsEvidence = llmAnswer
+      && (
+        rendered.pois.some((item) => llmAnswer.toLowerCase().includes(String(item.name || '').trim().toLowerCase()))
+        || [evidenceView.anchor.placeName, evidenceView.anchor.displayName, evidenceView.anchor.resolvedPlaceName]
+          .some((name) => llmAnswer.toLowerCase().includes(String(name || '').trim().toLowerCase()))
+      )
     const groundedLlmAnswer = intent.queryType !== 'area_overview' && this.isAnswerGrounded(llmAnswer, evidenceView)
       ? llmAnswer
+      : intent.queryType !== 'area_overview' && providerMentionsEvidence
+        ? llmAnswer
       : ''
     const providerReady = this.provider.isReady()
     // 阶段 8：Fast Track 的确定性 trace 也算有效证据，不再仅依赖 agent-led 判断
@@ -2264,12 +3135,12 @@ export class GeoLoomAgent {
     let answer = ''
 
     if (decision.status === 'allow') {
-      if (groundedSynthesizedAnswer) {
-        answer = groundedSynthesizedAnswer
-        answerSource = 'llm_synthesized'
-      } else if (groundedLlmAnswer) {
+      if (groundedLlmAnswer) {
         answer = groundedLlmAnswer
         answerSource = 'llm_direct'
+      } else if (groundedSynthesizedAnswer) {
+        answer = groundedSynthesizedAnswer
+        answerSource = 'llm_synthesized'
       } else if (prefersTransparentAnalysisFailure) {
         answer = '当前还没有拿到足够的分析级证据，这一轮我先不把固定草稿冒充成结论。你可以继续追问更具体的方向，或者让我重新分析当前区域。'
         answerSource = 'insufficient_evidence'
@@ -2285,6 +3156,13 @@ export class GeoLoomAgent {
       answerSource = decision.status === 'clarify' ? 'clarification' : 'deterministic_renderer'
     }
 
+    if (
+      evidenceView.type === 'area_overview'
+      && (answerSource.includes('insufficient_evidence') || !areaInsightAgentLedEvidence)
+    ) {
+      evidenceView.areaSubject = undefined
+    }
+
     if (toolLoopUsedFallbackProvider && answerSource === 'deterministic_renderer') {
       answerSource = 'fallback_deterministic_renderer'
     } else if (toolLoopUsedFallbackProvider && answerSource === 'insufficient_evidence') {
@@ -2295,19 +3173,20 @@ export class GeoLoomAgent {
       answer,
       renderedAnswer: rendered.answer,
       queryType: intent.queryType,
+      answerSource,
     })
     answer = markdownAnswer.answer
     if (markdownAnswer.usedRenderedAnswer && answerSource === 'llm_synthesized') {
       answerSource = 'deterministic_renderer'
     }
 
-    if (decision.status === 'allow' && groundedSynthesizedAnswer) {
-      await writer.reasoning({
-        content: '已根据结构证据、热点、异常与机会信号重新组织最终回答，避免直接复读兜底模板。',
-      })
-    } else if (decision.status === 'allow' && groundedLlmAnswer) {
+    if (decision.status === 'allow' && groundedLlmAnswer) {
       await writer.reasoning({
         content: '这一轮最终回答直接沿用了模型基于已验证证据给出的结论，没有再退回确定性模板。',
+      })
+    } else if (decision.status === 'allow' && groundedSynthesizedAnswer) {
+      await writer.reasoning({
+        content: '已根据已验证的结构证据、区域主语和热点分布重新组织最终回答，避免直接复读兜底模板。',
       })
     } else if (decision.status === 'allow' && synthesizedAnswer && !groundedSynthesizedAnswer && !prefersTransparentAnalysisFailure) {
       await writer.reasoning({
@@ -2318,6 +3197,19 @@ export class GeoLoomAgent {
         content: 'provider 虽然可用，但这一轮没有真正形成分析级证据链，所以我没有再把 deterministic area template 当成最终回答。',
       })
     }
+    this.noteExecutionStep({
+      state,
+      stepId: 'synthesize_answer',
+      status: 'completed',
+      detail: `最终采用 ${answerSource} 输出结果。`,
+      logger,
+      eventMessage: 'answer_synthesized',
+      eventMeta: {
+        answerSource,
+        decision: decision.status,
+        reason: decision.reason,
+      },
+    })
 
     await writer.stage('answer')
     await writer.thinking({
@@ -2339,6 +3231,22 @@ export class GeoLoomAgent {
       taskMode,
       answerSource,
       recommendedTrack: requirements.recommendedTrack,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'verify_answer',
+      status: 'running',
+      detail: '正在核对最终回答与证据是否一致。',
+      logger,
+    })
+    this.finalizeExecutionJournal({
+      state,
+      logger,
+      verificationStatus: decision.status,
+      verificationReason: decision.reason,
+      answerGrounded: this.isAnswerGrounded(answer, evidenceView),
+      evidenceCount: renderedEvidenceCount,
+      answerSource,
     })
 
     await writer.stats(stats)
@@ -2427,7 +3335,50 @@ export class GeoLoomAgent {
     state: AgentTurnState
     startedAt: number
     providerReady: boolean
+    logger?: ReturnType<typeof createLogger>
   }) {
+    const answerSource = input.intent.needsClarification ? 'clarification' : 'insufficient_evidence'
+    const verificationStatus = input.intent.needsClarification ? 'clarify' : 'degraded'
+    const verificationReason = input.intent.needsClarification ? 'unresolved_anchor' : 'insufficient_evidence'
+    if (input.intent.queryType !== 'composite_recommendation') {
+      this.noteExecutionStep({
+        state: input.state,
+        stepId: input.intent.needsClarification ? 'resolve_scope' : 'collect_evidence',
+        status: 'failed',
+        detail: input.answer,
+        logger: input.logger,
+      })
+      this.noteExecutionStep({
+        state: input.state,
+        stepId: 'enrich_evidence',
+        status: 'skipped',
+        detail: '主流程已提前结束，本轮不再继续补充证据。',
+        logger: input.logger,
+      })
+    }
+    this.noteExecutionStep({
+      state: input.state,
+      stepId: 'synthesize_answer',
+      status: 'completed',
+      detail: '根据当前不足的输入或证据，返回澄清/降级回答。',
+      logger: input.logger,
+    })
+    this.noteExecutionStep({
+      state: input.state,
+      stepId: 'verify_answer',
+      status: 'running',
+      detail: '正在核对澄清/降级回答的触发原因。',
+      logger: input.logger,
+    })
+    this.finalizeExecutionJournal({
+      state: input.state,
+      logger: input.logger,
+      verificationStatus,
+      verificationReason,
+      answerGrounded: false,
+      evidenceCount: 0,
+      answerSource,
+    })
     await input.writer.stage('answer')
     await input.writer.thinking({
       status: 'end',
@@ -2442,18 +3393,18 @@ export class GeoLoomAgent {
       evidenceCount: 0,
       anchor: null,
       toolCalls: input.state.toolCalls,
-      decision: input.intent.needsClarification ? 'unresolved_anchor' : 'insufficient_evidence',
+      decision: verificationReason,
       taskMode: classifyTaskMode({
         intent: input.intent,
         rawQuery: input.intent.rawQuery,
       }),
-      answerSource: input.intent.needsClarification ? 'clarification' : 'insufficient_evidence',
+      answerSource,
     })
     await input.writer.stats(stats)
     await this.streamAnswerChunks(input.writer, input.answer)
     await input.writer.refinedResult({
       answer: input.answer,
-      answer_source: input.intent.needsClarification ? 'clarification' : 'insufficient_evidence',
+      answer_source: answerSource,
       results: {
         pois: [],
         stats,
@@ -2497,6 +3448,741 @@ export class GeoLoomAgent {
     })
   }
 
+  private async tryHandleCompositeRecommendation(input: {
+    request: ChatRequestV4
+    writer: SSEWriter
+    startedAt: number
+    requestId: string
+    traceId: string
+    sessionId: string
+    rawQuery: string
+    contextualUserText: string
+    skillContext: ReturnType<typeof createSkillExecutionContext>
+    logger: ReturnType<typeof createLogger>
+  }) {
+    const plan = parseCompositeRecommendationQuery(input.contextualUserText)
+    if (!plan) {
+      return false
+    }
+
+    await this.handleCompositeRecommendation({
+      ...input,
+      plan,
+    })
+    return true
+  }
+
+  private buildCompositeRecommendationIntent(plan: CompositeRecommendationPlan): DeterministicIntent {
+    return {
+      queryType: 'composite_recommendation',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: plan.rawQuery,
+      placeName: `${plan.corridor.startPlaceName} - ${plan.corridor.endPlaceName}`,
+      anchorSource: 'place',
+      secondaryPlaceName: plan.destination.placeName,
+      targetCategory: `${plan.corridor.targetCategory} + ${plan.destination.targetCategory}`,
+      comparisonTarget: null,
+      categoryKey: null,
+      radiusM: defaultRadiusForQueryType('composite_recommendation'),
+      needsClarification: false,
+      clarificationHint: null,
+      needsWebSearch: false,
+      toolIntent: null,
+      searchIntentHint: null,
+    }
+  }
+
+  private buildCompositeStageIntent(input: {
+    rawQuery: string
+    placeName: string
+    targetCategory: string
+    categoryKey: string
+    categoryMain?: string | null
+    categorySub?: string | null
+  }): DeterministicIntent {
+    return {
+      queryType: 'nearby_poi',
+      intentMode: 'deterministic_visible_loop',
+      rawQuery: input.rawQuery,
+      placeName: input.placeName,
+      anchorSource: 'place',
+      secondaryPlaceName: null,
+      targetCategory: input.targetCategory,
+      comparisonTarget: null,
+      categoryKey: input.categoryKey,
+      categoryMain: input.categoryMain || null,
+      categorySub: input.categorySub || null,
+      radiusM: defaultRadiusForQueryType('nearby_poi'),
+      needsClarification: false,
+      clarificationHint: null,
+      needsWebSearch: false,
+      toolIntent: 'candidate_lookup',
+      searchIntentHint: null,
+    }
+  }
+
+  private async resolveCompositeAnchor(input: {
+    intent: DeterministicIntent
+    placeName: string
+    role: string
+    state: AgentTurnState
+    skillContext: ReturnType<typeof createSkillExecutionContext>
+  }) {
+    await this.executeToolCall({
+      id: randomUUID(),
+      name: 'postgis',
+      arguments: {
+        action: 'resolve_anchor',
+        payload: {
+          place_name: input.placeName,
+          role: input.role,
+        },
+      },
+    }, input.intent, input.state, input.skillContext)
+
+    const anchor = input.state.anchors[input.role]
+    return hasCoordinates(anchor) ? anchor : null
+  }
+
+  private buildCompositeCorridorSql(input: {
+    intent: DeterministicIntent
+    startAnchor: ResolvedAnchor
+    endAnchor: ResolvedAnchor
+    destinationAnchor?: ResolvedAnchor | null
+    limit: number
+  }) {
+    const startPointGeography = `ST_SetSRID(ST_MakePoint(${formatNumericLiteral(input.startAnchor.lon)}, ${formatNumericLiteral(input.startAnchor.lat)}), 4326)::geography`
+    const endPointGeography = `ST_SetSRID(ST_MakePoint(${formatNumericLiteral(input.endAnchor.lon)}, ${formatNumericLiteral(input.endAnchor.lat)}), 4326)::geography`
+    const corridorBufferM = Math.min(Math.max(Math.round((input.intent.radiusM || 800) * 0.45), 240), 420)
+    const corridorGeometry = `ST_ConvexHull(ST_Collect(ST_Buffer(${startPointGeography}, ${corridorBufferM})::geometry, ST_Buffer(${endPointGeography}, ${corridorBufferM})::geometry))`
+    const categoryFilters = this.buildCategoryFilters(
+      input.intent.categoryKey || '',
+      [],
+      input.intent.categoryMain,
+      input.intent.categorySub,
+    )
+    const destinationPointGeography = input.destinationAnchor && hasCoordinates(input.destinationAnchor)
+      ? `ST_SetSRID(ST_MakePoint(${formatNumericLiteral(input.destinationAnchor.lon)}, ${formatNumericLiteral(input.destinationAnchor.lat)}), 4326)::geography`
+      : null
+
+    const selectLines = [
+      'SELECT id, name, category_main, category_sub, longitude, latitude,',
+      `  LEAST(ST_Distance(geom::geography, ${startPointGeography}), ST_Distance(geom::geography, ${endPointGeography})) AS distance_m,`,
+      `  ST_Distance(geom::geography, ${startPointGeography}) AS distance_to_start_m,`,
+      `  ST_Distance(geom::geography, ${endPointGeography}) AS distance_to_end_m,`,
+      `  (ST_Distance(geom::geography, ${startPointGeography}) + ST_Distance(geom::geography, ${endPointGeography})) AS corridor_score_m${destinationPointGeography ? ',' : ''}`,
+    ]
+
+    if (destinationPointGeography) {
+      selectLines.push(`  ST_Distance(geom::geography, ${destinationPointGeography}) AS destination_distance_m`)
+    }
+
+    return [
+      ...selectLines,
+      'FROM pois',
+      `WHERE ST_Intersects(geom, ${corridorGeometry})`,
+      ...categoryFilters.where,
+      `ORDER BY corridor_score_m ASC${destinationPointGeography ? ', destination_distance_m ASC' : ''}`,
+      `LIMIT ${Math.max(input.limit, 1)}`,
+    ].join('\n')
+  }
+
+  private async executeCompositeSql(input: {
+    intent: DeterministicIntent
+    sql: string
+    stage: string
+    state: AgentTurnState
+    skillContext: ReturnType<typeof createSkillExecutionContext>
+  }) {
+    const validation = await this.executeToolCall({
+      id: randomUUID(),
+      name: 'postgis',
+      arguments: {
+        action: 'validate_spatial_sql',
+        payload: {
+          sql: input.sql,
+          stage: input.stage,
+        },
+      },
+    }, input.intent, input.state, input.skillContext)
+    input.state.sqlValidationAttempts += 1
+    if (validation.trace.status !== 'done') {
+      return []
+    }
+    input.state.sqlValidationPassed += 1
+
+    const execution = await this.executeToolCall({
+      id: randomUUID(),
+      name: 'postgis',
+      arguments: {
+        action: 'execute_spatial_sql',
+        payload: {
+          sql: input.sql,
+          stage: input.stage,
+        },
+      },
+    }, input.intent, input.state, input.skillContext)
+
+    const result = execution.trace.result as { rows?: Record<string, unknown>[] } | undefined
+    return Array.isArray(result?.rows) ? result.rows : []
+  }
+
+  private enrichCompositeStageItems(input: {
+    items: EvidenceItem[]
+    stage: 'corridor' | 'destination'
+    anchorName: string
+  }) {
+    return input.items.map((item, index) => ({
+      ...item,
+      rank: index + 1,
+      meta: {
+        ...(item.meta || {}),
+        compositeStage: input.stage,
+        compositeAnchorName: input.anchorName,
+      },
+    }))
+  }
+
+  private formatCompositeDistance(value: unknown) {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      return ''
+    }
+
+    if (numeric >= 1000) {
+      return `${(numeric / 1000).toFixed(numeric >= 3000 ? 0 : 1)}km`
+    }
+
+    return `${Math.round(numeric)}m`
+  }
+
+  private buildCompositeRecommendationAnswer(input: {
+    plan: CompositeRecommendationPlan
+    corridorItems: EvidenceItem[]
+    destinationItems: EvidenceItem[]
+    destinationAnchor: ResolvedAnchor
+  }) {
+    const corridorLines = input.corridorItems.slice(0, 3).map((item, index) => {
+      const rawMeta = item.meta && typeof item.meta === 'object'
+        ? item.meta as Record<string, unknown>
+        : {}
+      const toDestination = this.formatCompositeDistance(rawMeta.destination_distance_m)
+      const stageHint = toDestination ? `，去${input.destinationAnchor.resolved_place_name}大约 ${toDestination}` : ''
+      return `${index + 1}. ${item.name}（${item.category || '候选点'}${stageHint}）`
+    })
+
+    const destinationLines = input.destinationItems.slice(0, 4).map((item, index) => {
+      const distanceLabel = this.formatCompositeDistance(item.distance_m)
+      const distanceTail = distanceLabel ? `，距${input.destinationAnchor.resolved_place_name}约 ${distanceLabel}` : ''
+      return `${index + 1}. ${item.name}（${item.category || '候选点'}${distanceTail}）`
+    })
+
+    const routeSummary = input.corridorItems[0]
+      ? `建议先在 ${input.plan.corridor.startPlaceName} 和 ${input.plan.corridor.endPlaceName} 之间选一家顺路餐饮，吃完再去 ${input.destinationAnchor.resolved_place_name} 继续逛 ${input.plan.destination.targetCategory}。`
+      : `我先帮你锁定了 ${input.destinationAnchor.resolved_place_name} 一带的 ${input.plan.destination.targetCategory}，如果你还想补“中途先吃哪家”我可以继续放宽走廊范围再筛一轮。`
+
+    return [
+      `## 中途${input.plan.corridor.targetCategory}`,
+      corridorLines.length > 0
+        ? corridorLines.join('\n')
+        : `在 ${input.plan.corridor.startPlaceName} 和 ${input.plan.corridor.endPlaceName} 之间，这一轮还没筛到稳定的 ${input.plan.corridor.targetCategory} 候选。`,
+      '',
+      `## 到${input.destinationAnchor.resolved_place_name}后逛什么`,
+      destinationLines.length > 0
+        ? destinationLines.join('\n')
+        : `目前在 ${input.destinationAnchor.resolved_place_name} 周边还没筛到稳定的 ${input.plan.destination.targetCategory} 候选。`,
+      '',
+      '## 推荐走法',
+      routeSummary,
+      '如果你还想把“值得逛”进一步细化成品牌偏好、价格带或口碑排序，我可以继续补一轮联网筛选。',
+    ].join('\n')
+  }
+
+  private async handleCompositeRecommendation(input: {
+    request: ChatRequestV4
+    writer: SSEWriter
+    startedAt: number
+    requestId: string
+    traceId: string
+    sessionId: string
+    rawQuery: string
+    contextualUserText: string
+    plan: CompositeRecommendationPlan
+    skillContext: ReturnType<typeof createSkillExecutionContext>
+    logger: ReturnType<typeof createLogger>
+  }) {
+    const intent = this.buildCompositeRecommendationIntent(input.plan)
+    const state: AgentTurnState = {
+      requestId: input.requestId,
+      traceId: input.traceId,
+      sessionId: input.sessionId,
+      toolCalls: [],
+      anchors: {},
+      spatialConstraint: this.buildSpatialConstraint(input.request),
+      sqlValidationAttempts: 0,
+      sqlValidationPassed: 0,
+    }
+    this.initializeExecutionJournal({
+      state,
+      rawQuery: input.rawQuery,
+      intent,
+      taskMode: 'analysis',
+      plannerSource: 'rule_composite_detector',
+      recommendedTrack: 'composite',
+      needsWebSearch: false,
+      logger: input.logger,
+    })
+
+    await input.writer.trace({
+      request_id: input.requestId,
+      session_id: input.sessionId,
+      provider_ready: this.provider.isReady(),
+      version: this.options.version,
+    })
+    await input.writer.job({
+      mode: 'deterministic_visible_loop',
+      provider_ready: this.provider.isReady(),
+      version: this.options.version,
+      session_id: input.sessionId,
+    })
+    await input.writer.stage('intent')
+    await input.writer.thinking({
+      status: 'start',
+      message: '正在拆解复合行程问题...',
+    })
+    await input.writer.intentPreview({
+      queryType: intent.queryType,
+      anchorSource: intent.anchorSource,
+      placeName: intent.placeName,
+      secondaryPlaceName: input.plan.destination.placeName,
+      rawAnchor: intent.placeName,
+      normalizedAnchor: intent.placeName,
+      displayAnchor: intent.placeName,
+      targetCategory: intent.targetCategory,
+      needsClarification: false,
+      clarificationHint: null,
+      needsWebSearch: false,
+      webEvidencePlanned: false,
+      webSearchStrategy: 'local_first',
+      webRequirementMode: 'local_first',
+      intentSource: 'rule',
+      parserModel: 'composite-intent-detector',
+      parserProvider: 'rule',
+      categoryMain: null,
+      categorySub: null,
+      categoryResolved: false,
+    })
+    await input.writer.reasoning({
+      content: `识别到这是“先在 ${input.plan.corridor.startPlaceName} 和 ${input.plan.corridor.endPlaceName} 之间找 ${input.plan.corridor.targetCategory}，再去 ${input.plan.destination.placeName} 继续逛 ${input.plan.destination.targetCategory}”的复合问题，我会分两段取证后再合并回答。`,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'decompose_request',
+      status: 'completed',
+      detail: `已拆成“走廊 ${input.plan.corridor.targetCategory}”和“${input.plan.destination.placeName} ${input.plan.destination.targetCategory}”两段任务。`,
+      logger: input.logger,
+      eventMessage: 'composite_plan_ready',
+      eventMeta: {
+        corridorTarget: input.plan.corridor.targetCategory,
+        destinationTarget: input.plan.destination.targetCategory,
+      },
+    })
+
+    const corridorIntent = this.buildCompositeStageIntent({
+      rawQuery: input.plan.corridor.stageText,
+      placeName: `${input.plan.corridor.startPlaceName} - ${input.plan.corridor.endPlaceName}`,
+      targetCategory: input.plan.corridor.targetCategory,
+      categoryKey: input.plan.corridor.categoryKey,
+    })
+    const destinationIntent = this.buildCompositeStageIntent({
+      rawQuery: input.plan.destination.stageText,
+      placeName: input.plan.destination.placeName,
+      targetCategory: input.plan.destination.targetCategory,
+      categoryKey: input.plan.destination.categoryKey,
+    })
+
+    await input.writer.stage('tool_run')
+    await input.writer.reasoning({
+      content: '先锁定走廊两端和后续商场锚点。',
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'resolve_stage_anchors',
+      status: 'running',
+      detail: '正在定位走廊起点、终点和后续目的地。',
+      logger: input.logger,
+    })
+
+    const startAnchor = await this.resolveCompositeAnchor({
+      intent: corridorIntent,
+      placeName: input.plan.corridor.startPlaceName,
+      role: 'primary',
+      state,
+      skillContext: input.skillContext,
+    })
+    const endAnchor = await this.resolveCompositeAnchor({
+      intent: corridorIntent,
+      placeName: input.plan.corridor.endPlaceName,
+      role: 'secondary',
+      state,
+      skillContext: input.skillContext,
+    })
+    const destinationAnchor = await this.resolveCompositeAnchor({
+      intent: destinationIntent,
+      placeName: input.plan.destination.placeName,
+      role: 'destination',
+      state,
+      skillContext: input.skillContext,
+    })
+
+    const unresolvedAnchors = [
+      !startAnchor ? input.plan.corridor.startPlaceName : null,
+      !endAnchor ? input.plan.corridor.endPlaceName : null,
+      !destinationAnchor ? input.plan.destination.placeName : null,
+    ].filter((value): value is string => Boolean(value))
+
+    if (unresolvedAnchors.length > 0) {
+      this.noteExecutionStep({
+        state,
+        stepId: 'resolve_stage_anchors',
+        status: 'failed',
+        detail: `未能稳定定位：${unresolvedAnchors.join('、')}。`,
+        logger: input.logger,
+      })
+      this.noteExecutionStep({
+        state,
+        stepId: 'collect_corridor_evidence',
+        status: 'skipped',
+        detail: '锚点未完整定位，走廊证据采集跳过。',
+        logger: input.logger,
+      })
+      this.noteExecutionStep({
+        state,
+        stepId: 'collect_destination_evidence',
+        status: 'skipped',
+        detail: '锚点未完整定位，目的地证据采集跳过。',
+        logger: input.logger,
+      })
+      await this.finishWithoutEvidence({
+        writer: input.writer,
+        answer: `我还没稳定定位到 ${unresolvedAnchors.join('、')}，你可以换一个更明确的名称再试一次。`,
+        intent: {
+          ...intent,
+          needsClarification: true,
+          clarificationHint: `我还没稳定定位到 ${unresolvedAnchors.join('、')}，你可以换一个更明确的名称再试一次。`,
+        },
+        parserModel: 'composite-intent-detector',
+        parserProvider: 'rule',
+        state,
+        startedAt: input.startedAt,
+        providerReady: this.provider.isReady(),
+        logger: input.logger,
+      })
+      return
+    }
+
+    if (!startAnchor || !endAnchor || !destinationAnchor) {
+      return
+    }
+
+    const resolvedStartAnchor = startAnchor
+    const resolvedEndAnchor = endAnchor
+    const resolvedDestinationAnchor = destinationAnchor
+    this.noteExecutionStep({
+      state,
+      stepId: 'resolve_stage_anchors',
+      status: 'completed',
+      detail: `已锁定 ${resolvedStartAnchor.resolved_place_name}、${resolvedEndAnchor.resolved_place_name} 和 ${resolvedDestinationAnchor.resolved_place_name}。`,
+      logger: input.logger,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_corridor_evidence',
+      status: 'running',
+      detail: `正在收集 ${input.plan.corridor.startPlaceName} - ${input.plan.corridor.endPlaceName} 之间的 ${input.plan.corridor.targetCategory}。`,
+      logger: input.logger,
+    })
+
+    const corridorSql = this.buildCompositeCorridorSql({
+      intent: corridorIntent,
+      startAnchor: resolvedStartAnchor,
+      endAnchor: resolvedEndAnchor,
+      destinationAnchor: resolvedDestinationAnchor,
+      limit: 8,
+    })
+    const corridorRows = await this.executeCompositeSql({
+      intent: corridorIntent,
+      sql: corridorSql,
+      stage: 'composite_corridor_search',
+      state,
+      skillContext: input.skillContext,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_corridor_evidence',
+      status: 'completed',
+      detail: `已拿到 ${corridorRows.length} 条走廊候选。`,
+      logger: input.logger,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_destination_evidence',
+      status: 'running',
+      detail: `正在收集 ${input.plan.destination.placeName} 周边的 ${input.plan.destination.targetCategory}。`,
+      logger: input.logger,
+    })
+
+    const destinationSql = this.buildTemplateSQL(
+      destinationIntent,
+      resolvedDestinationAnchor,
+      destinationIntent.categoryKey || '',
+      8,
+      'nearby_poi',
+      null,
+    )
+    let destinationRows = await this.executeCompositeSql({
+      intent: destinationIntent,
+      sql: destinationSql,
+      stage: 'composite_destination_search',
+      state,
+      skillContext: input.skillContext,
+    })
+
+    if (destinationRows.length === 0 && destinationIntent.categoryKey === 'fashion') {
+      const destinationFallbackIntent = this.buildCompositeStageIntent({
+        rawQuery: input.plan.destination.stageText,
+        placeName: input.plan.destination.placeName,
+        targetCategory: input.plan.destination.targetCategory,
+        categoryKey: '',
+        categoryMain: '购物服务',
+      })
+      const fallbackSql = this.buildTemplateSQL(
+        destinationFallbackIntent,
+        resolvedDestinationAnchor,
+        '',
+        8,
+        'nearby_poi',
+        null,
+      )
+      destinationRows = await this.executeCompositeSql({
+        intent: destinationFallbackIntent,
+        sql: fallbackSql,
+        stage: 'composite_destination_search_fallback',
+        state,
+        skillContext: input.skillContext,
+      })
+    }
+    this.noteExecutionStep({
+      state,
+      stepId: 'collect_destination_evidence',
+      status: 'completed',
+      detail: `已拿到 ${destinationRows.length} 条目的地候选。`,
+      logger: input.logger,
+    })
+
+    const corridorItems = this.enrichCompositeStageItems({
+      items: normalizePoiRows(corridorRows),
+      stage: 'corridor',
+      anchorName: `${input.plan.corridor.startPlaceName} - ${input.plan.corridor.endPlaceName}`,
+    })
+    const destinationItems = this.enrichCompositeStageItems({
+      items: normalizePoiRows(destinationRows),
+      stage: 'destination',
+      anchorName: resolvedDestinationAnchor.resolved_place_name,
+    })
+    const mergedItems = this.mergeEvidenceItems(corridorItems, destinationItems, 12)
+
+    if (mergedItems.length === 0) {
+      this.noteExecutionStep({
+        state,
+        stepId: 'synthesize_answer',
+        status: 'completed',
+        detail: '两段候选均不稳定，本轮返回降级说明。',
+        logger: input.logger,
+      })
+      await this.finishWithoutEvidence({
+        writer: input.writer,
+        answer: `我已经拆成“走廊 ${input.plan.corridor.targetCategory} + ${input.plan.destination.placeName} ${input.plan.destination.targetCategory}”两段检索了，但这轮还没拿到稳定候选。你可以换一个更具体的商场或放宽一下范围再试。`,
+        intent,
+        parserModel: 'composite-intent-detector',
+        parserProvider: 'rule',
+        state,
+        startedAt: input.startedAt,
+        providerReady: this.provider.isReady(),
+        logger: input.logger,
+      })
+      return
+    }
+
+    await input.writer.stage('evidence')
+    await input.writer.reasoning({
+      content: `已拿到 ${corridorItems.length} 个走廊 ${input.plan.corridor.targetCategory} 候选，以及 ${destinationItems.length} 个 ${input.plan.destination.placeName} 周边 ${input.plan.destination.targetCategory} 候选，正在合并成一条行程建议。`,
+    })
+
+    const evidenceView: EvidenceView = {
+      type: 'poi_list',
+      anchor: {
+        placeName: intent.placeName || '',
+        displayName: intent.placeName || '',
+        resolvedPlaceName: intent.placeName || '',
+      },
+      secondaryAnchor: {
+        placeName: resolvedDestinationAnchor.place_name,
+        displayName: resolvedDestinationAnchor.display_name,
+        resolvedPlaceName: resolvedDestinationAnchor.resolved_place_name,
+        lon: resolvedDestinationAnchor.lon,
+        lat: resolvedDestinationAnchor.lat,
+        source: resolvedDestinationAnchor.source,
+        coordSys: resolvedDestinationAnchor.coord_sys || null,
+      },
+      items: mergedItems,
+      meta: {
+        queryType: 'composite_recommendation',
+        composite_plan: {
+          corridor: {
+            startPlaceName: input.plan.corridor.startPlaceName,
+            endPlaceName: input.plan.corridor.endPlaceName,
+            targetCategory: input.plan.corridor.targetCategory,
+            itemCount: corridorItems.length,
+          },
+          destination: {
+            placeName: resolvedDestinationAnchor.resolved_place_name,
+            targetCategory: input.plan.destination.targetCategory,
+            itemCount: destinationItems.length,
+          },
+        },
+      },
+    }
+
+    const answer = this.buildCompositeRecommendationAnswer({
+      plan: input.plan,
+      corridorItems,
+      destinationItems,
+      destinationAnchor: resolvedDestinationAnchor,
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'synthesize_answer',
+      status: 'completed',
+      detail: `已把 ${corridorItems.length} 个中途候选和 ${destinationItems.length} 个目的地候选合并成顺路建议。`,
+      logger: input.logger,
+      eventMessage: 'composite_answer_synthesized',
+      eventMeta: {
+        corridorCount: corridorItems.length,
+        destinationCount: destinationItems.length,
+      },
+    })
+
+    await input.writer.stage('answer')
+    await input.writer.thinking({
+      status: 'end',
+      message: '两段证据已经合并完成，正在输出结果...',
+    })
+    await input.writer.pois(mergedItems)
+
+    const stats = this.buildStats({
+      intent,
+      startedAt: input.startedAt,
+      traceId: input.traceId,
+      sessionId: input.sessionId,
+      providerReady: this.provider.isReady(),
+      evidenceCount: mergedItems.length,
+      anchor: null,
+      toolCalls: state.toolCalls,
+      decision: 'composite_recommendation',
+      taskMode: 'analysis',
+      answerSource: 'deterministic_renderer',
+    })
+    this.noteExecutionStep({
+      state,
+      stepId: 'verify_answer',
+      status: 'running',
+      detail: '正在核对复合推荐答案是否与两段证据一致。',
+      logger: input.logger,
+    })
+    this.finalizeExecutionJournal({
+      state,
+      logger: input.logger,
+      verificationStatus: 'allow',
+      verificationReason: 'ok',
+      answerGrounded: this.isAnswerGrounded(answer, evidenceView),
+      evidenceCount: mergedItems.length,
+      answerSource: 'deterministic_renderer',
+    })
+
+    await input.writer.stats(stats)
+    await this.streamAnswerChunks(input.writer, answer)
+    await input.writer.refinedResult({
+      answer,
+      answer_source: 'deterministic_renderer',
+      results: {
+        pois: mergedItems,
+        stats,
+        evidence_view: evidenceView,
+      },
+      intent: {
+        queryType: intent.queryType,
+        intentMode: intent.intentMode,
+        placeName: intent.placeName,
+        secondaryPlaceName: intent.secondaryPlaceName,
+        targetCategory: intent.targetCategory,
+        categoryMain: null,
+        categorySub: null,
+        needsWebSearch: false,
+        webEvidencePlanned: false,
+        webSearchStrategy: 'local_first',
+        webRequirementMode: 'local_first',
+        toolIntent: null,
+        searchIntentHint: null,
+        intentSource: 'rule',
+        sourceConfidence: 1,
+        sourceLatencyMs: null,
+        categoryScore: null,
+        parserModel: 'composite-intent-detector',
+        parserProvider: 'rule',
+      },
+      tool_calls: state.toolCalls,
+      trace_id: input.traceId,
+    })
+    this.recordRequestMetrics({
+      startedAt: input.startedAt,
+      state,
+      answer,
+      evidenceView,
+      rawQuery: input.rawQuery,
+      queryType: intent.queryType,
+      llmRoundCount: 0,
+    })
+    await input.writer.done({
+      duration_ms: Date.now() - input.startedAt,
+      session_id: input.sessionId,
+    })
+
+    try {
+      await this.memory.recordTurn(input.sessionId, {
+        traceId: input.traceId,
+        userQuery: input.rawQuery,
+        answer,
+        intent: {
+          queryType: intent.queryType,
+          placeName: intent.placeName,
+          targetCategory: intent.targetCategory,
+          categoryKey: null,
+          categoryMain: null,
+          categorySub: null,
+          needsWebSearch: false,
+          toolIntent: null,
+          searchIntentHint: null,
+        },
+        createdAt: new Date().toISOString(),
+      })
+    } catch (error) {
+      input.logger.warn('Failed to persist composite chat turn after SSE response finished', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   private async resolveIntent(input: {
     request: ChatRequestV4
     rawQuery: string
@@ -2508,6 +4194,8 @@ export class GeoLoomAgent {
     source: 'llm' | 'fallback' | 'embedding'
     confidence?: number | null
     latencyMs?: number | null
+    fallbackReason?: string | null
+    usedFallbackProvider?: boolean
   }> {
     const attemptLlmResolution = async () => {
       if (!input.providerReady) {
@@ -2532,6 +4220,8 @@ export class GeoLoomAgent {
           intent: input.fallbackIntent,
           source: 'fallback' as const,
           latencyMs: llmLatencyMs,
+          fallbackReason: hint?.providerErrorMessage || null,
+          usedFallbackProvider: Boolean(hint?.providerErrorMessage),
         }
       }
 
@@ -2539,6 +4229,8 @@ export class GeoLoomAgent {
         intent,
         source: 'llm' as const,
         latencyMs: llmLatencyMs,
+        fallbackReason: null,
+        usedFallbackProvider: false,
       }
     }
 
@@ -2550,6 +4242,7 @@ export class GeoLoomAgent {
       if (embResult.usedEmbedding) {
         const preferLlmPlanner = shouldPreferLlmIntentPlanner({
           request: input.request,
+          rawQuery: input.rawQuery,
           followUpHint: input.followUpHint,
           embeddingResult: embResult,
         })
@@ -2601,6 +4294,8 @@ export class GeoLoomAgent {
             source: 'embedding',
             confidence: embResult.confidence,
             latencyMs: embResult.latencyMs,
+            fallbackReason: null,
+            usedFallbackProvider: false,
           }
         }
         console.log(`[EmbeddingIntent] ✗ confidence=${embResult.confidence} unsupported=${embResult.queryType === 'unsupported'} preferLlm=${preferLlmPlanner}, fallback to LLM`)
@@ -2612,6 +4307,8 @@ export class GeoLoomAgent {
         intent: input.fallbackIntent,
         source: 'fallback',
         latencyMs: null,
+        fallbackReason: null,
+        usedFallbackProvider: false,
       }
     }
 
@@ -2626,6 +4323,8 @@ export class GeoLoomAgent {
       intent: input.fallbackIntent,
       source: 'fallback',
       latencyMs: null,
+      fallbackReason: null,
+      usedFallbackProvider: false,
     }
   }
 
@@ -2658,8 +4357,21 @@ export class GeoLoomAgent {
     const { categoryKey: structuredCategoryKey, targetCategory: structuredTargetCategory } = inferCategoryFromSelections(
       normalizeSelectedCategories(input.request.options?.selectedCategories || []),
     )
-    const explicitPlaceName = readOptionalText(hint.placeName)
+    const rawQueryCategoryHint = inferStructuredCategoryFromRawQuery(input.fallbackIntent.rawQuery)
+    const explicitPlaceName = readOptionalText(hint.placeName) || extractExplicitPlaceName(input.fallbackIntent.rawQuery)
     const explicitSecondaryPlaceName = readOptionalText(hint.secondaryPlaceName)
+    const shouldNormalizeSimilarRegionToAreaOverview = hint.queryType === 'similar_regions'
+      && isAreaStructureClassificationQuery(input.fallbackIntent.rawQuery)
+      && (hasMapView || Boolean(explicitPlaceName) || selectedRegionNames.length > 0)
+    const shouldNormalizeAreaHintToNearbyPoi = hint.queryType === 'area_overview'
+      && /附近|周边|旁边|有哪些|有什么|美食|咖啡|酒店|景点/u.test(input.fallbackIntent.rawQuery)
+      && Boolean(structuredCategoryKey || rawQueryCategoryHint.categoryKey)
+      && !/解读|读懂|总结|业态结构|供给|需求|竞争|开店|片区|区域/u.test(input.fallbackIntent.rawQuery)
+    const normalizedQueryType = shouldNormalizeSimilarRegionToAreaOverview
+      ? 'area_overview'
+      : shouldNormalizeAreaHintToNearbyPoi
+        ? 'nearby_poi'
+        : hint.queryType
     const lacksStructuredCompareTargets = hint.queryType === 'compare_places'
       && !explicitSecondaryPlaceName
       && selectedRegions.length < 2
@@ -2680,73 +4392,83 @@ export class GeoLoomAgent {
       } satisfies DeterministicIntent
     }
 
-    const fallbackAnchorSource: NonNullable<DeterministicIntent['anchorSource']> = hint.queryType === 'compare_places' && selectedRegionNames.length >= 2
+    const fallbackAnchorSource: NonNullable<DeterministicIntent['anchorSource']> = normalizedQueryType === 'compare_places' && selectedRegionNames.length >= 2
       ? 'map_view'
       : explicitPlaceName
         ? 'place'
-        : hasMapView && hint.queryType === 'area_overview'
+        : hasMapView && normalizedQueryType === 'area_overview'
         ? 'map_view'
         : hasUserLocation
           ? 'user_location'
           : (input.fallbackIntent.anchorSource || 'place')
-    const anchorSource: NonNullable<DeterministicIntent['anchorSource']> = hint.anchorSource === 'map_view' && hasMapView
-      ? 'map_view'
-      : hint.anchorSource === 'user_location' && hasUserLocation
+    const anchorSource: NonNullable<DeterministicIntent['anchorSource']> = explicitPlaceName && normalizedQueryType !== 'area_overview'
+      ? 'place'
+      : hint.anchorSource === 'map_view' && hasMapView
+        ? 'map_view'
+        : hint.anchorSource === 'user_location' && hasUserLocation
         ? 'user_location'
-        : hint.anchorSource === 'place' && explicitPlaceName
-          ? 'place'
-          : fallbackAnchorSource
+          : hint.anchorSource === 'place' && explicitPlaceName
+            ? 'place'
+            : fallbackAnchorSource
 
     const placeName = anchorSource === 'map_view'
-      ? (hint.queryType === 'compare_places'
+      ? (normalizedQueryType === 'compare_places'
           ? (explicitPlaceName || selectedRegionNames[0] || null)
           : (selectedRegionNames[0] || '当前区域'))
       : anchorSource === 'user_location'
         ? null
         : explicitPlaceName
-    const secondaryPlaceName = hint.queryType === 'compare_places'
+    const secondaryPlaceName = normalizedQueryType === 'compare_places'
       ? (anchorSource === 'map_view'
           ? (explicitSecondaryPlaceName || selectedRegionNames[1] || null)
           : explicitSecondaryPlaceName)
       : null
     const needsClarification = anchorSource === 'map_view'
-      ? ((hint.queryType === 'compare_places' && (!placeName || !secondaryPlaceName)) || !hasMapView)
+      ? (normalizedQueryType === 'compare_places'
+          ? (!placeName || !secondaryPlaceName)
+          : !hasMapView)
       : anchorSource === 'user_location'
         ? !hasUserLocation
-        : hint.queryType === 'compare_places'
+        : normalizedQueryType === 'compare_places'
           ? (!placeName || !secondaryPlaceName || Boolean(hint.needsClarification))
           : (!placeName || Boolean(hint.needsClarification))
     const needsWebSearch = Boolean(hint.needsWebSearch)
     const toolIntent = normalizeToolIntentMode(hint.toolIntent)
-      || defaultToolIntentForQueryType(hint.queryType, needsWebSearch, input.fallbackIntent.rawQuery)
+      || defaultToolIntentForQueryType(normalizedQueryType, needsWebSearch, input.fallbackIntent.rawQuery)
     const searchIntentHint = readOptionalText(hint.searchIntentHint)
       || buildDefaultSearchIntentHint({
-        queryType: hint.queryType,
+        queryType: normalizedQueryType,
         toolIntent,
-        targetCategory: readOptionalText(hint.targetCategory) || structuredTargetCategory || input.fallbackIntent.targetCategory,
+        targetCategory: readOptionalText(hint.targetCategory) || structuredTargetCategory || rawQueryCategoryHint.targetCategory || input.fallbackIntent.targetCategory,
         needsWebSearch,
       })
+    const normalizedTargetCategory = shouldNormalizeAreaHintToNearbyPoi
+      ? (input.fallbackIntent.targetCategory || structuredTargetCategory || rawQueryCategoryHint.targetCategory)
+      : normalizedQueryType === 'area_overview'
+        ? '区域洞察'
+        : normalizedQueryType === 'nearest_station'
+          ? '地铁站'
+          : readOptionalText(hint.targetCategory) || structuredTargetCategory || rawQueryCategoryHint.targetCategory || input.fallbackIntent.targetCategory
+    const normalizedCategoryKey = shouldNormalizeAreaHintToNearbyPoi
+      ? (structuredCategoryKey || rawQueryCategoryHint.categoryKey || input.fallbackIntent.categoryKey)
+      : normalizedQueryType === 'nearest_station'
+        ? (readOptionalText(hint.categoryKey) || 'metro_station')
+        : readOptionalText(hint.categoryKey) || structuredCategoryKey || rawQueryCategoryHint.categoryKey || input.fallbackIntent.categoryKey
 
     return {
       ...input.fallbackIntent,
-      queryType: hint.queryType,
-      intentMode: intentModeFromQueryType(hint.queryType),
+      queryType: normalizedQueryType,
+      intentMode: intentModeFromQueryType(normalizedQueryType),
       placeName,
       secondaryPlaceName,
       anchorSource,
-      targetCategory: hint.queryType === 'area_overview'
-        ? '区域洞察'
-        : hint.queryType === 'nearest_station'
-          ? '地铁站'
-          : readOptionalText(hint.targetCategory) || structuredTargetCategory || input.fallbackIntent.targetCategory,
+      targetCategory: normalizedTargetCategory,
       comparisonTarget: readOptionalText(hint.comparisonTarget) || input.fallbackIntent.comparisonTarget,
-      categoryKey: hint.queryType === 'nearest_station'
-        ? (readOptionalText(hint.categoryKey) || 'metro_station')
-        : readOptionalText(hint.categoryKey) || structuredCategoryKey || input.fallbackIntent.categoryKey,
-      radiusM: defaultRadiusForQueryType(hint.queryType),
+      categoryKey: normalizedCategoryKey,
+      radiusM: defaultRadiusForQueryType(normalizedQueryType),
       needsClarification,
       clarificationHint: needsClarification
-        ? (hint.clarificationHint || this.buildClarificationHintForQueryType(hint.queryType))
+        ? (hint.clarificationHint || this.buildClarificationHintForQueryType(normalizedQueryType))
         : null,
       needsWebSearch,
       toolIntent,
@@ -2772,6 +4494,7 @@ export class GeoLoomAgent {
     needsWebSearch?: boolean
     toolIntent?: ToolIntentMode | null
     searchIntentHint?: string | null
+    providerErrorMessage?: string | null
   } | null> {
     try {
       const selectedCategories = normalizeSelectedCategories(input.request.options?.selectedCategories || [])
@@ -2847,13 +4570,21 @@ export class GeoLoomAgent {
         needsWebSearch: parsed.needsWebSearch === true,
         toolIntent: normalizeToolIntentMode(parsed.toolIntent),
         searchIntentHint: readOptionalText(parsed.searchIntentHint),
+        providerErrorMessage: null,
       }
-    } catch {
-      return null
+    } catch (error) {
+      return {
+        queryType: 'unsupported',
+        providerErrorMessage: error instanceof Error ? error.message : String(error),
+      }
     }
   }
 
   private buildClarificationHintForQueryType(queryType: DeterministicIntent['queryType']) {
+    if (queryType === 'composite_recommendation') {
+      return '请把行程拆清楚一点，例如“在 A 和 B 之间先吃饭，之后去 C 逛服装店”。'
+    }
+
     if (queryType === 'area_overview') {
       return '请告诉我一个明确地点，或者把地图移动到你想分析的区域后再问我。'
     }
@@ -2890,10 +4621,12 @@ export class GeoLoomAgent {
       input.intent.categoryKey ? `category_key：${input.intent.categoryKey}` : '',
       input.intent.toolIntent ? `工具意图：${input.intent.toolIntent}` : '',
       input.intent.searchIntentHint ? `联网语义焦点：${input.intent.searchIntentHint}` : '',
+      '如果多个工具彼此没有前后输入依赖，应在同一轮直接给出多个 tool calls 并行执行。',
     ]
 
     if (input.intent.queryType === 'area_overview') {
       lines.push('编排要求：这是区域洞察题，围绕用户原问题按需取证，不要超范围分析。')
+      lines.push('拿到 area insight 后，如果用户问题明显聚焦某一类结构线索，再调用 semantic_selector.select_area_evidence 做聚焦筛选。')
     } else if (input.intent.queryType === 'nearby_poi') {
       lines.push('编排要求：这是附近查询题，先锁定锚点，再抓取附近真实候选，不要把查询题答成片区总结。')
       if (input.intent.toolIntent === 'candidate_reputation') {
@@ -2904,7 +4637,7 @@ export class GeoLoomAgent {
     } else if (input.intent.queryType === 'compare_places') {
       lines.push('编排要求：这是双地点对比题，先确认两个锚点，再围绕同一维度取证并输出可比结论。')
     } else if (input.intent.queryType === 'similar_regions') {
-      lines.push('编排要求：这是相似片区题，先明确参考片区，再补结构和语义证据后做相似性判断。')
+      lines.push('编排要求：这是相似片区题，先明确参考片区，再补结构和语义证据后做相似性判断。优先输出候选片区、整体相似度，以及 2-4 个最有解释力的相似维度。')
     }
 
     return lines.filter(Boolean).join('\n')
@@ -2978,6 +4711,77 @@ export class GeoLoomAgent {
       : DEFAULT_LLM_QUERY_MAX_ROUNDS
   }
 
+  private applyTownPoiCellAnnotationsToView(input: {
+    intent: DeterministicIntent
+    view: EvidenceView
+    result: Record<string, unknown>
+  }) {
+    if (input.intent.queryType !== 'nearby_poi' || input.view.type !== 'poi_list') {
+      return
+    }
+
+    const rawResults = Array.isArray(input.result.results) ? input.result.results as Array<Record<string, unknown>> : []
+    if (rawResults.length === 0 || input.view.items.length === 0) {
+      return
+    }
+
+    const buckets = new Map<string, Array<{ item: EvidenceItem, originalIndex: number }>>()
+    let annotatedCount = 0
+
+    for (const entry of rawResults) {
+      const originalIndex = Number(entry.original_index)
+      const item = input.view.items[originalIndex]
+      if (!Number.isInteger(originalIndex) || !item) {
+        continue
+      }
+
+      const cellContext = (entry.cell_context && typeof entry.cell_context === 'object')
+        ? entry.cell_context as Record<string, unknown>
+        : {}
+      const cellId = String(cellContext.cell_id || `cell_${originalIndex}`).trim() || `cell_${originalIndex}`
+      const townCell = {
+        cellId,
+        dominantCategory: String(cellContext.dominant_category || '').trim() || null,
+        similarity: Number.isFinite(Number(cellContext.similarity)) ? Number(cellContext.similarity) : null,
+      }
+
+      item.meta = {
+        ...(item.meta || {}),
+        townCell,
+      }
+      annotatedCount += 1
+
+      const bucket = buckets.get(cellId) || []
+      bucket.push({ item, originalIndex })
+      buckets.set(cellId, bucket)
+    }
+
+    if (buckets.size === 0) {
+      return
+    }
+
+    const reordered: EvidenceItem[] = []
+    const queue = [...buckets.entries()].map(([cellId, items]) => ({ cellId, items: [...items] }))
+    while (queue.some((entry) => entry.items.length > 0)) {
+      for (const entry of queue) {
+        const next = entry.items.shift()
+        if (next) {
+          reordered.push(next.item)
+        }
+      }
+    }
+
+    input.view.items = reordered
+    input.view.meta = {
+      ...(input.view.meta || {}),
+      town_diversification: {
+        applied: true,
+        uniqueCellCount: buckets.size,
+        annotatedCount,
+      },
+    }
+  }
+
   private resolveEvidenceCount(view: EvidenceView) {
     const directCount = view.items.length || view.pairs?.length || view.regions?.length || 0
     if (directCount > 0) {
@@ -3022,6 +4826,7 @@ export class GeoLoomAgent {
         latency_ms: Date.now() - startedAt,
       }
       state.toolCalls.push(trace)
+      appendToolTraceEvent(state.executionJournal, trace)
       return {
         content: { ok: false, error: 'Skill not found' },
         trace,
@@ -3076,6 +4881,7 @@ export class GeoLoomAgent {
         latency_ms: Date.now() - startedAt,
       }
       state.toolCalls.push(trace)
+      appendToolTraceEvent(state.executionJournal, trace)
 
       throw new ToolExecutionAbortError(message)
     }
@@ -3100,6 +4906,7 @@ export class GeoLoomAgent {
       latency_ms: Date.now() - startedAt,
     }
     state.toolCalls.push(trace)
+    appendToolTraceEvent(state.executionJournal, trace)
 
     return {
       content: result.data || result.error || {},
@@ -3170,17 +4977,18 @@ export class GeoLoomAgent {
       .find((trace) => trace.skill === 'postgis' && trace.action === 'execute_spatial_sql' && trace.status === 'done')
       ?.result as { rows?: Record<string, unknown>[] } | undefined
 
+    const fallbackAreaInsight: AreaInsightInput = {
+      categoryHistogram: readAreaInsightRows(areaInsightResults, 'area_category_histogram'),
+      ringDistribution: readAreaInsightRows(areaInsightResults, 'area_ring_distribution'),
+      representativeSamples: readAreaInsightRows(areaInsightResults, 'area_representative_sample'),
+      competitionDensity: readAreaInsightRows(areaInsightResults, 'area_competition_density'),
+      hotspotCells: readAreaInsightRows(areaInsightResults, 'area_h3_hotspots'),
+      aoiContext: readAreaInsightRows(areaInsightResults, 'area_aoi_context'),
+      landuseContext: readAreaInsightRows(areaInsightResults, 'area_landuse_context'),
+    }
     const areaInsight: AreaInsightInput = hasAreaInsightPayload(rawPayload.area_insight)
-      ? rawPayload.area_insight as AreaInsightInput
-      : {
-          categoryHistogram: (areaInsightResults.get('area_category_histogram')?.rows as Record<string, unknown>[] | undefined) || [],
-          ringDistribution: (areaInsightResults.get('area_ring_distribution')?.rows as Record<string, unknown>[] | undefined) || [],
-          representativeSamples: (areaInsightResults.get('area_representative_sample')?.rows as Record<string, unknown>[] | undefined) || [],
-          competitionDensity: (areaInsightResults.get('area_competition_density')?.rows as Record<string, unknown>[] | undefined) || [],
-          hotspotCells: (areaInsightResults.get('area_h3_hotspots')?.rows as Record<string, unknown>[] | undefined) || [],
-          aoiContext: (areaInsightResults.get('area_aoi_context')?.rows as Record<string, unknown>[] | undefined) || [],
-          landuseContext: (areaInsightResults.get('area_landuse_context')?.rows as Record<string, unknown>[] | undefined) || [],
-        }
+      ? mergeAreaInsightInput(fallbackAreaInsight, rawPayload.area_insight as AreaInsightInput)
+      : fallbackAreaInsight
 
     return {
       ...rawPayload,
@@ -3530,6 +5338,9 @@ export class GeoLoomAgent {
       pushFilter('category_main', '住宿服务')
     } else if (categoryKey === 'supermarket') {
       pushFilter('category_main', '购物服务')
+    } else if (categoryKey === 'fashion') {
+      pushFilter('category_main', '购物服务')
+      pushFilter('category_sub', '服装鞋帽皮具店')
     }
 
     const normalizedSelectedCategories = [...new Set(
@@ -3739,21 +5550,42 @@ export class GeoLoomAgent {
     const latestVector = [...state.toolCalls]
       .reverse()
       .find((trace) => trace.skill === 'spatial_vector' && trace.action === 'search_similar_regions' && trace.status === 'done')
-      ?.result as { regions?: Array<{ name: string, score: number, summary: string }> } | undefined
+      ?.result as { regions?: Array<{ region_id?: string, name: string, score: number, summary: string, tags?: string[] }> } | undefined
     const semanticEvidence = collectSemanticEvidence(state.toolCalls)
     const semanticHints = collectSemanticHints(state.toolCalls)
     const areaInsightResults = collectAreaInsightTemplateResults(state.toolCalls)
     const areaInsight: AreaInsightInput = {
-      categoryHistogram: (areaInsightResults.get('area_category_histogram')?.rows as Record<string, unknown>[] | undefined) || [],
-      ringDistribution: (areaInsightResults.get('area_ring_distribution')?.rows as Record<string, unknown>[] | undefined) || [],
-      representativeSamples: (areaInsightResults.get('area_representative_sample')?.rows as Record<string, unknown>[] | undefined) || [],
-      competitionDensity: (areaInsightResults.get('area_competition_density')?.rows as Record<string, unknown>[] | undefined) || [],
-      hotspotCells: (areaInsightResults.get('area_h3_hotspots')?.rows as Record<string, unknown>[] | undefined) || [],
-      aoiContext: (areaInsightResults.get('area_aoi_context')?.rows as Record<string, unknown>[] | undefined) || [],
-      landuseContext: (areaInsightResults.get('area_landuse_context')?.rows as Record<string, unknown>[] | undefined) || [],
+      categoryHistogram: readAreaInsightRows(areaInsightResults, 'area_category_histogram'),
+      ringDistribution: readAreaInsightRows(areaInsightResults, 'area_ring_distribution'),
+      representativeSamples: readAreaInsightRows(areaInsightResults, 'area_representative_sample'),
+      competitionDensity: readAreaInsightRows(areaInsightResults, 'area_competition_density'),
+      hotspotCells: readAreaInsightRows(areaInsightResults, 'area_h3_hotspots'),
+      aoiContext: readAreaInsightRows(areaInsightResults, 'area_aoi_context'),
+      landuseContext: readAreaInsightRows(areaInsightResults, 'area_landuse_context'),
     }
 
-    const comparisonPairs = latestComparisonResult?.comparison_pairs || latestPostgisRows?.comparison_pairs || []
+    const fallbackComparisonPairs: ComparisonPair[] = intent.queryType === 'compare_places'
+      ? (state.spatialConstraint?.regions || [])
+        .slice(0, 2)
+        .map((region, index) => ({
+          label: region.name,
+          anchor: {
+            placeName: region.name,
+            displayName: region.name,
+            resolvedPlaceName: region.name,
+            lon: Number.isFinite(region.lon) ? Number(region.lon) : Number(anchor?.lon ?? fallbackAnchor.lon ?? index),
+            lat: Number.isFinite(region.lat) ? Number(region.lat) : Number(anchor?.lat ?? fallbackAnchor.lat ?? index),
+            source: 'drawn_region',
+          },
+          value: 0,
+          items: [],
+        }))
+      : []
+    const comparisonPairs: ComparisonPair[] = preferNonEmptyComparisonPairs(
+      latestComparisonResult?.comparison_pairs,
+      latestPostgisRows?.comparison_pairs,
+      fallbackComparisonPairs,
+    )
     if (intent.queryType === 'compare_places' && comparisonPairs.length > 0) {
       const comparisonPrimaryAnchor = anchor || comparisonPairToAnchor(comparisonPairs[0], 'primary') || fallbackAnchor
       const comparisonSecondaryAnchor = secondaryAnchor
@@ -3779,10 +5611,13 @@ export class GeoLoomAgent {
         intent,
         anchor: fallbackAnchor,
         items: (latestVector?.regions || []).map((region) => ({
+          id: region.region_id || null,
           name: region.name,
           score: region.score,
           meta: {
+            regionId: region.region_id || null,
             summary: region.summary,
+            tags: Array.isArray(region.tags) ? region.tags : [],
           },
         })),
       })
@@ -3805,7 +5640,10 @@ export class GeoLoomAgent {
       const selectionResult = collectLatestAreaEvidenceSelection(state.toolCalls)
 
       if (selectionResult) {
-        effectiveAreaInsight = selectionResult.selected_area_insight || areaInsight
+        effectiveAreaInsight = mergeAreaInsightInput(
+          areaInsight,
+          selectionResult.selected_area_insight,
+        )
         const selectedRows = Array.isArray(selectionResult.selected_rows)
           ? selectionResult.selected_rows
           : []
@@ -4197,6 +6035,8 @@ export class GeoLoomAgent {
         return '住宿服务'
       case 'supermarket':
         return '购物服务'
+      case 'fashion':
+        return '购物服务'
       default:
         return null
     }
@@ -4406,6 +6246,270 @@ export class GeoLoomAgent {
     }
   }
 
+  private syncAreaReferenceIntoSimilarRegionView(target: EvidenceView, source: EvidenceView) {
+    target.areaProfile = source.areaProfile
+    target.hotspots = source.hotspots
+    target.representativeSamples = source.representativeSamples
+    target.confidence = source.confidence
+    target.areaSubject = source.areaSubject
+    target.aoiContext = source.aoiContext
+    target.landuseContext = source.landuseContext
+  }
+
+  private async enrichSimilarRegionViewIfNeeded(input: {
+    intent: DeterministicIntent
+    state: AgentTurnState
+    context: ReturnType<typeof createSkillExecutionContext>
+    writer: SSEWriter
+    view: EvidenceView
+  }) {
+    if (input.intent.queryType !== 'similar_regions' || input.view.type !== 'semantic_candidate') {
+      return
+    }
+
+    const areaInsightResults = collectAreaInsightTemplateResults(input.state.toolCalls)
+    const areaInsight: AreaInsightInput = {
+      categoryHistogram: readAreaInsightRows(areaInsightResults, 'area_category_histogram'),
+      ringDistribution: readAreaInsightRows(areaInsightResults, 'area_ring_distribution'),
+      representativeSamples: readAreaInsightRows(areaInsightResults, 'area_representative_sample'),
+      competitionDensity: readAreaInsightRows(areaInsightResults, 'area_competition_density'),
+      hotspotCells: readAreaInsightRows(areaInsightResults, 'area_h3_hotspots'),
+      aoiContext: readAreaInsightRows(areaInsightResults, 'area_aoi_context'),
+      landuseContext: readAreaInsightRows(areaInsightResults, 'area_landuse_context'),
+    }
+    const referenceAnchor = toResolvedAnchorFromEvidenceView(input.view)
+    const representativeRows = areaInsight.representativeSamples?.length
+      ? areaInsight.representativeSamples
+      : []
+    const referenceView = buildAreaOverviewView({
+      anchor: referenceAnchor,
+      rows: representativeRows,
+      intent: input.intent,
+      areaInsight,
+    })
+    this.syncAreaReferenceIntoSimilarRegionView(input.view, referenceView)
+
+    const snapshot = buildRegionSnapshotFromEvidence({
+      view: referenceView,
+      rawQuery: input.intent.rawQuery,
+      competitionDensity: (areaInsightResults.get('area_competition_density')?.rows as Record<string, unknown>[] | undefined) || [],
+    })
+    const hasSnapshotEvidence = Boolean(
+      (snapshot.dominantCategories || []).length
+      || (snapshot.hotspots || []).length
+      || (snapshot.aoiContext || []).length
+      || (snapshot.landuseContext || []).length
+      || (snapshot.representativePois || []).length,
+    )
+
+    let regionSnapshotResult: unknown = null
+    const existingSnapshotTrace = [...input.state.toolCalls]
+      .reverse()
+      .find((trace) => trace.skill === 'spatial_encoder' && trace.action === 'encode_region_snapshot' && trace.status === 'done')
+    if (existingSnapshotTrace?.result) {
+      regionSnapshotResult = existingSnapshotTrace.result
+      this.applyRegionEncodingToView(referenceView, regionSnapshotResult)
+      this.applyRegionEncodingToView(input.view, regionSnapshotResult)
+    } else if (hasSnapshotEvidence) {
+      await input.writer.reasoning({
+        content: '先把参考片区编码成结构快照，提取校园、餐饮、交通和活力这类可解释的相似维度。',
+      })
+      const snapshotEncoding = await this.executeToolCall({
+        id: `similar_region_snapshot_${input.state.toolCalls.length + 1}`,
+        name: 'spatial_encoder',
+        arguments: {
+          action: 'encode_region_snapshot',
+          payload: {
+            snapshot,
+          },
+        },
+      }, input.intent, input.state, input.context)
+
+      if (snapshotEncoding.trace.status === 'done') {
+        regionSnapshotResult = snapshotEncoding.trace.result
+        this.applyRegionEncodingToView(referenceView, regionSnapshotResult)
+        this.applyRegionEncodingToView(input.view, regionSnapshotResult)
+      }
+    }
+
+    const referenceDimensions = buildSimilarRegionEvidence({
+      referenceView,
+      candidates: [],
+    }).referenceDimensions
+    const searchText = buildSimilarRegionSearchText({
+      rawQuery: input.intent.rawQuery,
+      referenceView,
+      featureSummary: String(referenceView.regionFeatureSummary || '').trim(),
+      referenceDimensions,
+    })
+
+    const existingSearchTrace = [...input.state.toolCalls]
+      .reverse()
+      .find((trace) => trace.skill === 'spatial_vector' && trace.action === 'search_similar_regions' && trace.status === 'done')
+    let candidates = readSimilarRegionCandidates(existingSearchTrace?.result)
+    let latestSearchResult: unknown = existingSearchTrace?.result
+    const existingSearchText = trimText((existingSearchTrace?.payload as Record<string, unknown> | undefined)?.text)
+    const shouldRefreshSearch = candidates.length === 0
+      || (trimText(searchText) && existingSearchText === trimText(input.intent.rawQuery))
+
+    if (shouldRefreshSearch && trimText(searchText)) {
+      await input.writer.reasoning({
+        content: '候选相似片区会先做一轮召回，再按参考片区的结构特征补充更贴合的查询语义。',
+      })
+      const searchResult = await this.executeToolCall({
+        id: `similar_region_recall_${input.state.toolCalls.length + 1}`,
+        name: 'spatial_vector',
+        arguments: {
+          action: 'search_similar_regions',
+          payload: {
+            text: searchText,
+            top_k: 5,
+          },
+        },
+      }, input.intent, input.state, input.context)
+
+      if (searchResult.trace.status === 'done') {
+        latestSearchResult = searchResult.trace.result
+        candidates = readSimilarRegionCandidates(searchResult.trace.result)
+      }
+    }
+
+    if (candidates.length === 0) {
+      input.view.meta.referenceDimensions = referenceDimensions
+      input.view.meta.referenceFeatureSummary = String(referenceView.regionFeatureSummary || '').trim() || null
+      return
+    }
+
+    const candidateRerankScores = new Map<string, number>()
+    let latestSimilarityScoreResult: unknown = null
+    const queryEncoding = trimText(searchText)
+      ? await this.executeToolCall({
+        id: `similar_region_query_${input.state.toolCalls.length + 1}`,
+        name: 'spatial_encoder',
+        arguments: {
+          action: 'encode_query',
+          payload: {
+            text: searchText,
+          },
+        },
+      }, input.intent, input.state, input.context)
+      : null
+    const queryVectorRef = readVectorRef(queryEncoding?.trace.result)
+
+    if (queryVectorRef) {
+      await input.writer.reasoning({
+        content: '候选已经召回，再用空间编码器做一轮复核，把整体相似度和分维度匹配拆得更直观。',
+      })
+
+      const candidateVectorRefs: string[] = []
+      const candidateNameByVectorRef = new Map<string, string>()
+      for (const candidate of candidates.slice(0, 5)) {
+        const candidateText = [
+          candidate.name,
+          candidate.summary,
+          ...(candidate.tags || []),
+        ]
+          .map((value) => trimText(value))
+          .filter(Boolean)
+          .join(' ')
+        const candidateEncoding = await this.executeToolCall({
+          id: `similar_region_candidate_${input.state.toolCalls.length + 1}`,
+          name: 'spatial_encoder',
+          arguments: {
+            action: 'encode_region',
+            payload: {
+              label: candidate.name,
+              text: candidateText,
+            },
+          },
+        }, input.intent, input.state, input.context)
+
+        if (candidateEncoding.trace.status !== 'done') {
+          continue
+        }
+        const candidateVectorRef = readVectorRef(candidateEncoding.trace.result)
+        if (!candidateVectorRef) {
+          continue
+        }
+        candidateVectorRefs.push(candidateVectorRef)
+        candidateNameByVectorRef.set(candidateVectorRef, candidate.name)
+      }
+
+      if (candidateVectorRefs.length > 0) {
+        const similarityResult = await this.executeToolCall({
+          id: `similar_region_score_${input.state.toolCalls.length + 1}`,
+          name: 'spatial_encoder',
+          arguments: {
+            action: 'score_similarity',
+            payload: {
+              query_vector_ref: queryVectorRef,
+              candidate_vector_refs: candidateVectorRefs,
+            },
+          },
+        }, input.intent, input.state, input.context)
+
+        if (similarityResult.trace.status === 'done') {
+          latestSimilarityScoreResult = similarityResult.trace.result
+          const similarityScores = readSimilarityScores(similarityResult.trace.result)
+          for (const [candidateVectorRef, score] of similarityScores.entries()) {
+            const candidateName = candidateNameByVectorRef.get(candidateVectorRef)
+            if (!candidateName) continue
+            candidateRerankScores.set(candidateName, score)
+          }
+        }
+      }
+    }
+
+    const similarityBundle = buildSimilarRegionEvidence({
+      referenceView,
+      candidates: candidates.map((candidate) => ({
+        ...candidate,
+        rerankScore: candidateRerankScores.get(candidate.name) ?? null,
+      })),
+    })
+
+    input.view.meta.referenceDimensions = similarityBundle.referenceDimensions
+    input.view.meta.referenceFeatureSummary = String(referenceView.regionFeatureSummary || '').trim() || null
+    input.view.meta.similaritySkill = 'spatial_vector+spatial_encoder'
+    input.view.regions = similarityBundle.regions
+    input.view.items = similarityBundle.regions.map((region) => ({
+      id: region.regionId || null,
+      name: region.name,
+      score: region.score,
+      rank: region.rank || null,
+      meta: {
+        summary: region.summary,
+        regionId: region.regionId || null,
+        rank: region.rank || null,
+        tags: region.tags || [],
+        dimensions: region.dimensions || [],
+      },
+    }))
+
+    const nextHints = [
+      ...(input.view.semanticHints || []),
+      ...similarityBundle.referenceDimensions.map((dimension) => ({
+        label: dimension.label,
+        detail: dimension.detail || undefined,
+        score: dimension.score,
+      })),
+      ...similarityBundle.regions.slice(0, 2).map((region) => ({
+        label: region.name,
+        detail: region.summary,
+        score: region.score,
+      })),
+    ]
+    input.view.semanticHints = nextHints.slice(0, 8)
+
+    input.view.semanticEvidence = mergeSemanticEvidenceStatuses([
+      input.view.semanticEvidence,
+      readSemanticEvidenceStatus(regionSnapshotResult),
+      readSemanticEvidenceStatus(queryEncoding?.trace.result),
+      readSemanticEvidenceStatus(latestSearchResult),
+      readSemanticEvidenceStatus(latestSimilarityScoreResult),
+    ]) || input.view.semanticEvidence
+  }
+
   private renderAnswer(view: EvidenceView): RenderedAnswer {
     const answer = this.renderer.render(view)
     const pois = view.items
@@ -4424,12 +6528,16 @@ export class GeoLoomAgent {
     answer: string
     renderedAnswer: string
     queryType: DeterministicIntent['queryType']
+    answerSource?: string
   }) {
     const answer = String(input.answer || '').trim()
     const renderedAnswer = String(input.renderedAnswer || '').trim()
     const structuredQuery = ['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.queryType)
     const answerHasSectionHeadings = /(^|\n)#{2,3}\s/u.test(answer)
     const renderedHasSectionHeadings = /(^|\n)#{2,3}\s/u.test(renderedAnswer)
+    const normalizedAnswerSource = String(input.answerSource || '').trim()
+    const preservePlainText = normalizedAnswerSource.includes('insufficient_evidence')
+    const preserveUnstructuredFinalAnswer = normalizedAnswerSource === 'llm_direct' || normalizedAnswerSource === 'clarification'
 
     if (looksLikeMarkdownAnswer(answer) && (!structuredQuery || answerHasSectionHeadings || !renderedHasSectionHeadings)) {
       return {
@@ -4438,21 +6546,34 @@ export class GeoLoomAgent {
       }
     }
 
-    if (looksLikeMarkdownAnswer(renderedAnswer)) {
-      return {
-        answer: renderedAnswer,
-        usedRenderedAnswer: true,
-      }
-    }
-
     if (!answer) {
+      if (looksLikeMarkdownAnswer(renderedAnswer)) {
+        return {
+          answer: renderedAnswer,
+          usedRenderedAnswer: true,
+        }
+      }
       return {
         answer: renderedAnswer,
         usedRenderedAnswer: true,
       }
     }
 
-    if (['nearby_poi', 'nearest_station', 'area_overview', 'compare_places', 'similar_regions'].includes(input.queryType)) {
+    if (preservePlainText) {
+      return {
+        answer,
+        usedRenderedAnswer: false,
+      }
+    }
+
+    if (structuredQuery && renderedHasSectionHeadings && !preserveUnstructuredFinalAnswer) {
+      return {
+        answer: renderedAnswer,
+        usedRenderedAnswer: true,
+      }
+    }
+
+    if (structuredQuery) {
       // 将纯文本答案转为格式化的 Markdown 列表，确保每行都有换行
       const answerLines = answer.split(/\n/).map((line) => line.trim()).filter(Boolean)
       if (answerLines.length > 1) {
@@ -4464,6 +6585,13 @@ export class GeoLoomAgent {
       return {
         answer: `## 结论\n\n${answer}`,
         usedRenderedAnswer: false,
+      }
+    }
+
+    if (looksLikeMarkdownAnswer(renderedAnswer)) {
+      return {
+        answer: renderedAnswer,
+        usedRenderedAnswer: true,
       }
     }
 
@@ -4504,6 +6632,7 @@ export class GeoLoomAgent {
 
   private buildAreaSynthesisEvidence(view: EvidenceView) {
     const lines: string[] = []
+    const questionMode = String(view.meta.questionMode || 'summary').trim() || 'summary'
     const subjectConfidence = String(view.areaSubject?.confidence || '').trim()
 
     if (view.areaSubject?.title && subjectConfidence === 'high') {
@@ -4522,7 +6651,7 @@ export class GeoLoomAgent {
       .slice(0, 3)
       .map((bucket) => `${bucket.label}${bucket.share ? `(${Math.round(bucket.share * 100)}%)` : ''}`)
     if (dominant.length > 0) {
-      lines.push(`主导业态: ${dominant.join('、')}`)
+      lines.push(`${questionMode === 'opportunity' ? '供给结构' : '主要业态'}: ${dominant.join('、')}`)
     }
 
     const hotspots = (view.hotspots || [])
@@ -4536,14 +6665,16 @@ export class GeoLoomAgent {
       .slice(0, 2)
       .map((item) => item.title)
     if (anomalies.length > 0) {
-      lines.push(`风险: ${anomalies.join('、')}`)
+      lines.push(`${questionMode === 'opportunity' ? '风险' : questionMode === 'anomaly' ? '异常' : '补充观察'}: ${anomalies.join('、')}`)
     }
 
-    const opportunities = (view.opportunitySignals || [])
-      .slice(0, 2)
-      .map((item) => item.title)
-    if (opportunities.length > 0) {
-      lines.push(`机会: ${opportunities.join('、')}`)
+    if (questionMode === 'opportunity') {
+      const opportunities = (view.opportunitySignals || [])
+        .slice(0, 2)
+        .map((item) => item.title)
+      if (opportunities.length > 0) {
+        lines.push(`机会: ${opportunities.join('、')}`)
+      }
     }
 
     const samples = (view.representativeSamples || [])
@@ -4694,6 +6825,7 @@ export class GeoLoomAgent {
       : ''
 
     const questionMode = String(input.evidenceView.meta.questionMode || 'summary').trim() || 'summary'
+    const areaOverviewTailSection = questionMode === 'opportunity' ? '机会与风险' : '补充说明'
     const areaSubjectConfidence = String(input.evidenceView.areaSubject?.confidence || '').trim()
     const explicitAreaSubject = areaSubjectConfidence === 'high'
       ? String(input.evidenceView.areaSubject?.title || '').trim()
@@ -4702,7 +6834,9 @@ export class GeoLoomAgent {
       ? '先直接给出最近结果，再补一句距离或类别依据。'
       : input.intent.queryType === 'nearby_poi'
         ? '必须输出结构化 Markdown，优先使用 ## 推荐结论 / ## 就近可选 / ## 联网补充（仅在有稳定补充证据时） / ## 使用说明。不要使用 --- 分割线。列表项必须用 - 开头并单独一行，禁止 # - 连写。先直接回答最值得关注的对象，再带出 2-4 个证据样本。'
-        : '写成 1-2 段自然中文，不要写成日志或执行列表。'
+        : input.intent.queryType === 'area_overview'
+          ? `必须输出结构化 Markdown，并按 ## 区域主语 / ## 关键特征 / ## 热点与结构 / ## ${areaOverviewTailSection} 四段组织，不要回放 deterministic 草稿。每段 1-3 句，只保留最有解释力的证据。${questionMode === 'opportunity' ? '' : '默认做中性片区总结，不要擅自扩展成商机、投资或开店建议。'}`
+          : '写成 1-2 段自然中文，不要写成日志或执行列表。'
 
     const synthesisPrompt = [
       `问题：${input.rawQuery}`,
@@ -4723,9 +6857,17 @@ export class GeoLoomAgent {
         ? '8. 附近检索题默认用二级标题分段，不要把结论、候选地点和说明揉成一段。'
         : '',
       input.intent.queryType === 'area_overview'
+        ? (questionMode === 'opportunity'
+            ? '8. 只有在用户明确问开店、供需、竞争或补位方向时，才可以展开经营判断。'
+            : '8. 这是普通片区总结题，禁止擅自扩展成经营、投资或开店建议。')
+        : '',
+      input.intent.queryType === 'area_overview'
         ? (explicitAreaSubject
             ? `必须直接写"${explicitAreaSubject}"，不要只写"当前区域"。`
-            : '必须明确写出区域主语，不要只写"当前区域"。如果 AOI / 用地信号是混合的，优先选择更宽、证据更充分的区域主语，不要被单个校园或楼盘名字带偏。')
+            : '必须明确写出区域主语，不要只写“当前区域”。如果 AOI / 用地信号是混合的，优先选择更宽、证据更充分的区域主语，不要被单个校园或楼盘名字带偏。')
+        : '',
+      input.intent.queryType === 'area_overview'
+        ? `输出结构固定为：## 区域主语 / ## 关键特征 / ## 热点与结构 / ## ${areaOverviewTailSection}。`
         : '',
       answerStyle,
       '只保留有解释力的数字和样本，不要罗列无意义统计。',
@@ -4964,6 +7106,6 @@ export class GeoLoomAgent {
   }
 
   private buildUnsupportedAnswer() {
-    return '当前 V4 已支持附近 POI、最近地铁站、当前区域洞察、相似片区和双地点比较这几类问题。你可以继续给我一个明确地点，或者直接让我读懂当前区域。'
+    return '当前 V4 已支持附近 POI、最近地铁站、当前区域洞察、相似片区、双地点比较，以及“先在一段路径上找点位、再去另一个目的地继续逛”的复合行程问题。你可以继续给我一个明确地点，或者直接让我读懂当前区域。'
   }
 }

@@ -157,7 +157,7 @@ describe('DeterministicRouter', () => {
 
   it('routes current-area insight prompts to area_overview when viewport context is available', () => {
     const intent = router.route({
-      messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。' }],
+      messages: [{ role: 'user', content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。' }],
       options: {
         spatialContext: {
           viewport: [114.30, 30.54, 114.38, 30.60],

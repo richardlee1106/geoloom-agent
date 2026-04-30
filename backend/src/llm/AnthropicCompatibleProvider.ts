@@ -274,6 +274,8 @@ export class AnthropicCompatibleProvider implements LLMProvider {
             messages: toProviderMessages(request),
             tools: request.tools.length > 0 ? toToolDefinitions(request) : undefined,
             tool_choice: request.tools.length > 0 ? { type: 'auto' } : undefined,
+            temperature: Number.isFinite(Number(request.temperature)) ? Number(request.temperature) : undefined,
+            top_p: Number.isFinite(Number(request.topP)) ? Number(request.topP) : undefined,
           }),
         })
 

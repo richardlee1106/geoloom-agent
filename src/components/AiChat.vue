@@ -187,10 +187,6 @@ const props = defineProps({
     type: String,
     default: 'idle'
   },
-  selectedCategories: {
-    type: Array,
-    default: () => []
-  },
   // 多区数据 (新增)
   regions: {
     type: Array,
@@ -346,6 +342,7 @@ function toEmbeddedIntentMode(intentMode, queryType = '') {
 
   if (rawMode === 'local_search') return 'micro';
   if (rawMode === 'macro_overview') return 'macro';
+  if (rawType === 'composite_recommendation') return 'micro';
   if (rawType === 'poi_search') return 'micro';
   if (rawType === 'area_analysis') return 'macro';
   return '';
@@ -382,7 +379,6 @@ const { dispatchMetaEvent } = useAiStreamDispatcher({
   toEmbeddedIntentMode
 });
 const {
-  normalizeSelectedCategories,
   hasCustomSelection,
   shouldRunDeepSpatialMode,
   shouldCaptureSnapshot,
@@ -410,8 +406,7 @@ const poiCount = computed(() => props.poiFeatures?.length || 0);
 const defaultPoiCoordSys = (import.meta.env.VITE_POI_COORD_SYS || 'gcj02').toLowerCase();
 const panelMetaChips = computed(() => buildAgentPanelMeta({
   isOnline: isOnline.value,
-  poiCount: poiCount.value,
-  selectedCategories: props.selectedCategories
+  poiCount: poiCount.value
 }));
 
 function stopStatusPolling() {
@@ -799,7 +794,6 @@ async function sendMessage(directText = '') {
     // 多区约束写入 spatialContext，供 Python 直查模式按“选区并集”严格过滤
     spatialContext.regions = normalizedRegions;
 
-    const normalizedSelectedCategories = normalizeSelectedCategories(props.selectedCategories);
     const poiCount = props.poiFeatures?.length || 0;
     const deepSpatialMode = shouldRunDeepSpatialMode(text, spatialContext, props.regions, poiCount);
     forceRecomputeRequest = forceRecomputeNext.value === true;
@@ -827,11 +821,9 @@ async function sendMessage(directText = '') {
       skipCache: forceRecomputeRequest,
       forceRefresh: forceRecomputeRequest,
       globalAnalysis: props.globalAnalysisEnabled,
-      selectedCategories: normalizedSelectedCategories,
       sourcePolicy: {
         enforceUiConstraints: true,
-        hasCustomArea: hasCustomSelection(spatialContext, props.regions),
-        hasCategoryFilter: normalizedSelectedCategories.length > 0
+        hasCustomArea: hasCustomSelection(spatialContext, props.regions)
       },
       confidenceModel: 'composite_v5',
       visualReviewEnabled: deepSpatialMode,
@@ -1466,14 +1458,14 @@ function buildEvidenceNarrative(message) {
   ).trim()
 
   const parts = [
-    `已识别 ${hotspotCount} 个高密度热点、${regionCount} 个主导业态片区、${fuzzyCount} 个边界模糊片区。`
+    `已识别 ${hotspotCount} 个高密度热点、${regionCount} 个主要结构片区、${fuzzyCount} 个边界模糊片区。`
   ]
 
   if (hotspotLabel) {
     parts.push(`当前热点锚点为「${hotspotLabel}」附近。`)
   }
   if (regionLabel) {
-    parts.push(`建议优先围绕「${regionLabel}」做机会验证与对比追问。`)
+    parts.push(`建议优先围绕「${regionLabel}」做结构对比或细节追问。`)
   }
 
   return parts.join('')

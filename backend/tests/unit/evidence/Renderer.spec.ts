@@ -114,6 +114,66 @@ describe('Renderer', () => {
     expect(answer).toMatch(/1028|1027.9/)
   })
 
+  it('renders a complete fallback sentence when similar-region candidates are empty', () => {
+    const answer = renderer.render({
+      type: 'semantic_candidate',
+      anchor: {
+        placeName: '武汉大学',
+        displayName: '武汉大学',
+        resolvedPlaceName: '武汉大学',
+      },
+      items: [],
+      regions: [],
+      meta: {
+        queryType: 'similar_regions',
+        targetCategory: '相似片区',
+      },
+    } as any)
+
+    expect(answer).toMatch(/武汉大学/)
+    expect(answer).toMatch(/还没有收敛出稳定的相似片区候选/)
+    expect(answer).not.toMatch(/已经收敛到以下候选/)
+    expect(answer).not.toMatch(/## 相似片区/)
+  })
+
+  it('renders similarity dimensions for semantic candidate evidence', () => {
+    const answer = renderer.render({
+      type: 'semantic_candidate',
+      anchor: {
+        placeName: '武汉大学',
+        displayName: '武汉大学',
+        resolvedPlaceName: '武汉大学',
+      },
+      items: [],
+      regions: [
+        {
+          name: '街道口-武大商圈',
+          score: 0.91,
+          summary: '高校密集、咖啡和夜间活跃度较高',
+          dimensions: [
+            { key: 'campus_vibe', label: '校园氛围', score: 0.89 },
+            { key: 'food_density', label: '餐饮密度', score: 0.8 },
+            { key: 'transit_access', label: '交通便利度', score: 0.78 },
+          ],
+        },
+      ],
+      meta: {
+        queryType: 'similar_regions',
+        targetCategory: '相似片区',
+        referenceDimensions: [
+          { key: 'campus_vibe', label: '校园氛围', score: 0.9 },
+          { key: 'food_density', label: '餐饮密度', score: 0.82 },
+        ],
+      },
+    } as any)
+
+    expect(answer).toMatch(/整体相似度 91%/)
+    expect(answer).toMatch(/本轮重点参照维度是校园氛围、餐饮密度/)
+    expect(answer).toMatch(/校园氛围 89%/)
+    expect(answer).toMatch(/餐饮密度 80%/)
+    expect(answer).toMatch(/片区画像：高校密集、咖啡和夜间活跃度较高/)
+  })
+
   it('lists exits for the nearest metro station and identifies the closest exit', () => {
     const answer = renderer.render({
       type: 'transport',
@@ -212,8 +272,9 @@ describe('Renderer', () => {
     })
 
     expect(answer).toMatch(/基础周边样本汇总/)
-    expect(answer).toMatch(/先不直接下机会结论/)
-    expect(answer).toMatch(/正式片区判断/)
+    expect(answer).toMatch(/先只给基础结构观察/)
+    expect(answer).toMatch(/## 补充说明/)
+    expect(answer).toMatch(/正式片区总结/)
     expect(answer).not.toMatch(/范围内 \d+ 个|样本量还偏少（当前 \d+ 个）/)
   })
 
@@ -298,11 +359,11 @@ describe('Renderer', () => {
     expect(answer).toMatch(/## 区域主语/)
     expect(answer).toMatch(/## 关键特征/)
     expect(answer).toMatch(/## 热点与结构/)
-    expect(answer).toMatch(/## 机会与风险/)
+    expect(answer).toMatch(/## 补充说明/)
     expect(answer).toMatch(/湖北大学/)
     expect(answer).toMatch(/深夜食堂|便利蜂/)
-    expect(answer).toMatch(/异常|风险/)
-    expect(answer).toMatch(/机会/)
+    expect(answer).toMatch(/结构上还需要留意|暂不展开经营判断/)
+    expect(answer).not.toMatch(/从经营视角看|优先方向可以先看/)
     expect(answer).not.toMatch(/范围内 14 个|9 个高密点位/)
     expect(answer).not.toMatch(/基础周边样本汇总/)
   })

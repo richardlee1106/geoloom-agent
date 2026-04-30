@@ -51,6 +51,10 @@ export interface LLMCompletionRequest {
   messages: LLMMessage[]
   tools: ToolSchema[]
   timeoutMs?: number
+  temperature?: number
+  topP?: number
+  presencePenalty?: number
+  frequencyPenalty?: number
 }
 
 export interface LLMProvider {

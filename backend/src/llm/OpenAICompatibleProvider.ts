@@ -184,6 +184,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
           messages: toProviderMessages(request),
           tools: toToolDefinitions(request),
           tool_choice: 'auto',
+          temperature: Number.isFinite(Number(request.temperature)) ? Number(request.temperature) : undefined,
+          top_p: Number.isFinite(Number(request.topP)) ? Number(request.topP) : undefined,
+          presence_penalty: Number.isFinite(Number(request.presencePenalty)) ? Number(request.presencePenalty) : undefined,
+          frequency_penalty: Number.isFinite(Number(request.frequencyPenalty)) ? Number(request.frequencyPenalty) : undefined,
         }),
       })
 

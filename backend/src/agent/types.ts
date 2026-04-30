@@ -1,4 +1,5 @@
 import type { EvidenceView, ResolvedAnchor, ToolExecutionTrace } from '../chat/types.js'
+import type { AgentExecutionJournal } from './executionJournal.js'
 
 export interface SessionRecord {
   id: string
@@ -54,6 +55,7 @@ export interface AgentTurnState {
   sessionId: string
   toolCalls: ToolExecutionTrace[]
   anchors: Partial<Record<string, ResolvedAnchor>>
+  executionJournal?: AgentExecutionJournal
   evidenceView?: EvidenceView
   spatialConstraint?: SpatialAnalysisConstraint
   sqlValidationAttempts: number

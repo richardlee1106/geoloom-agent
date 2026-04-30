@@ -7,7 +7,7 @@ import type {
 
 const CAMPUS_KEYWORDS = ['大学', '学院', '学校', '校园', '校区', 'university', 'college', 'campus', 'school']
 const RESIDENTIAL_KEYWORDS = ['生活区', '宿舍', '住宅', '社区', '居住', 'residential', 'housing', 'community', 'apartment']
-const COMMERCIAL_KEYWORDS = ['商业', '商圈', '广场', 'mall', 'retail', 'commercial', 'shopping', 'business']
+const COMMERCIAL_KEYWORDS = ['商业', '购物中心', '商场', 'mall', 'retail', 'commercial', 'shopping', 'business']
 const TRANSIT_KEYWORDS = ['地铁', '站', '交通', 'metro', 'station', 'transit']
 
 const REGION_SNAPSHOT_VOCABULARY = [

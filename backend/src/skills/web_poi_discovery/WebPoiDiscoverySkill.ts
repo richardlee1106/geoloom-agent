@@ -29,6 +29,12 @@ import { MentionNormalizer, type NormalizedMentionGroup } from './mentionNormali
 import { ShortlistMatcher, type DbQueryFn } from './shortlistMatcher.js'
 import type { EmbedRerankBridge } from '../../integration/jinaBridge.js'
 import { JinaBridge, LocalFallbackBridge } from '../../integration/jinaBridge.js'
+import {
+  createTavilyHttpError,
+  normalizeTavilyApiKeys,
+  normalizeTavilyRequestError,
+  withTavilyApiKeyFailover,
+} from '../../integration/tavilyApiKeys.js'
 
 interface SearchHit {
   url: string
@@ -37,7 +43,8 @@ interface SearchHit {
 }
 
 interface WebPoiDiscoveryOptions {
-  tavilyApiKey: string
+  tavilyApiKey?: string
+  tavilyApiKeys?: string[]
   tavilyTimeoutMs?: number
   query: DbQueryFn
   /** LLM 配置（用于 mention 提取） */
@@ -333,13 +340,14 @@ function resolveAllowedDomains(profile: SceneProfile, blockedDomains: Iterable<s
 }
 
 export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): SkillDefinition {
-  const tavilyApiKey = options.tavilyApiKey
+  const tavilyApiKeys = normalizeTavilyApiKeys([options.tavilyApiKey, ...(options.tavilyApiKeys || [])])
   const tavilyTimeoutMs = options.tavilyTimeoutMs || 12000
   const maxSearchRounds = options.maxSearchRounds || 2
   const maxResults = options.maxResults || 10
+  const activeTavilyKeyIndex = { value: 0 }
 
   const extractClient = new TavilyExtractClient({
-    apiKey: tavilyApiKey,
+    apiKeys: tavilyApiKeys,
     timeoutMs: tavilyTimeoutMs,
   })
 
@@ -407,9 +415,10 @@ export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): Ski
       return {
         tavily: {
           name: 'tavily',
-          ready: !!tavilyApiKey,
-          degraded: !tavilyApiKey,
+          ready: tavilyApiKeys.length > 0,
+          degraded: tavilyApiKeys.length === 0,
           mode: 'remote' as const,
+          details: { keyCount: tavilyApiKeys.length },
         },
         llm: {
           name: 'llm',
@@ -458,7 +467,8 @@ export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): Ski
 
       try {
         const result = await runPipeline(query, scope, effectiveMaxResults, {
-          tavilyApiKey,
+          tavilyApiKeys,
+          activeTavilyKeyIndex,
           tavilyTimeoutMs,
           maxSearchRounds,
           extractClient,
@@ -496,7 +506,8 @@ export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): Ski
 // ── pipeline 内部实现 ──
 
 interface PipelineContext {
-  tavilyApiKey: string
+  tavilyApiKeys: string[]
+  activeTavilyKeyIndex: { value: number }
   tavilyTimeoutMs: number
   maxSearchRounds: number
   extractClient: TavilyExtractClient
@@ -882,7 +893,7 @@ async function runTavilySearch(
   blockedDomains: Iterable<string> = [],
   blockedUrls: Iterable<string> = [],
 ): Promise<SearchHit[]> {
-  if (!ctx.tavilyApiKey) {
+  if (ctx.tavilyApiKeys.length === 0) {
     ctx.logger.warn(`[Tavily] 无API key，跳过搜索`)
     return []
   }
@@ -892,31 +903,47 @@ async function runTavilySearch(
 
   // 并发发出所有 query，不再串行等待
   const fetchOne = async (q: string): Promise<SearchHit[]> => {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), ctx.tavilyTimeoutMs)
     try {
-      const res = await fetch('https://api.tavily.com/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          api_key: ctx.tavilyApiKey,
-          query: q,
-          search_depth: 'basic',
-          max_results: MAX_TAVILY_RESULTS,
-          include_answer: false,
-          include_raw_content: false,
-          include_domains: allowedDomains,
-        }),
-        signal: controller.signal,
+      const { result, keyIndex, keyLabel } = await withTavilyApiKeyFailover({
+        apiKeys: ctx.tavilyApiKeys,
+        startIndex: ctx.activeTavilyKeyIndex.value,
+        onKeyError: (error, context) => {
+          ctx.logger.warn(`[Tavily] key=${context.keyLabel} 查询失败(${q}): ${error.message}`)
+        },
+        async operation(apiKey, context) {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), ctx.tavilyTimeoutMs)
+          try {
+            const res = await fetch('https://api.tavily.com/search', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                api_key: apiKey,
+                query: q,
+                search_depth: 'basic',
+                max_results: MAX_TAVILY_RESULTS,
+                include_answer: false,
+                include_raw_content: false,
+                include_domains: allowedDomains,
+              }),
+              signal: controller.signal,
+            })
+
+            if (!res.ok) {
+              const errText = await res.text().catch(() => '')
+              throw createTavilyHttpError(res.status, errText, context.keyLabel)
+            }
+
+            return await res.json() as { results?: Array<{ title?: string; content?: string; url?: string }> }
+          } catch (error) {
+            throw normalizeTavilyRequestError(error, context.keyLabel)
+          } finally {
+            clearTimeout(timer)
+          }
+        },
       })
-      clearTimeout(timer)
-
-      if (!res.ok) {
-        ctx.logger.warn(`[Tavily] HTTP ${res.status} for query="${q}"`)
-        return []
-      }
-
-      const data = await res.json() as { results?: Array<{ title?: string; content?: string; url?: string }> }
+      ctx.activeTavilyKeyIndex.value = keyIndex
+      const data = result
       const hits: SearchHit[] = []
       const filteredUrls: string[] = []
       for (const item of data.results || []) {
@@ -936,10 +963,11 @@ async function runTavilySearch(
         const blockedHosts = collectHostnames(filteredUrls)
         ctx.logger.info(`[Tavily] 已过滤 ${filteredUrls.length} 条黑名单结果${blockedHosts.length > 0 ? ` domains=[${blockedHosts.join(', ')}]` : ''}`)
       }
+      ctx.logger.info(`[Tavily] query="${q}" key=${keyLabel} 返回 ${hits.length} 条候选`)
       return hits
     } catch (err) {
-      clearTimeout(timer)
-      ctx.logger.warn(`[Tavily] 查询失败(${q}): ${err instanceof Error ? err.message : String(err)}`)
+      const normalizedError = normalizeTavilyRequestError(err)
+      ctx.logger.warn(`[Tavily] 查询失败(${q}): ${normalizedError.message}`)
       return []
     }
   }

@@ -6,12 +6,12 @@ import { SessionManager } from './agent/SessionManager.js'
 import { SurfaceChatRuntime } from './chat/SurfaceChatRuntime.js'
 import { createApp } from './app.js'
 import { GeoLoomAgent } from './agent/GeoLoomAgent.js'
-import { NarrativeRuntime } from './narrative/NarrativeRuntime.js'
 import { RemoteFirstFaissIndex } from './integration/faissIndex.js'
 import { RemoteFirstOSMBridge } from './integration/osmBridge.js'
 import { PostgisPool } from './integration/postgisPool.js'
 import { JinaBridge } from './integration/jinaBridge.js'
 import { RemoteFirstPythonBridge } from './integration/pythonBridge.js'
+import { resolveTavilyApiKeys } from './integration/tavilyApiKeys.js'
 import { LongTermMemory } from './memory/LongTermMemory.js'
 import { MemoryManager } from './memory/MemoryManager.js'
 import { ProfileManager } from './memory/ProfileManager.js'
@@ -47,7 +47,25 @@ function inferSearchPlaceKind(placeName = '') {
   return 'generic'
 }
 
+/**
+ * 启动期错误兜底描述：err.message 为空时降级到 code / stack 首行 / toString，
+ * 避免出现 "[xxx] 索引构建失败: " 这种空冒号、用户无法定位真实原因的诊断输出。
+ */
+function describeStartupError(err: unknown): string {
+  if (err instanceof Error) {
+    const msg = err.message?.trim()
+    if (msg) return msg
+    const code = (err as Error & { code?: unknown }).code
+    if (typeof code === 'string' && code) return `(无 message) code=${code}`
+    const stackHead = err.stack?.split('\n')[0]?.trim()
+    if (stackHead) return `(无 message) ${stackHead}`
+    return err.toString() || '(unknown error)'
+  }
+  return String(err) || '(unknown error)'
+}
+
 const catalog = createPostgisCatalog()
+const tavilyApiKeys = resolveTavilyApiKeys()
 const pool = new PostgisPool({
   queryTimeoutMs: Number(process.env.POSTGRES_QUERY_TIMEOUT_MS || '5000'),
 })
@@ -146,9 +164,9 @@ registry.register(createMultiSearchEngineSkill({
   timeoutMs: Number(process.env.MULTI_SEARCH_TIMEOUT_MS || '10000'),
   maxEngines: Number(process.env.MULTI_SEARCH_MAX_ENGINES || '3'),
 }))
-if (process.env.TAVILY_API_KEY) {
+if (tavilyApiKeys.length > 0) {
   registry.register(createTavilySearchSkill({
-    apiKey: process.env.TAVILY_API_KEY,
+    apiKeys: tavilyApiKeys,
     timeoutMs: Number(process.env.TAVILY_TIMEOUT_MS || '15000'),
   }))
 }
@@ -160,9 +178,9 @@ registry.register(createEntityAlignmentSkill({
 
 // Web POI Discovery Skill V2：Tavily Search + Extract + LLM mention提取 + shortlist匹配
 // mention 提取用专属小模型（MENTION_LLM_*），降级到主 LLM（LLM_*）
-if (process.env.TAVILY_API_KEY) {
+if (tavilyApiKeys.length > 0) {
   registry.register(createWebPoiDiscoverySkill({
-    tavilyApiKey: process.env.TAVILY_API_KEY,
+    tavilyApiKeys,
     llmBaseUrl: process.env.MENTION_LLM_BASE_URL || process.env.LLM_BASE_URL,
     llmApiKey: process.env.MENTION_LLM_API_KEY || process.env.LLM_API_KEY,
     llmModel: process.env.MENTION_LLM_MODEL || process.env.LLM_MODEL,
@@ -178,7 +196,7 @@ categoryIndex.build(
   (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   jinaBridge,
 ).catch((err) => {
-  console.warn(`[CategoryEmbeddingIndex] 索引构建失败: ${err instanceof Error ? err.message : String(err)}`)
+  console.warn(`[CategoryEmbeddingIndex] 索引构建失败: ${describeStartupError(err)}`)
 })
 
 // 启动时验证 pgvector 扩展 + POI embedding 覆盖率
@@ -207,7 +225,7 @@ categoryIndex.build(
       console.log('[Embedding] 提示：首次查询时会按需计算 POI embedding 并缓存，无需全量预计算')
     }
   } catch (err) {
-    console.warn(`[Embedding] 验证失败: ${err instanceof Error ? err.message : String(err)}`)
+    console.warn(`[Embedding] 验证失败: ${describeStartupError(err)}`)
   }
 })()
 
@@ -233,14 +251,8 @@ const defaultChat = new GeoLoomAgent({
   poiEmbeddingCache,
   intentClassifier,
 })
-const narrativeChat = new NarrativeRuntime({
-  registry,
-  version,
-})
-
 const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
-  narrativeRuntime: narrativeChat,
 })
 
 const app = createApp({
@@ -253,7 +265,6 @@ const app = createApp({
     (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   ),
   chat,
-  narrativeRuntime: narrativeChat,
 })
 
 const shutdown = async () => {

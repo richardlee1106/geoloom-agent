@@ -97,7 +97,7 @@ describe('InMemoryLLMProvider', () => {
       messages: [
         {
           role: 'user',
-          content: '请快速读懂当前区域，用简洁但有洞察的方式总结主导业态、活力热点、异常点，以及最值得关注的机会。',
+          content: '请快速读懂当前区域，用简洁的方式总结这里是什么样的片区、主要特征和热点。',
         },
       ],
       tools: [],
@@ -182,6 +182,41 @@ describe('InMemoryLLMProvider', () => {
     expect(parsed).toMatchObject({
       queryType: 'area_overview',
       anchorSource: 'map_view',
+      needsClarification: false,
+      clarificationHint: null,
+    })
+  })
+
+  it('classifies nearby supply-gap questions as area_overview in intent-classifier mode', async () => {
+    const provider = new InMemoryLLMProvider()
+
+    const result = await provider.complete({
+      messages: [
+        {
+          role: 'system',
+          content: '你是 GeoLoom V4 的意图理解器。你只能返回一个 JSON 对象，不能输出解释，不能调用 tools。',
+        },
+        {
+          role: 'user',
+          content: [
+            '请先理解用户原问题，再判断应该进入哪条 GeoLoom 主链路。',
+            'user_query: 武汉大学附近适合补什么配套？请简洁说明理由。',
+            'router_hint: unsupported',
+            'has_spatial_view: false',
+            'has_user_location: false',
+            'has_regions: false',
+          ].join('\n'),
+        },
+      ],
+      tools: [],
+    })
+
+    expect(result.finishReason).toBe('stop')
+    const parsed = JSON.parse(String(result.assistantMessage.content || '{}'))
+    expect(parsed).toMatchObject({
+      queryType: 'area_overview',
+      anchorSource: 'place',
+      placeName: '武汉大学',
       needsClarification: false,
       clarificationHint: null,
     })

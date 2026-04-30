@@ -1,5 +1,5 @@
 # Kill processes occupying specified ports
-$ports = @(3000, 3411, 8100, 5100, 3210)
+$ports = @(5173, 3411, 8100, 5100, 3210)
 foreach ($p in $ports) {
   try {
     $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue

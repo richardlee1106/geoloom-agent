@@ -83,29 +83,6 @@ function wgs84ToGcj02(lon: number, lat: number): LonLatTuple {
   return [mgLon, mgLat]
 }
 
-function normalizeSelectedCategories(rawSelectedCategories: unknown): string[] {
-  if (!Array.isArray(rawSelectedCategories) || rawSelectedCategories.length === 0) {
-    return []
-  }
-
-  const flattened = []
-  for (const item of rawSelectedCategories) {
-    if (Array.isArray(item) && item.length > 0) {
-      const leaf = item[item.length - 1]
-      if (typeof leaf === 'string' && leaf.trim()) {
-        flattened.push(leaf.trim())
-      }
-      continue
-    }
-
-    if (typeof item === 'string' && item.trim()) {
-      flattened.push(item.trim())
-    }
-  }
-
-  return [...new Set(flattened)]
-}
-
 function inferAnalysisScale(zoom: unknown): string {
   const numericZoom = Number(zoom)
   if (!Number.isFinite(numericZoom) || numericZoom <= 0) return 'district'
@@ -399,7 +376,6 @@ export function useSpatialRequestBuilder({
   }
 
   return {
-    normalizeSelectedCategories,
     hasCustomSelection,
     shouldRunDeepSpatialMode,
     shouldCaptureSnapshot,

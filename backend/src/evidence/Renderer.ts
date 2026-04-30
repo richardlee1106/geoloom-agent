@@ -10,6 +10,13 @@ function formatDistance(distance: unknown) {
   return `${Math.round(numeric)} 米`
 }
 
+function formatSimilarityScore(value: unknown) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '--'
+  const normalized = numeric <= 1 ? numeric : numeric / 100
+  return `${Math.round(normalized * 100)}%`
+}
+
 function trimClause(text: unknown) {
   return String(text || '').trim().replace(/[；;。]+$/u, '')
 }
@@ -125,30 +132,6 @@ function countLowSignalBuckets(buckets: Array<{ label: string, value: number }> 
   return buckets
     .filter((bucket) => lowSignalLabels.has(String(bucket.label || '').trim()))
     .reduce((sum, bucket) => sum + Number(bucket.value || 0), 0)
-}
-
-function inferAreaOpportunity(buckets: Array<{ label: string, value: number }> = [], total = 0) {
-  if (total <= 0) return '样本还不够，机会判断需要更多周边数据。'
-
-  const bucketMap = new Map(buckets.map((bucket) => [bucket.label, bucket.value]))
-  const focus = [
-    ['生活服务', '日常生活服务还可以继续补位'],
-    ['医疗保健服务', '医疗类配套偏弱，适合做补缺观察'],
-    ['体育休闲服务', '休闲与停留型内容还有补充空间'],
-    ['住宿服务', '停留型配套不算强，可以继续观察'],
-  ] as const
-
-  const missing = focus.find(([label]) => !bucketMap.has(label))
-  if (missing) {
-    return missing[1]
-  }
-
-  const sparse = focus.find(([label]) => (bucketMap.get(label) || 0) / total < 0.12)
-  if (sparse) {
-    return sparse[1]
-  }
-
-  return '结构已经比较完整，更值得盯住的是把高频业态做得更有差异化。'
 }
 
 type SemanticLabel =
@@ -321,6 +304,10 @@ function inferAreaQuestionMode(view: EvidenceView) {
   return 'summary'
 }
 
+function getAreaTailSectionTitle(questionMode: string) {
+  return questionMode === 'opportunity' ? '机会与风险' : '补充说明'
+}
+
 function describeAreaSubject(view: EvidenceView) {
   const subjectTitle = String(view.areaSubject?.title || '').trim()
   const subjectConfidence = String(view.areaSubject?.confidence || '').trim()
@@ -376,6 +363,7 @@ function describeRepresentativePoiRoles(view: EvidenceView) {
 }
 
 function buildStructuredAreaMarkdown(view: EvidenceView, questionMode: string) {
+  const tailSectionTitle = getAreaTailSectionTitle(questionMode)
   const dominant = (view.areaProfile?.dominantCategories || [])
     .slice(0, 3)
     .map((bucket) => formatInsightCategory(bucket.label))
@@ -394,7 +382,7 @@ function buildStructuredAreaMarkdown(view: EvidenceView, questionMode: string) {
     describeEncodedRegionFeatures(view),
     describeRepresentativePoiRoles(view),
     semanticContext,
-    dominant ? `供给结构主要由${dominant}支撑` : '',
+    dominant ? `${questionMode === 'opportunity' ? '供给结构主要由' : '主要结构目前由'}${dominant}支撑` : '',
     sampleNames.length > 0 ? `代表性样本包括${sampleNames.join('、')}` : '',
     questionMode === 'opportunity' && opportunitySignal?.title
       ? `从经营视角看，当前更值得优先追的是**${opportunitySignal.title}**`
@@ -406,11 +394,10 @@ function buildStructuredAreaMarkdown(view: EvidenceView, questionMode: string) {
     anomaly ? `结构上需要特别留意：${anomaly.detail}` : '',
   ]
 
-  const riskLines = questionMode === 'semantic'
+  const tailLines = questionMode === 'semantic'
     ? [
-        semanticContext ? `片区语义判断更接近：${semanticContext}` : '',
-        anomaly ? `当前最明显的结构风险是${anomaly.detail}` : '',
-        opportunitySignal ? `如果继续往经营机会看，当前更值得关注的是${opportunitySignal.detail}` : '',
+        anomaly ? `结构上还需要留意：${anomaly.detail}` : '',
+        '当前结论以片区语义和结构证据为主，暂不展开经营判断。',
         confidenceTail,
       ]
     : questionMode === 'opportunity'
@@ -420,10 +407,15 @@ function buildStructuredAreaMarkdown(view: EvidenceView, questionMode: string) {
           anomaly ? `结构层面的隐患是${anomaly.detail}` : '',
           confidenceTail,
         ]
+      : questionMode === 'anomaly'
+        ? [
+            anomaly ? `当前最明显的异常是${anomaly.detail}` : '',
+            '当前结论以结构异常和热点分布为主，暂不展开经营判断。',
+            confidenceTail,
+          ]
       : [
-          opportunitySignal ? `当前更值得继续追的机会是${opportunitySignal.detail}` : '',
-          competitionWarning ? `需要同步警惕：${competitionWarning.title}` : '',
-          anomaly ? `异常点主要体现在${anomaly.detail}` : '',
+          anomaly ? `结构上还需要留意：${anomaly.detail}` : '',
+          '当前结论以区域主语、关键特征和热点结构为主，暂不展开经营判断。',
           confidenceTail,
         ]
 
@@ -431,13 +423,14 @@ function buildStructuredAreaMarkdown(view: EvidenceView, questionMode: string) {
     buildMarkdownSection('区域主语', [describeAreaSubject(view)]),
     buildMarkdownSection('关键特征', keyFeatureLines),
     buildMarkdownSection('热点与结构', hotspotLines),
-    buildMarkdownSection('机会与风险', riskLines),
+    buildMarkdownSection(tailSectionTitle, tailLines),
   ]
     .filter(Boolean)
     .join('\n\n')
 }
 
 function buildFallbackAreaMarkdown(view: EvidenceView, questionMode: string) {
+  const tailSectionTitle = getAreaTailSectionTitle(questionMode)
   const buckets = [...(view.buckets || [])].sort((left, right) => right.value - left.value)
   const dominant = buckets
     .slice(0, 3)
@@ -457,15 +450,19 @@ function buildFallbackAreaMarkdown(view: EvidenceView, questionMode: string) {
   }
 
   const warningText = evidenceWarnings.length > 0
-    ? `由于${evidenceWarnings.join('，')}，这里先不直接下机会结论`
-    : '目前还缺少热点聚合、竞争密度和供需关系证据，这里先不直接下机会结论'
+    ? `由于${evidenceWarnings.join('，')}，这里先只给基础结构观察`
+    : questionMode === 'opportunity'
+      ? '目前还缺少热点聚合、竞争密度和供需关系证据，这里先不直接下经营判断'
+      : '目前还缺少热点聚合和更稳定的结构证据，这里先只给基础结构观察'
   const semanticContext = inferAreaSemanticContext(view)
 
   const finalLine = questionMode === 'opportunity'
     ? '建议继续补充竞争密度、需求来源和热点分布证据后，再做正式开店判断'
     : questionMode === 'semantic'
       ? '建议继续补充 AOI、用地和结构分布证据后，再做正式片区归类'
-      : '建议继续补充热点聚合、竞争密度和供需关系证据后，再做正式片区判断'
+      : questionMode === 'anomaly'
+        ? '建议继续补充热点聚合和结构分布证据后，再判断异常是否稳定'
+        : '建议继续补充热点聚合和结构分布证据后，再做正式片区总结'
 
   return [
     buildMarkdownSection('区域主语', [describeAreaSubject(view)]),
@@ -483,7 +480,7 @@ function buildFallbackAreaMarkdown(view: EvidenceView, questionMode: string) {
         ? '当前只拿到基础周边样本，暂时还不够直接判定它更像哪类片区'
         : '',
     ]),
-    buildMarkdownSection('机会与风险', [finalLine]),
+    buildMarkdownSection(tailSectionTitle, [finalLine]),
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -506,9 +503,51 @@ export class Renderer {
     }
 
     if (view.type === 'semantic_candidate') {
-      const names = view.items.slice(0, 3).map((item) => `${item.name}（相似度 ${((item.score || 0) * 100).toFixed(0)}%）`)
+      const regions = (view.regions || [])
+        .filter((region) => Boolean(region?.name))
+        .slice(0, 5)
+      if (regions.length === 0) {
+        return buildMarkdownSection('结论', [
+          `以${anchorName}为参考，本轮还没有收敛出稳定的相似片区候选。你可以换一个更明确的参照地点，或补充想比较的片区特征。`,
+        ])
+      }
+
+      const referenceDimensions = Array.isArray(view.meta.referenceDimensions)
+        ? view.meta.referenceDimensions
+          .map((dimension) => {
+            if (!dimension || typeof dimension !== 'object') return ''
+            return String((dimension as Record<string, unknown>).label || '').trim()
+          })
+          .filter(Boolean)
+          .slice(0, 3)
+        : []
+      const lead = regions[0]
+      const leadDimensions = (lead?.dimensions || [])
+        .slice(0, 3)
+        .map((dimension) => `${dimension.label} ${formatSimilarityScore(dimension.score)}`)
+        .filter(Boolean)
+      const names = regions.map((region) => {
+        const dimensions = (region.dimensions || [])
+          .slice(0, 3)
+          .map((dimension) => `${dimension.label} ${formatSimilarityScore(dimension.score)}`)
+          .filter(Boolean)
+        const summary = trimClause(region.summary)
+        const clauses = [
+          `${region.name}（整体相似度 ${formatSimilarityScore(region.score)}）`,
+          dimensions.length > 0 ? `维度匹配：${dimensions.join('、')}` : '',
+          summary ? `片区画像：${summary}` : '',
+        ]
+        return clauses.filter(Boolean).join('；')
+      })
+
       return [
-        buildMarkdownSection('结论', [`以${anchorName}为参考，当前最相似的片区已经收敛到以下候选`]),
+        buildMarkdownSection('结论', [
+          [
+            `以${anchorName}为参考，当前最接近的候选是${lead?.name || '相似片区'}，整体相似度 ${formatSimilarityScore(lead?.score)}。`,
+            referenceDimensions.length > 0 ? `本轮重点参照维度是${referenceDimensions.join('、')}。` : '',
+            leadDimensions.length > 0 ? `其中最接近的维度包括${leadDimensions.join('、')}。` : '',
+          ].filter(Boolean).join(''),
+        ]),
         buildMarkdownNumberedSection('相似片区', names),
       ]
         .filter(Boolean)
@@ -553,6 +592,7 @@ export class Renderer {
 
     if (view.type === 'area_overview') {
       const questionMode = inferAreaQuestionMode(view)
+      const tailSectionTitle = getAreaTailSectionTitle(questionMode)
       // entity_alignment 对齐结果：当存在时，增加「联网验证样本」section
       const alignmentSummary = view.meta.entity_alignment as Record<string, unknown> | undefined
       const alignmentItems = (view.items || []).filter(
@@ -580,7 +620,11 @@ export class Renderer {
         const base = [
           buildMarkdownSection('区域主语', [describeAreaSubject(view)]),
           buildMarkdownSection('关键特征', ['当前还没有足够的周边样本，暂时只能给出基础汇总']),
-          buildMarkdownSection('机会与风险', ['没法稳定判断主导业态、热点和机会，建议先补充可验证样本']),
+          buildMarkdownSection(tailSectionTitle, [
+            questionMode === 'opportunity'
+              ? '没法稳定判断供给、竞争和机会，建议先补充可验证样本'
+              : '没法稳定判断区域主语、关键特征和热点结构，建议先补充可验证样本',
+          ]),
         ]
           .filter(Boolean)
           .join('\n\n')

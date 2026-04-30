@@ -103,4 +103,52 @@ describe('AgentMessageCard', () => {
     expect(wrapper.text()).toContain('Tavily')
     expect(wrapper.text()).toContain('POI发现')
   })
+
+  it('embeds the similar-region evidence panel on the main agent card', () => {
+    const message = createMessage()
+    message.evidenceView = {
+      type: 'semantic_candidate',
+      anchor: {
+        resolvedPlaceName: '武汉大学',
+      },
+      items: [],
+      regions: [
+        {
+          regionId: 'region_wuda',
+          name: '街道口-武大商圈',
+          score: 0.91,
+          rank: 1,
+          summary: '高校密集、咖啡和夜间活跃度较高',
+          dimensions: [
+            { key: 'campus_vibe', label: '校园氛围', score: 0.89 },
+            { key: 'food_density', label: '餐饮密度', score: 0.8 },
+          ],
+        },
+      ],
+      meta: {
+        referenceDimensions: [
+          { key: 'campus_vibe', label: '校园氛围', score: 0.9 },
+        ],
+      },
+    }
+    message.providerReady = true
+    message.providerName = 'GeoLoom Agent'
+    message.modelId = 'test-model'
+    message.sessionId = 'session-similar'
+
+    const wrapper = mount(AgentMessageCard, {
+      props: {
+        message,
+        messageHtml: '<p>与武汉大学更接近的片区已经整理好了。</p>',
+        formattedTime: '14:32',
+        embeddedIntentMode: 'macro',
+        showTagCloud: false,
+      },
+    })
+
+    expect(wrapper.find('.v4-evidence-panel').exists()).toBe(true)
+    expect(wrapper.text()).toContain('参考维度')
+    expect(wrapper.text()).toContain('街道口-武大商圈')
+    expect(wrapper.text()).toContain('校园氛围')
+  })
 })

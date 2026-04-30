@@ -5,6 +5,12 @@
  */
 import crypto from 'node:crypto'
 import type { SkillDefinition, SkillActionDefinition, SkillExecutionResult } from '../types.js'
+import {
+  createTavilyHttpError,
+  normalizeTavilyApiKeys,
+  normalizeTavilyRequestError,
+  withTavilyApiKeyFailover,
+} from '../../integration/tavilyApiKeys.js'
 
 // ── 缓存 ──
 interface CacheEntry { data: unknown; ts: number }
@@ -38,45 +44,65 @@ interface TavilyResult { title: string; content: string; url: string; score: num
 
 async function fetchTavily(
   query: string,
-  apiKey: string,
+  apiKeys: string[],
+  startIndex: number,
   searchDepth: string,
   maxResults: number,
   timeoutMs: number,
-): Promise<{ answer?: string; results: TavilyResult[] }> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+): Promise<{ answer?: string; results: TavilyResult[]; keyIndex: number; keyLabel: string }> {
+  const { result, keyIndex, keyLabel } = await withTavilyApiKeyFailover({
+    apiKeys,
+    startIndex,
+    async operation(apiKey, context) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-  try {
-    const resp = await fetch(TAVILY_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        search_depth: searchDepth,
-        max_results: maxResults,
-        include_answer: true,
-      }),
-      signal: controller.signal,
-    })
-    if (!resp.ok) return { results: [] }
-    const json = await resp.json() as { answer?: string; results?: TavilyResult[] }
-    return { answer: json.answer, results: json.results || [] }
-  } catch {
-    return { results: [] }
-  } finally {
-    clearTimeout(timer)
+      try {
+        const resp = await fetch(TAVILY_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            api_key: apiKey,
+            query,
+            search_depth: searchDepth,
+            max_results: maxResults,
+            include_answer: true,
+          }),
+          signal: controller.signal,
+        })
+        if (!resp.ok) {
+          const responseBody = await resp.text().catch(() => '')
+          throw createTavilyHttpError(resp.status, responseBody, context.keyLabel)
+        }
+
+        const json = await resp.json() as { answer?: string; results?: TavilyResult[] }
+        return { answer: json.answer, results: json.results || [] }
+      } catch (error) {
+        throw normalizeTavilyRequestError(error, context.keyLabel)
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+  })
+
+  return {
+    ...result,
+    keyIndex,
+    keyLabel,
   }
 }
 
 // ── Skill 定义 ──
 export interface TavilySearchSkillOptions {
-  apiKey: string
+  apiKey?: string
+  apiKeys?: string[]
   timeoutMs?: number
 }
 
 export function createTavilySearchSkill(options: TavilySearchSkillOptions): SkillDefinition {
   const timeoutMs = options.timeoutMs || 15000
+  const apiKeys = normalizeTavilyApiKeys([options.apiKey, ...(options.apiKeys || [])])
+  let activeKeyIndex = 0
 
   const actions: Record<string, SkillActionDefinition> = {
     search_web: {
@@ -115,10 +141,11 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
       return {
         tavily: {
           name: 'tavily',
-          ready: Boolean(options.apiKey),
+          ready: apiKeys.length > 0,
           mode: 'remote' as const,
-          degraded: !options.apiKey,
-          reason: options.apiKey ? undefined : 'missing_api_key',
+          degraded: apiKeys.length === 0,
+          reason: apiKeys.length > 0 ? undefined : 'missing_api_key',
+          details: { keyCount: apiKeys.length },
         },
       }
     },
@@ -138,7 +165,7 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
         return { ok: false, error: { code: 'missing_query', message: '缺少 query 参数' }, meta: { action, audited: false } }
       }
 
-      if (!options.apiKey) {
+      if (apiKeys.length === 0) {
         return { ok: false, error: { code: 'no_api_key', message: 'Tavily API Key 未配置' }, meta: { action, audited: false } }
       }
 
@@ -154,25 +181,39 @@ export function createTavilySearchSkill(options: TavilySearchSkillOptions): Skil
       }
 
       let answer = ''
+      let succeededQueryCount = 0
+      let lastErrorMessage = ''
       const mergedMap = new Map<string, TavilyResult>()
-      const responses = await Promise.all(
-        effectiveQueries.map(async (query) => ({
-          query,
-          response: await fetchTavily(query, options.apiKey, searchDepth, maxResults, timeoutMs),
-        })),
-      )
-      for (const { query, response } of responses) {
-        console.log(`[诊断:Tavily] query="${query}", results=${response.results.length}, hasAnswer=${!!response.answer}`)
-        if (!answer && response.answer) {
-          answer = response.answer
-        }
-        for (const result of response.results) {
-          const key = result.url || `${result.title}::${result.content}`
-          if (!mergedMap.has(key)) {
-            mergedMap.set(key, result)
+      for (const query of effectiveQueries) {
+        try {
+          const response = await fetchTavily(query, apiKeys, activeKeyIndex, searchDepth, maxResults, timeoutMs)
+          activeKeyIndex = response.keyIndex
+          succeededQueryCount += 1
+          console.log(`[诊断:Tavily] query="${query}", key=${response.keyLabel}, results=${response.results.length}, hasAnswer=${!!response.answer}`)
+          if (!answer && response.answer) {
+            answer = response.answer
           }
+          for (const result of response.results) {
+            const key = result.url || `${result.title}::${result.content}`
+            if (!mergedMap.has(key)) {
+              mergedMap.set(key, result)
+            }
+          }
+        } catch (error) {
+          const normalizedError = normalizeTavilyRequestError(error)
+          lastErrorMessage = normalizedError.message
+          console.warn(`[Tavily] query="${query}" failed: ${normalizedError.message}`)
         }
       }
+
+      if (succeededQueryCount === 0 && lastErrorMessage) {
+        return {
+          ok: false,
+          error: { code: 'tavily_request_failed', message: lastErrorMessage },
+          meta: { action, audited: false },
+        }
+      }
+
       const results = [...mergedMap.values()].slice(0, maxResults)
 
       const data = { answer, results }

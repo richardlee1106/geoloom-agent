@@ -97,6 +97,17 @@
       回答生成中，过程记录会实时补全。
     </div>
 
+    <V4EvidencePanel
+      v-if="showSimilarityEvidencePanel"
+      class="agent-evidence-panel"
+      :message="message"
+      :provider-ready="panelProviderReady"
+      :provider-label="panelProviderLabel"
+      :model-id="panelModelId"
+      :degraded-dependencies="panelDegradedDependencies"
+      :session-id="panelSessionId"
+    />
+
     <EmbeddedTagCloud
       v-if="showTagCloud"
       :pois="message?.pois || []"
@@ -114,6 +125,7 @@
 import { computed, ref, watch } from 'vue'
 
 import EmbeddedTagCloud from './EmbeddedTagCloud.vue'
+import V4EvidencePanel from './V4EvidencePanel.vue'
 import { buildAgentRunSnapshot } from '../utils/agentRunTimeline'
 
 const props = defineProps({
@@ -173,6 +185,7 @@ function formatQueryType(value) {
   if (normalized === 'area_overview') return '区域解读'
   if (normalized === 'similar_regions') return '相似片区'
   if (normalized === 'compare_places') return '双地点比较'
+  if (normalized === 'composite_recommendation') return '复合行程推荐'
   return pickText(value)
 }
 
@@ -392,6 +405,12 @@ watch(
 )
 
 const hasAnswer = computed(() => Boolean(String(props.messageHtml || '').trim()))
+const showSimilarityEvidencePanel = computed(() => props.message?.evidenceView?.type === 'semantic_candidate')
+const panelProviderReady = computed(() => props.message?.providerReady === true)
+const panelProviderLabel = computed(() => pickText(props.message?.providerName, 'GeoLoom Agent'))
+const panelModelId = computed(() => pickText(props.message?.modelId))
+const panelDegradedDependencies = computed(() => Array.isArray(props.message?.degradedDependencies) ? props.message.degradedDependencies : [])
+const panelSessionId = computed(() => pickText(props.message?.sessionId))
 const webSearchBadge = computed(() => {
   const msg = props.message
   if (!msg) return null
@@ -708,6 +727,10 @@ const processSummaryDetail = computed(() => {
 
 .pending-answer {
   color: rgba(189, 198, 215, 0.82);
+}
+
+.agent-evidence-panel {
+  margin-top: -2px;
 }
 
 .agent-debug-grid {

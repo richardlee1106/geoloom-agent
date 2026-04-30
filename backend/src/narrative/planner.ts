@@ -1,8 +1,28 @@
+// @ts-nocheck
+//
+// 该文件是 v3 narrative 系统的旧实现，依赖的 ./gcj02.js / ./nameAlias.js
+// 等 helper 已在前一轮清理中删除，因此 TS 编译失败。
+//
+// 当前状态：纯死代码，整个 backend/src 没有任何文件 import 本模块。
+// 与同目录 NarrativeRuntime.ts 保持一致策略：加 @ts-nocheck 跳过类型检查，
+// 保留代码作为「阶段 3 narrative 算法重建」的判定词典参考素材
+//（CIVIC / CULTURE / RELIGION / MEDICAL / RESIDENTIAL 等正则与角色映射）。
+//
+// 阶段 3 真正动后端时，需要按 docs/plans/2026-04-29-narrative-engine-rebuild-spec.md
+// §1 叙事对象分级与 §4 区域候选规范，重新设计文件结构后再决定哪些代码保留。
+//
 import type { EvidenceItem, RegionFeatureTag } from '../chat/types.js'
 import { classifyRepresentativeAnchorType } from '../evidence/areaInsight/representativeAnchorPriority.js'
 import type {
+  NarrativeMacroRegionName,
+  NarrativeMacroRegionProfile,
+  NarrativeRegionCluster,
+  NarrativeMacroSpatialForm,
   NarrativeNode,
   NarrativeNodeBoundary,
+  NarrativeRelevanceField,
+  NarrativeRenderMode,
+  NarrativeScaleLevel,
   NarrativeNodeTier,
   NarrativeReasonCard,
   NarrativeTourStep,
@@ -14,6 +34,10 @@ import {
   transformGeoJsonCoordinatesWgs84ToGcj02,
   wgs84ToGcj02,
 } from './gcj02.js'
+import {
+  hasCommercialAdminPrefixAlias,
+  normalizeCommercialEntityAlias,
+} from './nameAlias.js'
 
 /**
  * Name 关键字词典：OSM landuse fclass 常把政府/党政/法院/学校等随手标为 `commercial`，
@@ -30,7 +54,11 @@ const MEDICAL_NAME_PATTERN = /(医学院|医学部|临床学院|护理学院|药
 
 const CONTINUING_EDUCATION_NAME_PATTERN = /(老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院)/u
 
-const COMMERCIAL_COMPLEX_PATTERN = /(商圈|步行街|商业街|购物中心|购物广场|商业广场|商场|广场|天地|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza)/iu
+const COMMERCIAL_COMPLEX_PATTERN = /(步行街|商业街|购物中心|购物广场|商业广场|商场|天地|汉街|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza|欧亚达|摩尔城)/iu
+const STRONG_COMMERCIAL_COMPLEX_PATTERN = /(购物中心|购物广场|商业综合体|商场|汉街|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza|欧亚达|摩尔城)/iu
+const RESIDENTIAL_COMPOUND_PATTERN = /(小区|家属区|家属院|社区|住宅区|居民区|生活区|新村|宿舍区|公寓(?:楼|区)?|(?:佳苑|家园|雅苑|华府|名苑|嘉园|豪庭|花园)(?:东区|西区|南区|北区|一区|二区|三区|四区|一期|二期|三期|四期)?$)/u
+const RESIDENTIAL_SEMANTIC_PATTERN = /(商务住宅|住宅区|居民住宅|居住小区|居住社区|公寓住宅|住宅|residential|apartment|compound)/iu
+const SYNTHETIC_DISTRICT_CONCEPT_PATTERN = /(商圈|片区|区域|地带)$/u
 
 /** OSM landuse fclass 英文代码 → 中文可读名。外补会在 zhFriendlyCategory 中基于 name 关键字覆写。*/
 const OSM_FCLASS_ZH: Record<string, string> = {
@@ -91,6 +119,17 @@ export function resolveNarrativeTourStyleLabel(style: NarrativeTourStyle): strin
 export function resolveNodeTierLabel(tier: NarrativeNodeTier | null | undefined): string {
   if (!tier) return TIER_LABELS.optional
   return TIER_LABELS[tier] || TIER_LABELS.optional
+}
+
+export function resolveScaleLevelNodeLimit(scaleLevel: NarrativeScaleLevel): number {
+  if (scaleLevel === 'macro') return 8
+  if (scaleLevel === 'meso') return 14
+  return 10
+}
+
+export function resolveNarrativeRenderMode(scaleLevel: NarrativeScaleLevel): NarrativeRenderMode {
+  if (scaleLevel === 'micro') return 'hybrid'
+  return 'fluorescent_field'
 }
 
 /**
@@ -203,16 +242,35 @@ function isGenericCategoryName(name: string) {
     || /^[\u4e00-\u9fa5]{2,6}类$/u.test(text)
 }
 
+function isSyntheticDistrictConceptName(name: string) {
+  const text = normalizeName(name).replace(/\s+/gu, '')
+  if (!text) return false
+  return SYNTHETIC_DISTRICT_CONCEPT_PATTERN.test(text)
+}
+
 function isMicroFacilityName(name: string) {
   const text = normalizeName(name)
   return /(宿舍|学生公寓|公寓[A-Z0-9一二三四五六七八九十]*栋|[A-Z0-9一二三四五六七八九十]+栋|楼栋|教学楼|实验楼|食堂|便利店|驿站|快递站|菜鸟|停车场|门岗|门卫|出入口|入口|出口|东门|西门|南门|北门|厕所|卫生间|店\)|店$|分店$)/u.test(text)
     || /(大学|学院|校区).*(图书馆|体育馆|教学楼|实验楼|行政楼|食堂|宿舍|学生公寓|便利店|快递站|驿站)/u.test(text)
+    || /([一二三四五六七八九十0-9]+号场|体育场|训练场|篮球场|足球场|网球场|羽毛球场|排球场|乒乓球场)$/u.test(text)
     || /(蔬菜批发|批发夜市|批发市场|农贸市场|菜市场|水果批发|果批|海鲜市场|水产市场|建材市场|汽配城)/u.test(text)
 }
 
 function isResidentialCompoundName(name: string) {
   const text = normalizeName(name)
-  return /(小区|家属区|家属院|社区|住宅区|居民区|生活区|新村|宿舍区)/u.test(text)
+  return RESIDENTIAL_COMPOUND_PATTERN.test(text)
+}
+
+function isResidentialSemanticNode(node: NarrativeNode) {
+  const text = [
+    normalizeName(node.name),
+    String(node.categoryMain || '').trim(),
+    String(node.categorySub || '').trim(),
+    String(node.roleLabel || '').trim(),
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return isResidentialCompoundName(node.name) || RESIDENTIAL_SEMANTIC_PATTERN.test(text)
 }
 
 function isSupportFacilityName(name: string) {
@@ -251,14 +309,19 @@ function hasRepresentativeClusterSupport(node: NarrativeNode) {
 function passesRepresentativeEntityStandard(node: NarrativeNode, summary: NarrativeViewportSummary) {
   const name = normalizeName(node.name)
   if (!name) return false
+  if (isSyntheticDistrictConceptName(name)) return false
   if (isGenericCategoryName(name)) return false
   if (isMicroFacilityName(name)) return false
-  if (isResidentialCompoundName(name)) return false
+  if (isResidentialSemanticNode(node)) return false
   if (isSupportFacilityName(name) && node.role !== 'civic_anchor' && node.role !== 'medical_anchor') return false
   if (isBasicEducationName(name) || isVocationalEducationName(name)) return false
   if (node.role === 'campus_anchor' && isIndependentMedicalAcademicName(name)) return false
   if (node.role === 'campus_anchor' && !isUniversityCampusName(name)) return false
   if (node.role === 'local_life_anchor' && !hasRepresentativeClusterSupport(node)) return false
+  if (isSingletonBrandCluster(node) && !hasStableRepresentativeSupport(node)) {
+    if (node.role !== 'commercial_anchor') return false
+    if (!hasStrongCommercialComplexSignal(node)) return false
+  }
   return true
 }
 
@@ -272,10 +335,11 @@ function haversine(left: { lon: number, lat: number }, right: { lon: number, lat
 }
 
 function buildComparableEntityKey(node: NarrativeNode) {
-  const compact = normalizeName(node.name)
+  const rawCompact = normalizeName(node.name)
     .replace(/[（(][^（）()]{0,24}[）)]/gu, '')
     .replace(/\s+/gu, '')
     .trim()
+  const compact = normalizeCommercialEntityAlias(rawCompact)
   if (!compact) return ''
 
   if (node.role === 'scenic_landmark' || /(湖|江|河|湿地|公园|景区|景点|风景区|旅游区)/u.test(`${compact} ${node.categorySub || ''}`)) {
@@ -284,7 +348,7 @@ function buildComparableEntityKey(node: NarrativeNode) {
   }
 
   if (node.role === 'commercial_anchor' || COMMERCIAL_COMPLEX_PATTERN.test(`${compact} ${node.categorySub || ''} ${node.categoryMain || ''}`)) {
-    const commercialBase = compact.replace(/(商圈|步行街|商业街|购物中心|购物广场|商业广场|商场|广场|天地|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza)$/iu, '')
+    const commercialBase = compact.replace(/(步行街|商业街|购物中心|购物广场|商业广场|商场|天地|汉街|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza|欧亚达|摩尔城)$/iu, '')
     if (commercialBase && commercialBase.length >= 4) return `commercial:${commercialBase.toLowerCase()}`
     return `commercial:${compact.toLowerCase()}`
   }
@@ -309,7 +373,7 @@ export function resolveRoleLabel(role: string) {
   if (role === 'scenic_landmark') return '景区地标'
   if (role === 'campus_anchor') return '高校锚点'
   if (role === 'medical_anchor') return '医疗配套'
-  if (role === 'commercial_anchor') return '商业街区'
+  if (role === 'commercial_anchor') return '商业节点'
   if (role === 'food_street_anchor') return '小吃街区'
   if (role === 'transit_connector') return '交通节点'
   if (role === 'local_life_anchor') return '本地生活'
@@ -443,6 +507,8 @@ function representativeSupportScore(node: NarrativeNode) {
   if (hasAoiSupport) return 3.8
   if (node.source === 'brand_cluster' && childCount >= 2) return 3 + Math.min(childCount, 6) * 0.12
   if (node.source === 'brand_cluster') return 1.4
+  if (node.source === 'cell_entity' && childCount >= 4) return 2
+  if (node.source === 'cell_entity' && childCount >= 2) return 1.5
   if (childCount >= 4) return 1.8
   if (childCount >= 2) return 1.3
   return 1
@@ -450,6 +516,23 @@ function representativeSupportScore(node: NarrativeNode) {
 
 function hasStableRepresentativeSupport(node: NarrativeNode) {
   return representativeSupportScore(node) >= 3
+}
+
+function isSingletonBrandCluster(node: NarrativeNode) {
+  return node.source === 'brand_cluster' && (node.childPoiIds?.length || 0) <= 1
+}
+
+function hasStrongCommercialComplexSignal(node: NarrativeNode) {
+  const text = [
+    normalizeName(node.name),
+    String(node.categoryMain || '').trim(),
+    String(node.categorySub || '').trim(),
+    String(node.encoderSummary || '').trim(),
+    ...(node.encoderTags || []).map((item) => String(item.label || '').trim()),
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return STRONG_COMMERCIAL_COMPLEX_PATTERN.test(text)
 }
 
 function resolveBucketOrder(mode: string, style: NarrativeTourStyle) {
@@ -476,44 +559,56 @@ function buildSelectionReason(node: NarrativeNode, summary: NarrativeViewportSum
   const bucket = node.sceneBucket || inferNodeSceneBucket(node)
   const lead = resolveSceneBucketLead(bucket)
   const roleLabel = node.roleLabel || '区域代表'
+  const supportCount = Math.max(node.childPoiIds?.length || 0, node.memberPoints?.length || 0)
+  const factLabel = (node.webFacts?.labels || [])[0] || ''
+  const factTail = factLabel ? `，还有“${factLabel}”这一层辨识度` : ''
 
   if (isContinuingEducationName(node.name)) {
     return `${node.name}更像片区气质里的温和底色，适合作为解释人文与终身教育的一笔补充。`
   }
   if (roleLabel === '景区地标') {
-    const topTag = (node.encoderTags || []).find((item) => Number(item.score || 0) >= 0.72)
-    const tagHint = topTag?.label ? `，${topTag.label}气质尤其鲜明` : ''
-    return `${node.name}最能把这片区域的${lead}感受一下子拎出来${tagHint}。`
+    if (/(江|湖|河|滩|湿地)/u.test(node.name)) {
+      return `${node.name}适合放在前面讲，因为它先把这片区域的开阔感和空间边界定下来${factTail}。`
+    }
+    return `${node.name}适合当作这条线的视觉起点，一站到这里，这片区域的${lead}就清楚了${factTail}。`
   }
-  if (roleLabel === '高校锚点') return `${node.name}能把这片区域的校园气质、人流来源和周边节奏串在一起。`
-  if (roleLabel === '医疗配套') return `${node.name}让这片区域不只是一处校园或街区，也显出医疗与专业服务的存在感。`
-  if (roleLabel === '商业街区') return `${node.name}把这片视口里最显性的消费界面和停留方式落到了实处。`
-  if (roleLabel === '小吃街区') return `${node.name}最适合拿来讲这片区域的烟火气和停留温度。`
-  if (roleLabel === '本地生活') return `${node.name}能把导览从“大地标”拉回真实日常，补足${lead}之外的生活层。`
-  if (roleLabel === '交通节点') return `${node.name}适合作为进入片区的起手点，能解释这股人流是怎么被带进来的。`
-  if (roleLabel === '政务配套') return `${node.name}能补足这片区域更稳定、更日常的一层公共服务结构。`
-  if (roleLabel === '文化场馆') return `${node.name}最能承接这片区域的人文气息，让导览不只停在功能描述。`
-  if (roleLabel === '宗教场所') return `${node.name}像这片区域里更安静的一根线索，把宗教与历史感慢慢带出来。`
-  if (roleLabel === '区域代表') return `${node.name}适合作为理解片区结构的补充背景，不必抢主角，但值得解释。`
+  if (roleLabel === '高校锚点') return `${node.name}把这片区域最稳定的人流来源托住了，周边不少节奏都是顺着它展开的。`
+  if (roleLabel === '医疗配套') return `${node.name}让这片区域不只是校园或商业，还多出一层专业服务的重量。`
+  if (roleLabel === '商业节点') return `${node.name}更适合单独展开，因为这里最能把逛街、吃饭、看电影和夜间停留的节奏讲具体。`
+  if (roleLabel === '小吃街区') return `${node.name}最能把这片区域的烟火气拉近，不用铺陈太多，气氛自己就出来了。`
+  if (roleLabel === '本地生活') return `${node.name}不一定最响亮，但最能把导览从地标拉回真实生活。`
+  if (roleLabel === '交通节点') return `${node.name}适合拿来交代入口，因为人流怎么进、怎么散，往往要从这里讲顺。`
+  if (roleLabel === '政务配套') return `${node.name}更像片区秩序感的一部分，能补足这里为什么显得稳、显得有组织。`
+  if (roleLabel === '文化场馆') return `${node.name}能把导览从功能层往人文层抬一下，让这片区域不只是“能干什么”。`
+  if (roleLabel === '宗教场所') return `${node.name}适合拿来压一压节奏，把这片区域更安静、更耐回味的一面带出来。`
+  if (roleLabel === '区域代表') {
+    if (supportCount >= 3) {
+      return `${node.name}更像一块片区底板，讲它不是为了抢主角，而是为了把周边关系先安顿好。`
+    }
+    return `${node.name}适合放在后面补一句，帮你把这片区域的骨架讲完整。`
+  }
 
   const topTag = (node.encoderTags || []).find((item) => Number(item.score || 0) >= 0.72)
   if (topTag?.label) {
-    return `${node.name}更适合作为这片区域里“${topTag.label}”这一层的代表点。`
+    return `${node.name}值得被放进来，因为它把这片区域“${topTag.label}”这一层讲得最具体。`
   }
   return `${node.name}能补足这片区域的${lead}线索。`
 }
 
 function computeStyleBoost(node: NarrativeNode, style: NarrativeTourStyle) {
   const bucket = inferNodeSceneBucket(node)
+  const strongCommercial = node.role === 'commercial_anchor' && hasStrongCommercialComplexSignal(node)
   if (style === 'local_vibe') {
     if (node.role === 'transit_connector') return 0.18
     if (node.role === 'local_life_anchor') return 0.16
+    if (strongCommercial) return 0.14
     if (bucket === '商业') return 0.12
     if (bucket === '文化') return 0.06
     if (bucket === '景观') return -0.02
     return 0
   }
   if (style === 'business_leisure') {
+    if (strongCommercial) return 0.24
     if (bucket === '商业') return 0.2
     if (node.role === 'transit_connector') return 0.12
     if (bucket === '景观') return 0.08
@@ -529,6 +624,7 @@ function computeStyleBoost(node: NarrativeNode, style: NarrativeTourStyle) {
     if (bucket === '商业') return -0.02
     return 0
   }
+  if (strongCommercial) return 0.08
   if (bucket === '景观' || bucket === '校园') return 0.08
   if (bucket === '文化' || bucket === '医疗') return 0.05
   if (node.role === 'transit_connector') return 0.02
@@ -561,10 +657,41 @@ function computeNarrativeFit(
   const summaryBoost = node.encoderSummary ? 0.1 : 0
   const sceneAlign = summary.sceneMix.some((item) => matchesSceneBucket(item, bucket)) ? 0.08 : 0
   const supportBoost = Math.min((representativeSupportScore(node) - 1) * 0.06, 0.22)
-  const singletonPenalty = node.source === 'brand_cluster' && (node.childPoiIds?.length || 0) <= 1 ? 0.04 : 0
+  const commercialBoost = node.role === 'commercial_anchor' && hasStrongCommercialComplexSignal(node) ? 0.08 : 0
+  const singletonPenalty = isSingletonBrandCluster(node)
+    ? (node.role === 'commercial_anchor' && hasStrongCommercialComplexSignal(node) ? 0.08 : 0.22)
+    : 0
   const styleBoost = computeStyleBoost(node, summary.requestedStyle)
+  const scaleBoost = computeScaleLevelBoost(node, summary)
   const specificityPenalty = computeSpecificityPenalty(node, candidates)
-  return Number((node.score + bucketBoost + encoderBoost + summaryBoost + sceneAlign + supportBoost + styleBoost - singletonPenalty - specificityPenalty).toFixed(3))
+  const aliasPenalty = node.role === 'commercial_anchor' && hasCommercialAdminPrefixAlias(node.name) ? 0.16 : 0
+  return Number((node.score + bucketBoost + encoderBoost + summaryBoost + sceneAlign + supportBoost + commercialBoost + styleBoost + scaleBoost - singletonPenalty - specificityPenalty - aliasPenalty).toFixed(3))
+}
+
+function computeScaleLevelBoost(node: NarrativeNode, summary: NarrativeViewportSummary) {
+  const scaleLevel = summary.scaleLevel || 'micro'
+  if (scaleLevel === 'macro') {
+    let boost = 0
+    if (node.source === 'aoi_context') boost += 0.18
+    if (node.role === 'district_anchor' || node.role === 'civic_anchor' || node.role === 'campus_anchor') boost += 0.08
+    if (node.role === 'transit_connector') boost -= 0.08
+    if ((node.source === 'representative_sample' || node.source === 'cell_entity') && !node.boundary) boost -= 0.06
+    return boost
+  }
+  if (scaleLevel === 'meso') {
+    let boost = 0
+    if (node.source === 'brand_cluster') boost += 0.14
+    if (node.source === 'cell_entity') boost += 0.04
+    if (node.role === 'commercial_anchor' || node.role === 'campus_anchor' || node.role === 'district_anchor') boost += 0.06
+    if (node.role === 'transit_connector') boost -= 0.04
+    return boost
+  }
+  let boost = 0
+  if (node.source === 'representative_sample') boost += 0.08
+  if (node.source === 'cell_entity') boost += 0.03
+  if (node.source === 'brand_cluster') boost -= 0.04
+  if (node.role === 'district_anchor' || node.role === 'civic_anchor') boost -= 0.08
+  return boost
 }
 
 function hasStrongSemanticSignal(node: NarrativeNode, summary: NarrativeViewportSummary) {
@@ -595,10 +722,13 @@ function computeNoiseRisk(node: NarrativeNode, summary: NarrativeViewportSummary
   if (summary.sceneMix.includes('高校') && isBasicEducationName(node.name)) risk += 0.22
   if (isGenericCategoryName(node.name)) risk += 0.3
   if (isMicroFacilityName(node.name)) risk += 0.32
-  if (isResidentialCompoundName(node.name)) risk += 0.42
+  if (isResidentialSemanticNode(node)) risk += 0.42
   if (isSupportFacilityName(node.name) && node.role !== 'civic_anchor' && node.role !== 'medical_anchor') risk += 0.28
   if (isContinuingEducationName(node.name) && bucket !== '文化') risk += 0.22
   if (node.role === 'local_life_anchor' && !hasRepresentativeClusterSupport(node)) risk += 0.12
+  if (isSingletonBrandCluster(node) && !hasStableRepresentativeSupport(node) && !(node.role === 'commercial_anchor' && hasStrongCommercialComplexSignal(node))) {
+    risk += 0.22
+  }
   if (isGenericNarrativeNoise(node) && topScore < 0.76 && !node.encoderSummary) risk += 0.24
   if (normalizeName(node.name).length <= 4 && topScore < 0.68 && !node.encoderSummary) risk += 0.1
   if (bucket === '片区' && topScore < 0.6 && !node.encoderSummary) risk += 0.12
@@ -649,6 +779,8 @@ const BUCKET_MAX_CAP: Record<string, number> = {
   交通: 4,
   片区: 3,
 }
+
+const MIN_NARRATIVE_NODE_COUNT = 10
 
 function canAppendNarrativeNode(selected: NarrativeNode[], candidate: NarrativeNode, limit: number) {
   if (candidate.cellId && selected.some((item) => item.cellId && item.cellId === candidate.cellId)) {
@@ -737,6 +869,61 @@ function backfillSelectedNodes(selected: NarrativeNode[], ranked: NarrativeNode[
   return revised
 }
 
+function passesMinimumCoverageCandidate(candidate: NarrativeNode, summary: NarrativeViewportSummary) {
+  const name = normalizeName(candidate.name)
+  if (!name) return false
+  if (!passesRepresentativeEntityStandard(candidate, summary)) return false
+  if (isVocationalEducationName(name) || isBasicEducationName(name)) return false
+  if (isResidentialSemanticNode(candidate) || isMicroFacilityName(name)) return false
+  if (computeNoiseRisk(candidate, summary) > 0.56) return false
+  return hasStrongSemanticSignal(candidate, summary)
+    || representativeSupportScore(candidate) >= 1.3
+    || candidate.role === 'commercial_anchor'
+    || candidate.role === 'transit_connector'
+    || candidate.role === 'scenic_landmark'
+    || candidate.role === 'culture_anchor'
+}
+
+function canAppendMinimumCoverageNode(selected: NarrativeNode[], candidate: NarrativeNode) {
+  if (candidate.cellId && selected.some((item) => item.cellId && item.cellId === candidate.cellId)) {
+    return false
+  }
+  const candidateName = normalizeName(candidate.name)
+  if (candidateName && selected.some((item) => normalizeName(item.name) === candidateName)) {
+    return false
+  }
+  const comparableKey = buildComparableEntityKey(candidate)
+  if (comparableKey && selected.some((item) => buildComparableEntityKey(item) === comparableKey)) {
+    return false
+  }
+
+  const candidateBucket = inferNodeSceneBucket(candidate)
+  const relaxedDedupDistanceM = candidate.role === 'commercial_anchor'
+    ? 56
+    : (candidate.role === 'transit_connector' ? 60 : 72)
+
+  return !selected.some((item) => {
+    const itemBucket = inferNodeSceneBucket(item)
+    return haversine(item.center, candidate.center) < relaxedDedupDistanceM
+      && (item.role === candidate.role || itemBucket === candidateBucket)
+  })
+}
+
+function ensureMinimumNarrativeNodeCount(selected: NarrativeNode[], ranked: NarrativeNode[], summary: NarrativeViewportSummary, limit: number) {
+  const requiredCount = Math.min(limit, MIN_NARRATIVE_NODE_COUNT)
+  if (selected.length >= requiredCount) return selected
+
+  const revised = [...selected]
+  for (const candidate of ranked) {
+    if (revised.length >= requiredCount) break
+    if (revised.some((item) => item.id === candidate.id)) continue
+    if (!passesMinimumCoverageCandidate(candidate, summary)) continue
+    if (!canAppendMinimumCoverageNode(revised, candidate)) continue
+    revised.push(candidate)
+  }
+  return revised
+}
+
 function ensureEntryNodeCoverage(selected: NarrativeNode[], ranked: NarrativeNode[], summary: NarrativeViewportSummary, limit: number) {
   if (selected.some((node) => node.role === 'transit_connector')) return selected
   const entryCandidate = ranked.find((node) => node.role === 'transit_connector' && isNarrativeEligible(node, summary))
@@ -811,10 +998,10 @@ function inferSceneMix(input: {
 }
 
 function buildNarrativeStyleTail(style: NarrativeTourStyle) {
-  if (style === 'local_vibe') return '这条线我会更偏向入口、人流和真正顺路会经过的地方。'
-  if (style === 'business_leisure') return '这条线我会更顺着逛街、吃饭、停留和转场的节奏来带。'
-  if (style === 'humanities_walk') return '这条线我会把脚步放慢一点，把更耐看的气质和余味留出来。'
-  return '这条线我会先带你抓住最值得快速了解的几处骨架。'
+  if (style === 'local_vibe') return '我会更偏向入口、人流和真正顺路会经过的地方。'
+  if (style === 'business_leisure') return '我会顺着逛街、吃饭、停留和转场的节奏来带。'
+  if (style === 'humanities_walk') return '我会把脚步放慢一点，把更耐看的气质和余味留出来。'
+  return '我会先带你快速了解这片区域最值得抓住的几处骨架。'
 }
 
 function buildNarrativeViewportLead(sceneMix: string[], candidates: NarrativeNode[]) {
@@ -865,6 +1052,19 @@ function buildNarrativeViewportLead(sceneMix: string[], candidates: NarrativeNod
   return '这一带不是单一功能区，更像几种日常节奏叠在一起的一块地方。'
 }
 
+function buildNarrativeViewportAnchors(candidates: NarrativeNode[]) {
+  const anchors = candidates
+    .filter((node) => node.role !== 'district_anchor')
+    .slice()
+    .sort((left, right) => right.score - left.score)
+    .map((node) => node.name)
+    .filter(Boolean)
+    .slice(0, 2)
+  if (anchors.length >= 2) return `先抓住${anchors[0]}和${anchors[1]}，这片区域的轮廓会快很多。`
+  if (anchors.length === 1) return `先抓住${anchors[0]}，这片区域的轮廓就出来了。`
+  return ''
+}
+
 export function buildNarrativeViewportSummary(input: {
   featureTags: RegionFeatureTag[]
   featureSummary: string
@@ -873,6 +1073,7 @@ export function buildNarrativeViewportSummary(input: {
   encoderSceneTags?: string[]
   encoderDominantBuckets?: string[]
   candidates: NarrativeNode[]
+  scaleLevel?: NarrativeScaleLevel
   requestedStyle?: NarrativeTourStyle
 }) {
   const requestedStyle = input.requestedStyle || 'classic_must_see'
@@ -882,12 +1083,19 @@ export function buildNarrativeViewportSummary(input: {
     candidates: input.candidates,
   })
   const dominantScene = sceneMix[0] || '混合片区'
-  const summarySentence = `${buildNarrativeViewportLead(sceneMix, input.candidates)} ${buildNarrativeStyleTail(requestedStyle)}`.trim()
+  const summarySentence = [
+    buildNarrativeViewportLead(sceneMix, input.candidates),
+    buildNarrativeViewportAnchors(input.candidates),
+    buildNarrativeStyleTail(requestedStyle),
+  ].filter(Boolean).join(' ')
 
   const summary: NarrativeViewportSummary = {
     dominantScene,
     sceneMix,
     summarySentence,
+    scaleLevel: input.scaleLevel || 'micro',
+    macroRegionProfile: null,
+    macroRegionName: null,
     featureTags: input.featureTags,
     encoderSummary: input.encoderSummary || null,
     encoderTags: input.encoderTags || [],
@@ -898,6 +1106,145 @@ export function buildNarrativeViewportSummary(input: {
   }
 
   return summary
+}
+
+function resolveMacroSpatialForm(nodes: NarrativeNode[], buckets: string[], waterfrontHint: boolean): NarrativeMacroSpatialForm {
+  if (nodes.length <= 2) return 'cluster'
+  const lons = nodes.map((node) => node.center.lon)
+  const lats = nodes.map((node) => node.center.lat)
+  const midLat = lats.reduce((sum, item) => sum + item, 0) / Math.max(lats.length, 1)
+  const lonSpanM = (Math.max(...lons) - Math.min(...lons)) * 111320 * Math.max(Math.cos(midLat * Math.PI / 180), 0.2)
+  const latSpanM = (Math.max(...lats) - Math.min(...lats)) * 110540
+  const major = Math.max(lonSpanM, latSpanM, 1)
+  const minor = Math.max(Math.min(lonSpanM, latSpanM), 1)
+  const aspectRatio = major / minor
+  if (waterfrontHint && buckets.includes('景观')) return 'interface'
+  if (aspectRatio >= 2.8 && (buckets.includes('商业') || buckets.includes('交通'))) return 'belt'
+  if (aspectRatio >= 2.4) return 'corridor'
+  if (nodes.length <= 4) return 'cluster'
+  return 'district'
+}
+
+function resolveMacroAxisHint(nodes: NarrativeNode[]): string | null {
+  for (const node of nodes) {
+    const name = normalizeName(node.name)
+    const roadMatch = name.match(/(.{1,12}?(?:路|街|大道))/u)
+    if (roadMatch?.[1]) return roadMatch[1]
+  }
+  return null
+}
+
+function resolveMacroAdminHint(anchorNames: string[]): string | null {
+  const joined = anchorNames.join(' ')
+  const candidates = ['武昌', '汉口', '汉阳', '光谷', '东湖', '洪山', '青山', '江夏']
+  return candidates.find((item) => joined.includes(item)) || null
+}
+
+function resolveMacroPrimaryAnchor(nodes: NarrativeNode[]): string | null {
+  const preferred = nodes
+    .filter((node) => node.role !== 'transit_connector')
+    .slice()
+    .sort((left, right) => representativeSupportScore(right) - representativeSupportScore(left) || right.score - left.score)
+  return preferred[0]?.name || nodes[0]?.name || null
+}
+
+function resolveMacroSemanticCore(profile: NarrativeMacroRegionProfile): string {
+  const dominant = profile.dominantBuckets[0] || ''
+  const support = new Set(profile.supportingBuckets)
+  if (profile.waterfrontHint && (dominant === '景观' || support.has('景观'))) {
+    if (support.has('商业')) return '滨水休闲'
+    if (support.has('文化')) return '滨水人文'
+    return '滨水休闲'
+  }
+  if (dominant === '校园') {
+    if (support.has('文化') || support.has('商业')) return '科教文化'
+    return '科教'
+  }
+  if (dominant === '商业') {
+    if (support.has('景观') || support.has('生活')) return '商务休闲'
+    return '商务商业'
+  }
+  if (dominant === '文化') {
+    if (support.has('宗教') || support.has('景观')) return '人文游览'
+    return '人文文化'
+  }
+  if (dominant === '景观') return profile.waterfrontHint ? '滨水休闲' : '景观休闲'
+  if (dominant === '交通') return '枢纽活力'
+  return '复合活力'
+}
+
+function resolveMacroFormSuffix(form: NarrativeMacroSpatialForm): string {
+  if (form === 'belt') return '带'
+  if (form === 'interface') return '界面'
+  if (form === 'corridor') return '走廊'
+  if (form === 'cluster') return '组团'
+  return '区'
+}
+
+function resolveMacroAnchorPrefix(profile: NarrativeMacroRegionProfile): string {
+  const anchor = normalizeName(profile.primaryAnchor || profile.anchorNames[0] || '')
+  if (!anchor) return profile.axisHint || profile.adminHint || '当前区域'
+  const academicBrand = extractAcademicBrand(anchor)
+  if (academicBrand && profile.dominantBuckets.includes('校园')) {
+    if (/大学$/u.test(academicBrand)) return `${academicBrand.replace(/大学$/u, '')}大学城`
+    return academicBrand
+  }
+  if (/(湖|江|河|湿地)/u.test(anchor)) {
+    return anchor.replace(/(湿地公园|森林公园|主题公园|国家公园|文化园|旅游区|风景区|景区|景点|公园)$/u, '') || anchor
+  }
+  const compact = anchor.replace(/(购物中心|购物广场|商业广场|商场|天地|汉街|奥特莱斯|奥莱|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|k11|skp|mall|plaza|欧亚达|摩尔城|景区|景点|公园)$/iu, '')
+  return compact || anchor
+}
+
+export function buildMacroRegionProfile(nodes: NarrativeNode[], summary: NarrativeViewportSummary): NarrativeMacroRegionProfile | null {
+  if ((summary.scaleLevel || 'micro') !== 'macro' || nodes.length === 0) return null
+  const bucketCounts = new Map<string, number>()
+  for (const node of nodes) {
+    const bucket = inferNodeSceneBucket(node)
+    bucketCounts.set(bucket, (bucketCounts.get(bucket) || 0) + 1)
+  }
+  const sortedBuckets = [...bucketCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([bucket]) => bucket)
+  const anchorNames = [...new Set(nodes.map((node) => normalizeName(node.name)).filter(Boolean))].slice(0, 4)
+  // waterfrontHint 只看节点名称是否命中真实水体/滨水特征。
+  // 原来 || sortedBuckets.includes('景观') 会把所有含公园/山体/风景区的 macro
+  // 误判为滨水，导致命名冒出"滨水休闲区"，这里收紧。
+  const waterfrontHint = nodes.some((node) =>
+    /(湖|江|河|滩|湿地|滨水|沿江|沿湖)/u.test(normalizeName(node.name)),
+  )
+  return {
+    scaleLevel: 'macro',
+    primaryAnchor: resolveMacroPrimaryAnchor(nodes),
+    anchorNames,
+    dominantBuckets: sortedBuckets.slice(0, 2),
+    supportingBuckets: sortedBuckets.slice(2, 4),
+    spatialForm: resolveMacroSpatialForm(nodes, sortedBuckets, waterfrontHint),
+    waterfrontHint,
+    axisHint: resolveMacroAxisHint(nodes),
+    adminHint: resolveMacroAdminHint(anchorNames),
+  }
+}
+
+export function generateMacroRegionName(profile: NarrativeMacroRegionProfile | null): NarrativeMacroRegionName | null {
+  if (!profile) return null
+  const prefix = resolveMacroAnchorPrefix(profile)
+  const semanticCore = resolveMacroSemanticCore(profile)
+  const suffix = resolveMacroFormSuffix(profile.spatialForm)
+  const primaryName = `${prefix}${semanticCore}${suffix}`
+  const shortName = `${semanticCore}${suffix}`
+  const spokenName = prefix && prefix !== '当前区域' ? `${prefix}这一带` : shortName
+  const reason = `主锚点集中于${profile.anchorNames.slice(0, 2).join('、') || '当前区域'}，语义以${profile.dominantBuckets.join('、') || '复合功能'}为主，空间形态更接近${suffix}。`
+  const confidence = profile.anchorNames.length >= 3 ? 0.82 : 0.74
+  return {
+    primaryName,
+    shortName,
+    spokenName,
+    labelType: profile.spatialForm,
+    source: 'deterministic',
+    confidence,
+    reason,
+  }
 }
 
 export function buildNarrativeCandidates(input: {
@@ -959,7 +1306,7 @@ export function buildNarrativeCandidates(input: {
 
   const deduped = new Map<string, NarrativeNode>()
   for (const node of nodes.sort((left, right) => right.score - left.score)) {
-    const key = node.name.toLowerCase()
+    const key = buildComparableEntityKey(node) || node.name.toLowerCase()
     if (!deduped.has(key)) {
       deduped.set(key, node)
     }
@@ -1015,7 +1362,7 @@ function resolveTierPriority(node: NarrativeNode, summary: NarrativeViewportSumm
   return 4
 }
 
-export function rankNarrativeNodes(candidates: NarrativeNode[], summary: NarrativeViewportSummary, limit = 7) {
+export function rankNarrativeNodes(candidates: NarrativeNode[], summary: NarrativeViewportSummary, limit = 10) {
   const mode = resolveNarrativeMode(summary)
   const bucketOrder = resolveBucketOrder(mode, summary.requestedStyle)
   const normalized = candidates.map((node) => {
@@ -1061,7 +1408,8 @@ export function rankNarrativeNodes(candidates: NarrativeNode[], summary: Narrati
   const reviewed = reviewSelectedNodes(selected, rankedNodes, summary, limit)
   const withEntry = ensureEntryNodeCoverage(reviewed, rankedNodes, summary, limit)
   const collapsed = collapseAcademicParentNodes(withEntry, rankedNodes, summary, limit)
-  const finalized = backfillSelectedNodes(collapsed, rankedNodes, summary, limit)
+  const backfilled = backfillSelectedNodes(collapsed, rankedNodes, summary, limit)
+  const finalized = ensureMinimumNarrativeNodeCount(backfilled, rankedNodes, summary, limit)
     .map((node) => ({ ...node, tier: resolveNodeTier(node, summary) }))
 
   return {
@@ -1083,8 +1431,17 @@ function buildTransitionRationale(from: NarrativeNode, to: NarrativeNode) {
   if (fromBucket === '校园' && toBucket === '商业') return '从校园人流延伸到商业承接区，更容易看出这片区域的活力外溢。'
   if (fromBucket === '商业' && toBucket === '生活') return '从显性的消费界面转到更贴近日常生活的街区，导览会更落地。'
   if (toBucket === '交通') return '最后补一个交通节点，方便理解这片区域的人流组织与到达方式。'
-  if (fromBucket === toBucket) return `继续沿着“${fromBucket}”这条线展开，把这一层区域语义讲完整。`
-  return `从${from.roleLabel}转到${to.roleLabel}，把这片区域的“${fromBucket}—${toBucket}”两层结构串起来。`
+  if (fromBucket === toBucket) {
+    if (fromBucket === '商业') {
+      return '商业这条线继续往前走，能看出不同商业体各自承接的人流和停留方式。'
+    }
+    if (fromBucket === '景观') return '景观这一层还没讲完，顺着看下去，空间气质会更完整。'
+    if (fromBucket === '文化' || fromBucket === '宗教') return '先别急着换线，把这一层更慢一点的人文气息继续展开。'
+    if (fromBucket === '校园') return '校园这条线还可以再往里走一步，前后关系会更清楚。'
+    if (fromBucket === '生活') return '继续顺着日常界面往下带，这片区域会显得更真实。'
+    return `先把“${fromBucket}”这一层讲透，再切到下一层会更自然。`
+  }
+  return `从${from.name}转到${to.name}，视角会从${fromBucket}慢慢切到${toBucket}，层次也会更清楚。`
 }
 
 export function buildNarrativeTransitions(nodes: NarrativeNode[]) {
@@ -1099,6 +1456,417 @@ export function buildNarrativeTransitions(nodes: NarrativeNode[]) {
     })
   }
   return transitions
+}
+
+function buildRegionTransitionRationale(from: NarrativeRegionCluster, to: NarrativeRegionCluster) {
+  const fromBucket = from.dominantBucket || '复合'
+  const toBucket = to.dominantBucket || '复合'
+  if (fromBucket === toBucket) {
+    return `继续顺着${fromBucket}这条线往前带，片区层次会更完整。`
+  }
+  return `从${from.name}切到${to.name}，视角会从${fromBucket}慢慢过渡到${toBucket}。`
+}
+
+export function buildNarrativeRegionTransitions(regions: NarrativeRegionCluster[]) {
+  const transitions: NarrativeTourTransition[] = []
+  for (let index = 1; index < regions.length; index += 1) {
+    const from = regions[index - 1]
+    const to = regions[index]
+    transitions.push({
+      fromId: from.id,
+      toId: to.id,
+      rationale: buildRegionTransitionRationale(from, to),
+    })
+  }
+  return transitions
+}
+
+function buildRegionFactFallback(region: NarrativeRegionCluster) {
+  if (region.webFacts) return region.webFacts
+  const nodeFact = region.nodes.find((node) => node.webFacts)?.webFacts || null
+  if (!nodeFact) return null
+  return {
+    regionId: region.id,
+    query: region.name,
+    snippets: Array.isArray(nodeFact.snippets) ? nodeFact.snippets : [],
+    labels: Array.isArray(nodeFact.labels) ? nodeFact.labels : [],
+    titles: Array.isArray(nodeFact.titles) ? nodeFact.titles : [],
+    urls: Array.isArray(nodeFact.urls) ? nodeFact.urls : [],
+    searchAnswer: nodeFact.searchAnswer || null,
+    source: nodeFact.source || 'unknown',
+    sourceItems: (Array.isArray(nodeFact.urls) ? nodeFact.urls : [])
+      .map((url, index) => ({
+        title: String((nodeFact.titles || [])[index] || region.name).trim(),
+        snippet: String((nodeFact.snippets || [])[index] || '').trim() || undefined,
+        url: String(url || '').trim(),
+        source: nodeFact.source || 'unknown',
+      }))
+      .filter((item) => item.url),
+  }
+}
+
+function buildRegionVoiceText(
+  region: NarrativeRegionCluster,
+  summary: NarrativeViewportSummary,
+  transition?: NarrativeTourTransition | null,
+) {
+  const lead = buildNarrationLead(summary.requestedStyle, transition)
+  const supportText = region.supportNames.slice(0, 4).join('、') || '周边支撑点'
+  const hotspotText = region.hotspots.length > 0 ? '从热度分布上也能看出这是当前视口里更集中的一块。' : ''
+  const fact = buildRegionFactFallback(region)
+  const factText = String(fact?.searchAnswer || fact?.snippets?.[0] || '').trim()
+  const factSentence = factText
+    ? (/[。！？；]$/u.test(factText) ? factText : `${factText}。`)
+    : ''
+  return [
+    `${lead}。`,
+    `${region.name}是当前视口里更偏${region.dominantBucket}的一片区域，不是单个点位，而是由${supportText}等一组相互关联的节点共同支撑出来的。`,
+    hotspotText,
+    factSentence,
+  ].filter(Boolean).join(' ')
+}
+
+function buildRegionWebFactHint(region: NarrativeRegionCluster) {
+  const fact = buildRegionFactFallback(region)
+  const labels = fact?.labels || []
+  if (labels.length > 0) return labels.join('·')
+  const fallback = region.supportNames.slice(0, 3)
+  return fallback.length > 0 ? fallback.join('·') : null
+}
+
+function buildRegionWebFactSnippet(region: NarrativeRegionCluster) {
+  const fact = buildRegionFactFallback(region)
+  const snippet = (fact?.snippets || [])[0] || null
+  if (!snippet) return null
+  return snippet.length > 140 ? snippet.slice(0, 140) + '…' : snippet
+}
+
+function buildRegionWebSources(region: NarrativeRegionCluster) {
+  const fact = buildRegionFactFallback(region)
+  const sources = fact?.sourceItems || []
+  if (!Array.isArray(sources) || sources.length === 0) return []
+  return sources.slice(0, 3)
+}
+
+export function buildNarrativeRegionSteps(input: {
+  summary: NarrativeViewportSummary
+  regions: NarrativeRegionCluster[]
+  transitions: NarrativeTourTransition[]
+}) {
+  const steps: NarrativeTourStep[] = [
+    {
+      focus: 'overview',
+      voice_text: input.summary.summarySentence,
+      duration: 4200,
+      voiceTextSource: 'template',
+    },
+  ]
+
+  for (let index = 0; index < input.regions.length; index += 1) {
+    const region = input.regions[index]
+    const transition = index > 0 ? input.transitions[index - 1] : null
+    steps.push({
+      focus: region.name,
+      voice_text: buildRegionVoiceText(region, input.summary, transition),
+      duration: 5200,
+      center: region.center,
+      region_id: region.id,
+      region_index: index,
+      transition_reason: transition?.rationale,
+      tagline: `${region.dominantBucket}片区 · ${region.nodeCount} 个支撑节点`,
+      webFactHint: buildRegionWebFactHint(region),
+      webFactSnippet: buildRegionWebFactSnippet(region),
+      webSources: buildRegionWebSources(region),
+      regionSupportNames: region.supportNames.slice(0, 5),
+      boundary: region.boundary || null,
+      glowBoundary: region.glowBoundary || null,
+      glowLayers: region.glowLayers || [],
+      voiceTextSource: 'template',
+    })
+  }
+
+  return steps
+}
+
+export function buildNarrativeRegionStepsSkeleton(input: {
+  summary: NarrativeViewportSummary
+  regions: NarrativeRegionCluster[]
+  transitions: NarrativeTourTransition[]
+}) {
+  const steps: NarrativeTourStep[] = [
+    {
+      focus: 'overview',
+      voice_text: input.summary.summarySentence,
+      duration: 4200,
+      voiceTextSource: 'template',
+    },
+  ]
+
+  for (let index = 0; index < input.regions.length; index += 1) {
+    const region = input.regions[index]
+    const transition = index > 0 ? input.transitions[index - 1] : null
+    steps.push({
+      focus: region.name,
+      voice_text: `${region.name}是当前视口中的重点区域簇，可先用它理解这片区域的整体空间关系。`,
+      duration: 5200,
+      center: region.center,
+      region_id: region.id,
+      region_index: index,
+      transition_reason: transition?.rationale,
+      tagline: `${region.dominantBucket}片区 · ${region.nodeCount} 个支撑节点`,
+      webFactHint: buildRegionWebFactHint(region),
+      webFactSnippet: buildRegionWebFactSnippet(region),
+      webSources: buildRegionWebSources(region),
+      regionSupportNames: region.supportNames.slice(0, 5),
+      boundary: region.boundary || null,
+      glowBoundary: region.glowBoundary || null,
+      glowLayers: region.glowLayers || [],
+      voiceTextSource: 'placeholder',
+    })
+  }
+
+  return steps
+}
+
+export function buildNarrativeRegionAnswer(input: {
+  summary: NarrativeViewportSummary
+  regions: NarrativeRegionCluster[]
+  steps: NarrativeTourStep[]
+  transitions: NarrativeTourTransition[]
+}) {
+  const stepByRegionId = new Map(
+    input.steps
+      .filter((step) => step.region_id)
+      .map((step) => [String(step.region_id), step] as const),
+  )
+  const lines = [
+    '## 当前视口画像',
+    input.steps[0]?.voice_text || input.summary.summarySentence,
+    '',
+    '## 第一版区域导览顺序',
+  ]
+
+  input.regions.forEach((region, index) => {
+    const step = stepByRegionId.get(region.id)
+    lines.push(`${index + 1}. **${region.name}** · ${region.dominantBucket}片区 · ${region.nodeCount} 个支撑节点`)
+    lines.push(`   - 解说词：${step?.voice_text || region.summary || '区域讲解生成中…'}`)
+    if (region.supportNames.length > 0) {
+      lines.push(`   - 支撑线索：${region.supportNames.slice(0, 5).join('、')}`)
+    }
+    const fact = buildRegionFactFallback(region)
+    if (fact?.snippets?.[0]) {
+      lines.push(`   - 网页来源：${fact.snippets[0]}`)
+    }
+    if (index > 0) {
+      lines.push(`   - 转场逻辑：${step?.transition_reason || input.transitions[index - 1]?.rationale || '承接上一片区继续展开。'}`)
+    }
+  })
+
+  lines.push('')
+  lines.push('## 编排方式')
+  lines.push(`当前采用 **${input.summary.requestedStyleLabel}** 视角，把视口内的重点区域簇串成一条可播放的导览骨架。`)
+  return lines.join('\n')
+}
+
+function resolveRegionName(region: {
+  quadrant?: string | null
+  dominantBucket: string
+  supportNames: string[]
+}, summary: NarrativeViewportSummary, index: number, total: number) {
+  if (total === 1 && summary.macroRegionName?.primaryName) {
+    return summary.macroRegionName.primaryName
+  }
+  const firstSupport = region.supportNames[0] || ''
+  if (firstSupport && firstSupport.length <= 16) {
+    if (region.dominantBucket === '校园') return `${firstSupport}科教文化区`
+    if (region.dominantBucket === '景观') return `${firstSupport}景观休闲区`
+    if (region.dominantBucket === '商业') return `${firstSupport}商业活力区`
+    if (region.dominantBucket === '文化' || region.dominantBucket === '宗教') return `${firstSupport}人文片区`
+  }
+  const quadrantLabel = region.quadrant === 'right_bottom'
+    ? '右下'
+    : region.quadrant === 'right_top'
+      ? '右上'
+      : region.quadrant === 'left_top'
+        ? '左上'
+        : region.quadrant === 'left_bottom'
+          ? '左下'
+          : '中部'
+  return `${quadrantLabel}${region.dominantBucket || '复合'}片区 ${index + 1}`
+}
+
+export function buildNarrativeRegionClusters(input: {
+  nodes: NarrativeNode[]
+  relevanceField: NarrativeRelevanceField | null | undefined
+  summary: NarrativeViewportSummary
+}) {
+  const nodes = input.nodes || []
+  const relevanceField = input.relevanceField || null
+  if (nodes.length === 0) return [] as NarrativeRegionCluster[]
+
+  const anchorNodeIds = new Set<string>()
+  const clusters = relevanceField?.clusters || []
+  const nodeById = new Map(nodes.map((node) => [node.id, node] as const))
+
+  const regionClusters: NarrativeRegionCluster[] = clusters.map((cluster, index) => {
+    const regionNodes = cluster.anchors
+      .map((anchor) => nodeById.get(anchor.nodeId))
+      .filter(Boolean) as NarrativeNode[]
+
+    for (const node of regionNodes) anchorNodeIds.add(node.id)
+
+    const dominantBuckets = [...new Set(regionNodes.map((node) => inferNodeSceneBucket(node)).filter(Boolean))]
+    const dominantBucket = dominantBuckets[0] || '复合'
+    const supportNames = [...new Set(regionNodes.map((node) => normalizeName(node.name)).filter(Boolean))].slice(0, 5)
+    const boundary = regionNodes.find((node) => node.boundary)?.boundary || null
+    const glowBoundary = regionNodes.find((node) => node.boundary)?.boundary || null
+    const name = resolveRegionName({
+      quadrant: cluster.quadrant,
+      dominantBucket,
+      supportNames,
+    }, input.summary, index, clusters.length)
+
+    return {
+      id: `region:${cluster.quadrant || index}`,
+      name,
+      spokenName: name,
+      regionClass: index < 2 ? 'primary' : 'support',
+      center: cluster.centroid,
+      quadrant: cluster.quadrant,
+      nodes: regionNodes,
+      nodeIds: regionNodes.map((node) => node.id),
+      nodeCount: regionNodes.length,
+      dominantBucket,
+      dominantBuckets,
+      supportNames,
+      anchors: cluster.anchors,
+      hotspots: cluster.hotspots,
+      summary: `${name}由${supportNames.join('、') || '多个支撑节点'}共同构成。`,
+      boundary,
+      glowBoundary,
+      webFacts: null,
+    } satisfies NarrativeRegionCluster
+  }).filter((region) => region.nodeCount > 0)
+
+  const unassignedNodes = nodes.filter((node) => !anchorNodeIds.has(node.id))
+  if (unassignedNodes.length > 0) {
+    const dominantBuckets = [...new Set(unassignedNodes.map((node) => inferNodeSceneBucket(node)).filter(Boolean))]
+    const dominantBucket = dominantBuckets[0] || '复合'
+    const supportNames = [...new Set(unassignedNodes.map((node) => normalizeName(node.name)).filter(Boolean))].slice(0, 5)
+    regionClusters.push({
+      id: 'region:overflow',
+      name: resolveRegionName({ quadrant: 'center', dominantBucket, supportNames }, input.summary, regionClusters.length, regionClusters.length + 1),
+      spokenName: null,
+      regionClass: 'overflow',
+      center: unassignedNodes[0].center,
+      quadrant: 'center',
+      nodes: unassignedNodes,
+      nodeIds: unassignedNodes.map((node) => node.id),
+      nodeCount: unassignedNodes.length,
+      dominantBucket,
+      dominantBuckets,
+      supportNames,
+      anchors: [],
+      hotspots: [],
+      summary: `${supportNames.join('、') || '若干节点'}组成了这一片补充区域。`,
+      boundary: unassignedNodes.find((node) => node.boundary)?.boundary || null,
+      glowBoundary: unassignedNodes.find((node) => node.boundary)?.boundary || null,
+      webFacts: null,
+    })
+  }
+
+  return regionClusters.sort((left, right) => right.nodeCount - left.nodeCount)
+}
+
+export function resolveScaleLevelRegionLimit(scaleLevel: NarrativeScaleLevel) {
+  if (scaleLevel === 'macro') return 4
+  if (scaleLevel === 'meso') return 5
+  return 6
+}
+
+function computeNarrativeRegionFit(region: NarrativeRegionCluster, summary: NarrativeViewportSummary) {
+  const topNodeScore = region.nodes
+    .slice()
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .reduce((sum, node) => sum + Number(node.score || 0), 0)
+  const dominantBucketBonus = summary.dominantBuckets.includes(region.dominantBucket) ? 0.42 : 0
+  const regionClassBoost = region.regionClass === 'primary'
+    ? 0.34
+    : region.regionClass === 'support'
+      ? 0.12
+      : 0
+  const overflowPenalty = region.id === 'region:overflow' || region.regionClass === 'overflow' ? 0.28 : 0
+  const fact = buildRegionFactFallback(region)
+  const evidenceBoost = Number((
+    (fact?.searchAnswer ? 0.24 : 0)
+    + (fact?.snippets?.[0] ? 0.18 : 0)
+    + Math.min((fact?.labels?.length || 0) * 0.08, 0.2)
+    + Math.min((fact?.titles?.length || 0) * 0.05, 0.12)
+  ).toFixed(3))
+  const genericNamePenalty = /^(?:右上|右下|左上|左下|中部|中心|北部|南部|东部|西部).*(?:片区|区域)(?:\s*\d+)?$/u.test(normalizeName(region.name))
+    || /^热点\d+$/u.test(normalizeName(region.name))
+    ? (fact ? 0.08 : 0.22)
+    : 0
+  return Number((
+    topNodeScore
+    + region.nodeCount * 0.22
+    + region.anchors.length * 0.15
+    + region.hotspots.length * 0.12
+    + dominantBucketBonus
+    + regionClassBoost
+    + evidenceBoost
+    - overflowPenalty
+    - genericNamePenalty
+  ).toFixed(3))
+}
+
+export function rankNarrativeRegions(
+  regions: NarrativeRegionCluster[],
+  summary: NarrativeViewportSummary,
+  limit = 4,
+) {
+  if (regions.length <= 1) return regions
+  return regions
+    .slice()
+    .sort((left, right) => {
+      const fitDiff = computeNarrativeRegionFit(right, summary) - computeNarrativeRegionFit(left, summary)
+      if (fitDiff !== 0) return fitDiff
+      return right.nodeCount - left.nodeCount
+    })
+    .slice(0, Math.max(1, limit))
+}
+
+export function projectNarrativeRegionsToNodes(input: {
+  regions: NarrativeRegionCluster[]
+  nodes: NarrativeNode[]
+}) {
+  const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const))
+  return input.regions
+    .map((region) => {
+      const regionNodes = region.nodeIds
+        .map((nodeId) => nodeById.get(nodeId))
+        .filter(Boolean) as NarrativeNode[]
+      if (regionNodes.length === 0) return null
+      const dominantBuckets = [...new Set(regionNodes.map((node) => inferNodeSceneBucket(node)).filter(Boolean))]
+      const dominantBucket = dominantBuckets[0] || region.dominantBucket || '复合'
+      const supportNames = [...new Set(regionNodes.map((node) => normalizeName(node.name)).filter(Boolean))].slice(0, 5)
+      return {
+        ...region,
+        nodes: regionNodes,
+        nodeIds: regionNodes.map((node) => node.id),
+        nodeCount: regionNodes.length,
+        regionClass: region.regionClass,
+        dominantBucket,
+        dominantBuckets,
+        supportNames,
+        summary: region.summary || `${supportNames.join('、') || '多个支撑节点'}共同构成这一片区域。`,
+        boundary: regionNodes.find((node) => node.boundary)?.boundary || region.boundary || null,
+        glowBoundary: region.glowBoundary || regionNodes.find((node) => node.boundary)?.boundary || region.boundary || null,
+        webFacts: region.webFacts || null,
+      } satisfies NarrativeRegionCluster
+    })
+    .filter(Boolean) as NarrativeRegionCluster[]
 }
 
 function buildNearbyConnections(nodes: NarrativeNode[], index: number) {
@@ -1125,19 +1893,19 @@ function buildReasonCard(node: NarrativeNode, summary: NarrativeViewportSummary,
 
   if (bucket === '景观') {
     represents = '这片区域最容易先被感知到的景观界面'
-    whyWorthVisiting = '站到这里，片区的开敞感、边界感和空间气质会一下子清楚。'
+    whyWorthVisiting = `站在这里更容易把${nearbyConnections.join('、') || '周边的开敞空间'}和整体空间关系一起看清。`
     bestTime = '白天看空间层次最清楚，傍晚更容易感到舒服和开阔。'
   } else if (bucket === '校园') {
     represents = '这片片区里最能代表校园骨架和年轻人流的一层'
-    whyWorthVisiting = '它不是孤立建筑，而是周边商业、生活和气质来源的重要起点。'
+    whyWorthVisiting = `它不是孤立建筑，而是${nearbyConnections.join('、') || '周边商业和生活'}背后稳定人流的重要来源。`
     bestTime = '工作日白天更容易感受到真实的校园节奏。'
   } else if (bucket === '医疗') {
     represents = '校园片区里更专业、也更具体的医疗与训练界面'
     whyWorthVisiting = '它能把“大学片区”讲得更具体，不再只停留在抽象校名。'
     bestTime = '白天更适合讲功能位置与片区结构，不建议当成观光停留点。'
   } else if (bucket === '商业') {
-    represents = '片区里最能承接人流与消费停留的界面'
-    whyWorthVisiting = '看这里，就能明白人为什么停下、逛起、再流向周边。'
+    represents = '片区里最能承接人流与消费停留的商业节点'
+    whyWorthVisiting = `看这里，就能明白人为什么会在这一站停下来，再顺着${nearbyConnections.join('、') || '周边街区'}继续流动。`
     bestTime = '下午到夜间更有状态，下雨天也常常更好用。'
   } else if (bucket === '生活' || node.role === 'local_life_anchor') {
     represents = '把片区从大地标拉回真实日常生活的一层'
@@ -1178,16 +1946,16 @@ function buildReasonCard(node: NarrativeNode, summary: NarrativeViewportSummary,
 
 function buildLocalTip(node: NarrativeNode, summary: NarrativeViewportSummary) {
   const bucket = inferNodeSceneBucket(node)
-  if (node.role === 'transit_connector') return '我一般会把这里当成进片区的第一站。'
-  if (bucket === '景观') return '我更愿意傍晚带你看这里，不会一下子讲太满。'
+  if (node.role === 'transit_connector') return '这里适合作为第一站或换乘锚点，先把片区入口和人流走向讲顺。'
+  if (bucket === '景观') return '适合和周边景观带一起理解，不建议孤立解读。'
   if (bucket === '商业') return summary.requestedStyle === 'business_leisure'
-    ? '我通常会把它放在饭点到夜里的节奏里来讲。'
-    : '我更愿意把它和周边街区顺着一起带。'
-  if (bucket === '生活') return '我多半会顺路带一句，不会把它讲成大景点。'
-  if (bucket === '文化' || bucket === '宗教') return '我会把这里讲得慢一点，不会只顾着堆信息。'
-  if (bucket === '医疗') return '我不会把它当成景点讲，但它很能说明这片区域的专业气质。'
-  if (node.tier === 'background') return '我通常不会在这里停太久，但会补一句这片区域的背景。'
-  return '我更愿意把它和周边节点放在一起讲，不会单独停太久。'
+    ? '更适合放在消费动线里一起讲。'
+    : '更适合放进周边街区整体讲。'
+  if (bucket === '生活') return '更适合作为片区日常生活背景，不建议单独展开。'
+  if (bucket === '文化' || bucket === '宗教') return '适合和周边历史文化节点一起讲。'
+  if (bucket === '医疗') return '它更能说明片区专业功能，而不是景点属性。'
+  if (node.tier === 'background') return '可作为区域背景补充，不必单独停留。'
+  return '更适合放进周边节点关系里一起理解。'
 }
 
 function buildNarrationLead(style: NarrativeTourStyle, transition?: NarrativeTourTransition | null) {
@@ -1203,6 +1971,16 @@ function buildNarrationLead(style: NarrativeTourStyle, transition?: NarrativeTou
   return '先把这片区域最值得抓住的骨架看清楚'
 }
 
+function buildFactSentence(node: NarrativeNode) {
+  const fact = String(node.webFacts?.searchAnswer || node.webFacts?.snippets?.[0] || '').trim()
+  if (!fact) return ''
+  const normalized = fact.replace(/\s+/gu, ' ').trim()
+  if (!normalized) return ''
+  const sentence = (normalized.match(/^[^。！？；]{16,90}[。！？；]?/u)?.[0] || normalized).trim()
+  if (!sentence) return ''
+  return /[。！？；]$/u.test(sentence) ? sentence : `${sentence}。`
+}
+
 function buildNodeVoiceText(
   node: NarrativeNode,
   summary: NarrativeViewportSummary,
@@ -1211,18 +1989,30 @@ function buildNodeVoiceText(
   transition?: NarrativeTourTransition | null,
 ) {
   const lead = buildNarrationLead(summary.requestedStyle, transition)
+  const bucket = inferNodeSceneBucket(node)
   const categoryText = zhFriendlyCategory(node)
-  const factLabels = (node.webFacts?.labels || []).length > 0 ? `（${node.webFacts!.labels.join('、')}）` : ''
-  const moodSentence = (() => {
-    if (node.role === 'transit_connector') return `${node.name}像这片区域的门把手，一拧开，里面的人流组织和生活动线就都顺了。`
+  const nearbySentence = reasonCard.nearbyConnections.length > 0
+    ? `往周边顺着看，还能很自然地接到${reasonCard.nearbyConnections.join('、')}。`
+    : ''
+  const factSentence = buildFactSentence(node)
+  const coreSentence = (() => {
+    if (node.role === 'transit_connector') return `${node.name}更像进出这片区域的门把手，人流怎么进、怎么换线，通常都要从这里说顺。`
     if (node.role === 'medical_anchor') return `${node.name}把抽象的校园片区，落成了一处带着专业气质的具体场所。`
     if (node.role === 'local_life_anchor') return `${node.name}不一定最响亮，却最像这片区域真正被使用时的样子。`
-    if (inferNodeSceneBucket(node) === '商业') return `${node.name}把“来这里的人会怎么停下来”这件事讲得最直白。`
-    if (inferNodeSceneBucket(node) === '文化' || inferNodeSceneBucket(node) === '宗教') return `${node.name}让这片区域不只剩功能，也多了一层能慢慢回味的人文纹理。`
-    return `${node.name}更像这里的“${categoryText}”代表点${factLabels}，能把片区气质一下子讲明白。`
+    if (bucket === '商业') return `${node.name}把这片区域最具体的逛街、吃饭和停留方式摆在了眼前。`
+    if (bucket === '文化' || bucket === '宗教') return `${node.name}让这片区域不只剩功能，也多了一层能慢慢回味的人文纹理。`
+    if (bucket === '景观') return `${node.name}把这里的开敞面、边界感和空间层次先提了出来。`
+    return `${node.name}是这里比较有代表性的${categoryText}节点。`
   })()
-  const closing = localTip ? ` ${localTip}` : ''
-  return `${lead}。${moodSentence}${reasonCard.whyWorthVisiting}${closing}`
+  return [
+    `${lead}。`,
+    coreSentence,
+    reasonCard.whyWorthVisiting,
+    nearbySentence,
+    factSentence,
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 /**
@@ -1255,6 +2045,7 @@ export function buildNarrativeSteps(input: {
       focus: 'overview',
       voice_text: input.summary.summarySentence,
       duration: 4200,
+      voiceTextSource: 'template',
     },
   ]
 
@@ -1283,6 +2074,69 @@ export function buildNarrativeSteps(input: {
       webFactHint: buildWebFactHint(node),
       webFactSnippet: buildWebFactSnippet(node),
       boundary: node.boundary || null,
+      voiceTextSource: 'template',
+    })
+  }
+
+  return steps
+}
+
+/**
+ * 骨架版（first paint）叙事步骤：
+ *
+ * 对应"分段下发"策略的 C 选项——概览模板 + 节点 LLM 后填：
+ *   - overview step 用确定性 summarySentence（`voiceTextSource: 'template'`），
+ *     用户必听；
+ *   - 各节点 step 用短标题占位（`voiceTextSource: 'placeholder'`），
+ *     等 final patch 到达后由 LLM 文案或 deterministic fallback 覆盖。
+ *
+ * 占位文案保留"可播报"属性——即使 final patch 异常未到达，用户听到的
+ * 依旧是一个闭合的短句，不会是空字符串或调试日志。
+ *
+ * 骨架 step 会填充 reasonCard / localTip / webFactHint 等结构化字段，
+ * 确保前端在骨架阶段就能展示节点卡片的基础信息（品类、层级、周边关联）。
+ */
+export function buildNarrativeStepsSkeleton(input: {
+  summary: NarrativeViewportSummary
+  nodes: NarrativeNode[]
+  transitions: NarrativeTourTransition[]
+}) {
+  const steps: NarrativeTourStep[] = [
+    {
+      focus: 'overview',
+      voice_text: input.summary.summarySentence,
+      duration: 4200,
+      voiceTextSource: 'template',
+    },
+  ]
+
+  for (let index = 0; index < input.nodes.length; index += 1) {
+    const node = input.nodes[index]
+    const transition = index > 0 ? input.transitions[index - 1] : null
+    const reasonCard = buildReasonCard(node, input.summary, input.nodes, index)
+    const localTip = buildLocalTip(node, input.summary)
+    const tier = node.tier || resolveNodeTier(node, input.summary)
+    const placeholderVoice = `${node.name}是当前视口中的${node.roleLabel}节点，可先用它定位这片区域的空间结构。`
+    steps.push({
+      focus: node.name,
+      voice_text: placeholderVoice,
+      duration: 5000,
+      center: node.center,
+      node_id: node.id,
+      role: node.role,
+      transition_reason: transition?.rationale,
+      hotness: node.hotness,
+      tagline: node.selectionReason || reasonCard.represents || null,
+      tier,
+      tierLabel: resolveNodeTierLabel(tier),
+      reasonCard,
+      localTip,
+      tourStyle: input.summary.requestedStyle,
+      tourStyleLabel: input.summary.requestedStyleLabel,
+      webFactHint: null,
+      webFactSnippet: null,
+      boundary: node.boundary || null,
+      voiceTextSource: 'placeholder',
     })
   }
 
@@ -1292,25 +2146,41 @@ export function buildNarrativeSteps(input: {
 export function buildNarrativeAnswer(input: {
   summary: NarrativeViewportSummary
   nodes: NarrativeNode[]
+  steps: NarrativeTourStep[]
   transitions: NarrativeTourTransition[]
   narrativeMode: string
 }) {
+  const stepByNodeId = new Map(
+    input.steps
+      .filter((step) => step.node_id)
+      .map((step) => [String(step.node_id), step] as const),
+  )
   const lines = [
     '## 当前视口画像',
-    input.summary.summarySentence,
+    input.steps[0]?.voice_text || input.summary.summarySentence,
     '',
     '## 第一版导览顺序',
   ]
 
   input.nodes.forEach((node, index) => {
+    const step = stepByNodeId.get(node.id)
     lines.push(`${index + 1}. **${node.name}** · ${resolveNodeTierLabel(node.tier || 'optional')} · ${node.roleLabel}`)
-    lines.push(`   - 代表理由：${node.selectionReason || node.reasons.join(' / ')}`)
-    const factLabels = node.webFacts?.labels || []
-    if (factLabels.length > 0) {
-      lines.push(`   - 事实标签：${factLabels.join('、')}`)
+    // 骨架阶段的 voice_text 是占位符，写到 answer 里会显示"即将讲到：XXX..."，
+    // 用户阅读脚本会感到突兀。placeholder 时退回到 selectionReason / reasons，
+    // final patch 到来后再由新 answer 整体覆盖。
+    const isPlaceholder = step?.voiceTextSource === 'placeholder'
+    const narrationForAnswer = isPlaceholder
+      ? (node.selectionReason || node.reasons.join(' / ') || step?.tagline || '讲解词生成中…')
+      : (step?.voice_text || node.selectionReason || node.reasons.join(' / '))
+    lines.push(`   - 解说词：${narrationForAnswer}`)
+    if (step?.reasonCard?.nearbyConnections?.length) {
+      lines.push(`   - 周边关联：${step.reasonCard.nearbyConnections.join('、')}`)
+    }
+    if (step?.webFactSnippet) {
+      lines.push(`   - 网页补充：${step.webFactSnippet}`)
     }
     if (index > 0) {
-      lines.push(`   - 转场逻辑：${input.transitions[index - 1]?.rationale || '承接上一节点继续展开。'}`)
+      lines.push(`   - 转场逻辑：${step?.transition_reason || input.transitions[index - 1]?.rationale || '承接上一节点继续展开。'}`)
     }
   })
 

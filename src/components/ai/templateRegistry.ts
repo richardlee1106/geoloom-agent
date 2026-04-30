@@ -87,8 +87,8 @@ export function createTemplateRegistry(): TemplateDefinition[] {
     },
     {
       id: 'dominant_industry',
-      title: '主导业态',
-      subtitle: '主导业态与空间承载强度',
+      title: '主要结构',
+      subtitle: '片区结构与空间承载强度',
       isAvailable: (context) => context.regions.length > 0,
       score: (context) =>
         scoreByIntent(context, { macro: 98, micro: 72, comparison: 80 }) +
@@ -101,10 +101,10 @@ export function createTemplateRegistry(): TemplateDefinition[] {
             return `${index + 1}. ${regionName(region)} · ${category} · 隶属度 ${percent(region.membershipScore)}`
           }),
           actions: [
-            ...locateAction('定位主导业态', top?.center),
+            ...locateAction('定位主要结构', top?.center),
             ...followupAction(
-              '生成经营策略',
-              top ? `请围绕「${regionName(top)}」输出经营策略：目标客群、业态组合、投入优先级。` : ''
+              '展开结构解读',
+              top ? `请围绕「${regionName(top)}」解释这个片区的主要特征、空间承载内容和分工。` : ''
             )
           ]
         }
@@ -144,8 +144,8 @@ export function createTemplateRegistry(): TemplateDefinition[] {
     },
     {
       id: 'opportunity_window',
-      title: '机会窗口',
-      subtitle: '热点与业态组合的可执行机会点',
+      title: '补充观察',
+      subtitle: '热点与结构的后续追问方向',
       isAvailable: (context) => context.hotspots.length > 0 || context.regions.length > 0,
       score: (context) => scoreByIntent(context, { macro: 82, micro: 100, comparison: 60 }),
       build: (context) => {
@@ -154,12 +154,12 @@ export function createTemplateRegistry(): TemplateDefinition[] {
         return {
           lines: [
             hotspot ? `优先观察：${hotspotName(hotspot)}` : '优先观察：缺少热点证据',
-            region ? `业态切入：${regionName(region)}` : '业态切入：缺少主导业态证据',
-            context.intentType === 'micro' ? '建议动作：先小范围验证，再扩展覆盖' : '建议动作：先分层选址，再做业态组合'
+            region ? `结构切入：${regionName(region)}` : '结构切入：缺少主要结构证据',
+            context.intentType === 'micro' ? '建议动作：先补具体样本，再追问细节' : '建议动作：先补结构证据，再追问更关心的方向'
           ],
           actions: followupAction(
-            '输出机会清单',
-            '请基于当前热点与主导业态，输出3个可执行机会点并说明适配业态。'
+            '继续追问',
+            '请基于当前热点和主要结构，给出3个值得继续追问的方向，并说明各自还缺什么证据。'
           )
         }
       }

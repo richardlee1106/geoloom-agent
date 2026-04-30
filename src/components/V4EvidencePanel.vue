@@ -79,15 +79,53 @@
         </div>
 
         <div v-else-if="semanticRegions.length > 0" class="semantic-grid">
-          <article v-for="region in semanticRegions" :key="region.name" class="semantic-card">
-            <div class="semantic-head">
-              <strong>{{ region.name }}</strong>
-              <span>{{ formatScore(region.score) }}</span>
+          <div v-if="semanticReferenceDimensions.length > 0" class="semantic-reference-card">
+            <div class="semantic-reference-head">
+              <strong>参考维度</strong>
+              <span>{{ semanticReferenceDimensions.length }} 项</span>
             </div>
-            <div class="semantic-bar">
-              <span class="semantic-bar-fill" :style="{ width: `${Math.max(8, Math.round((region.score || 0) * 100))}%` }"></span>
+            <div class="semantic-reference-chips">
+              <span
+                v-for="dimension in semanticReferenceDimensions"
+                :key="dimension.key || dimension.label"
+                class="semantic-reference-chip"
+              >
+                {{ dimension.label }} {{ formatScore(dimension.score) }}
+              </span>
             </div>
-            <p>{{ region.summary || '暂无摘要' }}</p>
+          </div>
+
+          <article v-for="(region, index) in semanticRegions" :key="region.regionId || region.name" class="semantic-card">
+            <div class="semantic-rank">{{ region.rank || index + 1 }}</div>
+            <div class="semantic-body">
+              <div class="semantic-head">
+                <div class="semantic-title-group">
+                  <strong>{{ region.name }}</strong>
+                  <span class="semantic-summary">{{ region.summary || '暂无摘要' }}</span>
+                </div>
+                <span class="semantic-score">{{ formatScore(region.score) }}</span>
+              </div>
+
+              <div class="semantic-bar">
+                <span class="semantic-bar-fill" :style="{ width: `${Math.max(10, Math.round((region.score || 0) * 100))}%` }"></span>
+              </div>
+
+              <div v-if="Array.isArray(region.dimensions) && region.dimensions.length > 0" class="semantic-dimension-grid">
+                <div
+                  v-for="dimension in region.dimensions"
+                  :key="dimensionKey(region, dimension)"
+                  class="semantic-dimension"
+                >
+                  <div class="semantic-dimension-head">
+                    <span>{{ dimension.label }}</span>
+                    <strong>{{ formatScore(dimension.score) }}</strong>
+                  </div>
+                  <div class="semantic-dimension-bar">
+                    <span class="semantic-dimension-fill" :style="{ width: `${Math.max(8, Math.round((dimension.score || 0) * 100))}%` }"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </article>
         </div>
 
@@ -197,6 +235,10 @@ const shortSessionId = computed(() => {
 
 const comparisonPairs = computed(() => Array.isArray(evidenceView.value?.pairs) ? evidenceView.value.pairs : [])
 const semanticRegions = computed(() => Array.isArray(evidenceView.value?.regions) ? evidenceView.value.regions : [])
+const semanticReferenceDimensions = computed(() => {
+  const meta = evidenceView.value?.meta
+  return Array.isArray(meta?.referenceDimensions) ? meta.referenceDimensions : []
+})
 const listItems = computed(() => {
   if (comparisonPairs.value.length > 0 || semanticRegions.value.length > 0) return []
   return Array.isArray(evidenceView.value?.items) ? evidenceView.value.items : []
@@ -208,6 +250,10 @@ function itemKey(item = {}) {
 
 function toolCallKey(call = {}) {
   return `${call.id || 'trace'}-${call.skill || 'skill'}-${call.action || 'action'}`
+}
+
+function dimensionKey(region = {}, dimension = {}) {
+  return `${region.regionId || region.name || 'region'}-${dimension.key || dimension.label || 'dimension'}`
 }
 
 function formatDistance(value) {
@@ -340,7 +386,8 @@ function formatScore(value) {
 .result-item,
 .trace-item,
 .comparison-card,
-.semantic-card {
+.semantic-card,
+.semantic-reference-card {
   border-radius: 16px;
   border: 1px solid var(--v4-line);
   background: rgba(10, 22, 37, 0.72);
@@ -392,6 +439,86 @@ function formatScore(value) {
   gap: 10px;
 }
 
+.semantic-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.semantic-reference-card {
+  display: grid;
+  gap: 10px;
+}
+
+.semantic-reference-head,
+.semantic-dimension-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.semantic-reference-head span,
+.semantic-summary,
+.semantic-score,
+.semantic-dimension-head span,
+.semantic-dimension-head strong {
+  font-size: 12px;
+  color: var(--v4-muted);
+}
+
+.semantic-reference-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.semantic-reference-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #dff6ff;
+  background: rgba(16, 45, 70, 0.82);
+  border: 1px solid rgba(103, 213, 255, 0.22);
+}
+
+.semantic-rank {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #e7fbff;
+  background: linear-gradient(145deg, rgba(103, 213, 255, 0.18), rgba(126, 242, 196, 0.12));
+  border: 1px solid rgba(103, 213, 255, 0.2);
+}
+
+.semantic-body,
+.semantic-title-group,
+.semantic-dimension-grid,
+.semantic-dimension {
+  display: grid;
+  gap: 10px;
+}
+
+.semantic-title-group {
+  min-width: 0;
+}
+
+.semantic-summary {
+  line-height: 1.55;
+}
+
+.semantic-score {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e7fbff;
+}
+
 .result-main span,
 .comparison-summary,
 .trace-latency,
@@ -414,6 +541,21 @@ function formatScore(value) {
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--v4-cyan), var(--v4-mint));
+}
+
+.semantic-dimension-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(18, 38, 60, 0.9);
+  overflow: hidden;
+}
+
+.semantic-dimension-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(103, 213, 255, 0.92), rgba(249, 199, 79, 0.9));
 }
 
 .empty-state {

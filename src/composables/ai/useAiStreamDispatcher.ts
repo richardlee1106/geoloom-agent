@@ -29,6 +29,7 @@ interface AssistantMessage extends PlainObject {
   spatialClusters?: PlainObject
   vernacularRegions?: unknown[]
   fuzzyRegions?: unknown[]
+  evidenceView?: PlainObject | null
   analysisStats?: PlainObject
   modelTiming?: PlainObject
   pois?: unknown[]
@@ -52,6 +53,7 @@ interface NormalizedRefinedResultEvidence {
   spatialClusters?: PlainObject | null
   vernacularRegions: unknown[]
   fuzzyRegions: unknown[]
+  evidenceView?: PlainObject | null
   stats?: PlainObject | null
   toolCalls: unknown[]
   intent?: PlainObject | null
@@ -250,6 +252,7 @@ export function useAiStreamDispatcher({
       if (normalized.spatialClusters) currentMsg.spatialClusters = normalized.spatialClusters
       if (normalized.vernacularRegions.length > 0) currentMsg.vernacularRegions = normalized.vernacularRegions
       if (normalized.fuzzyRegions.length > 0) currentMsg.fuzzyRegions = normalized.fuzzyRegions
+      if (normalized.evidenceView) currentMsg.evidenceView = normalized.evidenceView
       if (normalized.stats) currentMsg.analysisStats = normalized.stats
       const modelTiming = asPlainObject(normalized.stats?.model_timing_ms)
       if (Object.keys(modelTiming).length > 0) currentMsg.modelTiming = modelTiming

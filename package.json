@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "clean:ports:dev": "node scripts/cleanup-ports.mjs 3000 3411 8100 3210",
+    "clean:ports:dev": "node scripts/cleanup-ports.mjs 5173 3411 8100 3210",
     "clean:ports:start": "node scripts/cleanup-ports.mjs 4173 3411 8100 3210",
     "pop:dry-run": "python scripts/import-pop-raster.py --dry-run",
     "pop:import": "python scripts/import-pop-raster.py --truncate",
@@ -13,7 +13,7 @@
     "dev:stack": "npm run dev:v4",
     "dev": "npm run dev:v4",
     "dev:frontend": "vite",
-    "predev:frontend:v4": "node scripts/cleanup-ports.mjs 3000",
+    "predev:frontend:v4": "node scripts/cleanup-ports.mjs 5173",
     "dev:frontend:v4": "vite --mode v4 --host 127.0.0.1",
     "predev:backend": "node scripts/cleanup-ports.mjs 3210",
     "dev:backend": "node scripts/run-backend-v4.mjs dev",
@@ -41,7 +41,7 @@
     "prestart:encoder-service": "node scripts/cleanup-ports.mjs 8100",
     "start:encoder-service": "node scripts/run-encoder-service.mjs --port 8100",
     "smoke": "node scripts/smoke-stack.mjs",
-    "smoke:dev": "node scripts/smoke-stack.mjs --frontend-url http://127.0.0.1:3000"
+    "smoke:dev": "node scripts/smoke-stack.mjs --frontend-url http://127.0.0.1:5173"
   },
   "dependencies": {
     "@deck.gl/aggregation-layers": "9.2.5",

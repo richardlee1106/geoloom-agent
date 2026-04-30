@@ -9,6 +9,7 @@ export interface SSEWriterOptions {
 export class SSEWriter {
   readonly traceId: string
   readonly schemaVersion: string
+  private closed = false
 
   constructor(private readonly options: SSEWriterOptions) {
     this.traceId = options.traceId
@@ -93,7 +94,18 @@ export class SSEWriter {
   }
 
   close() {
-    this.options.stream.end()
+    if (this.closed) return
+    this.closed = true
+    const stream = this.options.stream as Writable & {
+      destroyed?: boolean
+      writableEnded?: boolean
+    }
+    if (stream.destroyed || stream.writableEnded) return
+    try {
+      stream.end()
+    } catch {
+      // ignore stream shutdown errors after client disconnects
+    }
   }
 
   private withMeta(payload: unknown) {
@@ -108,8 +120,21 @@ export class SSEWriter {
   }
 
   private write(event: string, payload: unknown) {
+    if (this.closed) return Promise.resolve()
     const block = `event: ${event}\ndata: ${JSON.stringify(this.withMeta(payload))}\n\n`
-    this.options.stream.write(block)
+    const stream = this.options.stream as Writable & {
+      destroyed?: boolean
+      writableEnded?: boolean
+    }
+    if (stream.destroyed || stream.writableEnded) {
+      this.closed = true
+      return Promise.resolve()
+    }
+    try {
+      stream.write(block)
+    } catch {
+      this.closed = true
+    }
     return Promise.resolve()
   }
 }

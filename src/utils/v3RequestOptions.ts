@@ -6,7 +6,6 @@ const V3_OPTION_ALLOWLIST = [
   'skipCache',
   'forceRefresh',
   'globalAnalysis',
-  'selectedCategories',
   'sourcePolicy',
   'spatialContext',
   'regions',

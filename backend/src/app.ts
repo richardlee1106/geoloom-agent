@@ -10,8 +10,6 @@ import { registerSkillRoutes } from './routes/skills.js'
 import { registerCategoryRoutes } from './routes/category.js'
 import type { CategoryTreeNode } from './catalog/categoryCatalog.js'
 import { registerSpatialRoutes } from './routes/spatial.js'
-import { registerNarrativeProbeRoutes } from './routes/narrativeProbe.js'
-import type { NarrativeRuntime } from './narrative/NarrativeRuntime.js'
 import type { SpatialFetchRequest, SpatialFeature } from './spatial/fetchSpatialFeatures.js'
 
 export interface ChatRuntime {
@@ -27,7 +25,6 @@ export interface CreateAppOptions {
   getCategoryTree?: () => Promise<CategoryTreeNode[]>
   fetchSpatialFeatures?: (input: SpatialFetchRequest) => Promise<SpatialFeature[]>
   chat?: ChatRuntime
-  narrativeRuntime?: NarrativeRuntime
 }
 
 export function createApp(options: CreateAppOptions): FastifyInstance {
@@ -57,9 +54,6 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await registerSkillRoutes(scope, options)
     if (options.chat) {
       await registerChatRoutes(scope, { chat: options.chat })
-    }
-    if (options.narrativeRuntime) {
-      await registerNarrativeProbeRoutes(scope, { narrativeRuntime: options.narrativeRuntime })
     }
   }, { prefix: '/api/geo' })
 

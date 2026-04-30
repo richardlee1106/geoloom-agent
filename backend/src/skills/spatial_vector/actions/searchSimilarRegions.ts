@@ -7,7 +7,7 @@ export async function searchSimilarRegionsAction(
   payload: { text: string, top_k?: number },
   deps: { index: FaissIndex },
 ): Promise<SkillExecutionResult<{
-  regions: Array<{ region_id: string, name: string, score: number, summary: string }>
+  regions: Array<{ region_id: string, name: string, score: number, summary: string, tags?: string[] }>
   semantic_evidence: SemanticEvidenceStatus
 }>> {
   const regions = (await deps.index.searchSimilarRegions(payload.text, payload.top_k || 5))
@@ -16,6 +16,7 @@ export async function searchSimilarRegionsAction(
       name: item.name,
       score: item.score,
       summary: item.summary,
+      tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
     }))
   const semanticEvidence = toSemanticEvidenceStatus(await deps.index.getStatus({ probe: false }))
 

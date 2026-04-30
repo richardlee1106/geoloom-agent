@@ -1,54 +1,5 @@
 <template>
   <div class="control-panel">
-    <div v-if="isMapPanel" class="left-controls" :class="{ 'full-width': isMapPanel }">
-      <div class="select-group">
-        <!-- 当前选中路径展示 -->
-        <div class="current-category-display" v-if="selectedCategoryPath.length > 0">
-          <span class="category-tag">{{ getCategoryLabel(selectedCategoryPath) }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- POI 类别选择抽屉 -->
-    <el-drawer
-      v-model="categoryDrawerVisible"
-      title="POI 语义分类选择"
-      direction="ltr"
-      :size="380"
-      append-to-body
-      class="category-drawer"
-      :modal-class="'category-drawer-modal'"
-      :with-header="true"
-    >
-      <div class="drawer-content">
-        <p class="drawer-tip">请选择您感兴趣的地理语义类别（支持多选叠加）：</p>
-        <el-cascader
-          v-model="selectedCategoryPath"
-          :options="categoryOptions"
-          :props="{ multiple: true, checkStrictly: true, expandTrigger: 'hover' }"
-          placeholder="请选择类别..."
-          @change="handleCascaderChange"
-          class="group-select glass-cascader drawer-cascader"
-          popper-class="poi-cascader-popper"
-          :teleported="false" 
-          :show-all-levels="false"
-          filterable
-          clearable
-          collapse-tags
-          collapse-tags-tooltip
-        >
-          <template #default="{ node, data }">
-            <span>{{ data.label }}</span>
-            <span v-if="!node.isLeaf"> ({{ data.children.length }}) </span>
-          </template>
-        </el-cascader>
-        
-        <div class="drawer-actions">
-           <p class="drawer-note">提示：支持多选叠加，已选类别会自动后台加载。</p>
-        </div>
-      </div>
-    </el-drawer>
-
     <!-- 语义查询弹窗 -->
     <el-dialog
       v-model="searchDialogVisible"
@@ -76,18 +27,6 @@
 
     <!-- 移动端顶部栏 -->
     <div class="mobile-top-bar mobile-only">
-        <el-cascader
-          v-model="selectedCategoryPath"
-          :options="categoryOptions"
-          :props="{ multiple: true, checkStrictly: true }"
-          placeholder="地名大类"
-          @visible-change="handleMobileCategoryVisibleChange"
-          @change="handleCascaderChange"
-          class="group-select mobile-select glass-cascader"
-          :teleported="false"
-          :show-all-levels="false"
-          collapse-tags
-      />
       <div class="mobile-btn-group">
         <!-- AI 搜索按钮 (新位置: Selector [Search] [Save] [...]) -->
         <button 
@@ -313,22 +252,6 @@
           </button>
         </el-tooltip>
 
-        <!-- 侧边栏触发按钮 (移动到右侧) -->
-        <el-tooltip content="选择 POI 类别" placement="bottom">
-          <button 
-            class="primary-btn icon-btn" 
-            :class="{ 'active': categoryDrawerVisible }"
-            @click="categoryDrawerVisible = true"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="14" width="7" height="7" rx="1" />
-              <rect x="3" y="14" width="7" height="7" rx="1" />
-            </svg>
-          </button>
-        </el-tooltip>
-
         <!-- AI 搜索按钮 (移动到右侧) -->
         <el-tooltip content="AI 语义查询" placement="bottom">
           <button 
@@ -362,38 +285,22 @@
             </svg>
           </button>
         </el-tooltip>
-
-        <button @click="emit('go-narrative')" class="run-btn premium-run-btn">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="margin-right: 4px;">
-            <path d="M8 5.14v14c0 .86.94 1.4 1.68.97l10.66-7.33a1.15 1.15 0 0 0 0-1.94L9.68 4.17c-.74-.43-1.68.11-1.68.97z"/>
-          </svg>
-          地图叙事
-        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { ref, computed } from 'vue';
 import { ElButton } from 'element-plus/es/components/button/index';
-import { ElCascader } from 'element-plus/es/components/cascader/index';
 import { ElDialog } from 'element-plus/es/components/dialog/index';
-import { ElDrawer } from 'element-plus/es/components/drawer/index';
 import { ElInput } from 'element-plus/es/components/input/index';
-import { ElMessage } from 'element-plus/es/components/message/index';
 import { ElNotification } from 'element-plus/es/components/notification/index';
 import { ElOption, ElSelect } from 'element-plus/es/components/select/index';
 import { ElSwitch } from 'element-plus/es/components/switch/index';
 import { ElTooltip } from 'element-plus/es/components/tooltip/index';
-import DataLoaderWorker from '../workers/dataLoader.worker?worker';
-import { SPATIAL_API_BASE_URL } from '../config';
-import { fetchCategoryCatalogTree } from '../utils/categoryCatalogClient';
 
-const emit = defineEmits(['data-loaded', 'data-removed', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'category-change', 'go-narrative', 'update:filterEnabled', 'update:heatmapEnabled', 'update:weightEnabled', 'update:showWeightValue', 'update:globalAnalysisEnabled']);
-// const selectedGroup = ref(''); // Replace with array path
-const selectedCategoryPath = ref([]); // 多选模式下是二维数组 [[A,B], [A,C]]
-const activeCategories = ref(new Set()); // 用于追踪已加载的类别 (最后一级名称)
+const emit = defineEmits(['run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'update:filterEnabled', 'update:heatmapEnabled', 'update:weightEnabled', 'update:showWeightValue', 'update:globalAnalysisEnabled']);
 
 const drawEnabled = ref(false);
 const selectedDrawMode = ref('');
@@ -402,8 +309,6 @@ const showMobileMenu = ref(false);
 const searchDialogVisible = ref(false);
 const isSearching = ref(false);
 const hasSearchResult = ref(false);
-const categoryDrawerVisible = ref(false);
-const groupLoading = ref(false);
 
 const props = defineProps({
   onRunAlgorithm: Function,
@@ -422,296 +327,11 @@ const props = defineProps({
   selectedPolygon: { type: Array, default: null }
 });
 
-// ȡǰѡеƣHeaderʾ- ѡ
-const getCategoryLabel = (paths) => {
-  if (!paths || paths.length === 0) return '';
-  // ѡ˶ʾ "Xѡ"
-  if (Array.isArray(paths[0])) {
-     return `${paths.length} 项已选`;
-  }
-  return paths[paths.length - 1];
-};
-
 const isMapPanel = computed(() => props.panelType === 'map');
 const isTagPanel = computed(() => props.panelType === 'tag');
 
-// 之前是硬编码的 groups，现在改为从 catalog.json 加载
-const categoryOptions = ref([]);
-
-// 全量分类数据（包含3级）
-const fullCategoryOptions = ref([]);
-
-function mapCategoryOptions(fullData = []) {
-  return fullData.map(l1 => ({
-    ...l1,
-    children: l1.children?.map(l2 => ({
-      ...l2,
-      children: null,
-      leaf: true
-    }))
-  }));
-}
-
-const ensureCategoryCatalogLoaded = async () => {
-  if (groupLoading.value || categoryOptions.value.length > 0) {
-    return;
-  }
-
-  groupLoading.value = true;
-  try {
-    const fullData = await fetchCategoryCatalogTree(fetch, SPATIAL_API_BASE_URL);
-
-    if (Array.isArray(fullData)) {
-      fullCategoryOptions.value = fullData;
-      categoryOptions.value = mapCategoryOptions(fullData);
-    }
-  } catch (error) {
-    console.error('Error loading catalog:', error);
-    ElNotification.error({ title: '错误', message: '无法加载分类数据', offset: 80 });
-  } finally {
-    groupLoading.value = false;
-  }
-};
-
-watch(categoryDrawerVisible, (visible) => {
-  if (visible) {
-    void ensureCategoryCatalogLoaded();
-  }
-});
-
-const handleMobileCategoryVisibleChange = (visible) => {
-  if (visible) {
-    void ensureCategoryCatalogLoaded();
-  }
-};
-
 // 默认使用动态重心引力算法
 const localAlgorithm = ref('basic');
-
-const dataWorker = ref(null);
-
-// 辅助函数：计算多边形/几何的 BBox
-const getBoundsFromPolygon = (geo) => {
-  if (!geo) return null;
-  let minX = 180, minY = 90, maxX = -180, maxY = -90;
-  
-  const traverse = (arr) => {
-     if (!Array.isArray(arr)) return;
-     if (arr.length === 2 && typeof arr[0] === 'number') {
-         minX = Math.min(minX, arr[0]);
-         maxX = Math.max(maxX, arr[0]);
-         minY = Math.min(minY, arr[1]);
-         maxY = Math.max(maxY, arr[1]);
-         return;
-     }
-     arr.forEach(item => traverse(item));
-  };
-  
-  traverse(geo);
-  if (minX > maxX) return null;
-  return [minX, minY, maxX, maxY];
-};
-
-// 将多边形/多层嵌套坐标转为 WKT；坐标不足时回退为 bbox 处理
-const polygonToWKT = (geo) => {
-  if (!Array.isArray(geo)) return null;
-
-  const points = geo
-    .map((pt) => {
-      if (Array.isArray(pt) && pt.length >= 2) {
-        return [Number(pt[0]), Number(pt[1])];
-      }
-      return null;
-    })
-    .filter((pt) => Number.isFinite(pt?.[0]) && Number.isFinite(pt?.[1]));
-
-  if (points.length < 3) return null;
-
-  const first = points[0];
-  const last = points[points.length - 1];
-  if (first[0] !== last[0] || first[1] !== last[1]) {
-    points.push(first);
-  }
-
-  const coords = points.map(([lon, lat]) => `${lon} ${lat}`).join(', ');
-  return `POLYGON((${coords}))`;
-};
-
-// 辅助函数：初始化 Worker
-const initWorker = () => {
-   if (dataWorker.value) return;
-   
-   dataWorker.value = new DataLoaderWorker();
-    
-   dataWorker.value.onmessage = (e) => {
-      // 注意：Worker 默认只返回 name(路径字符串)。
-      // 我们可以从 name 提取最后一级作为 category，或者依赖 Worker 透传 (需修改Worker，暂不改)
-      // 在这里，我们可以简单假设 name 就是传过去的 path.join(' > ')
-      const { success, name, features, error } = e.data;
-      
-      const category = name.split(' > ').pop(); // 从路径推断类别名
-      
-      if (success) {
-        if (features.length === 0) {
-           // 优化提示：不再显示警告，而是友好提示
-           console.log(`${category}: 当前范围内暂无数据`);
-           // 仅当是用户显式交互时才提示，这里作为加载回调，如果不弹窗可能更好，或者弹一个 Info
-           ElNotification.info({ title: '加载完成', message: `${category}: 当前视图内未找到数据`, offset: 80 });
-           
-           emit('data-loaded', { success: true, name, category, features: [], mode: 'append' });
-        } else {
-           ElNotification.success({ title: '成功', message: `已叠加: ${category} (${features.length} 条)`, offset: 80 });
-           // mode: 'append' 告诉 App.vue 这是增量数据
-           emit('data-loaded', { success: true, name, category, features, mode: 'append' });
-        }
-      } else {
-        console.error(error);
-        ElNotification.error({ title: '加载失败', message: `${error || '未知错误'}`, offset: 80 });
-        emit('data-loaded', { success: false, name, features: [], mode: 'append' });
-      }
-      emit('loading-change', false);
-   };
-    
-   dataWorker.value.onerror = (e) => {
-      console.error('Worker error:', e);
-      ElNotification.error({ title: '', message: `ݼ`, offset: 80 });
-      emit('loading-change', false);
-   };
-}
-
-// 辅助函数：根据路径在树中找到节点
-const findNode = (options, path) => {
-  let currentOptions = options;
-  let currentNode = null;
-  for (const val of path) {
-    currentNode = currentOptions.find(opt => opt.value === val);
-    if (!currentNode) return null;
-    currentOptions = currentNode.children || [];
-  }
-  return currentNode;
-};
-
-// 辅助函数：获取节点下所有叶子节点的路径
-const getAllLeafPaths = (node, currentPath) => {
-  if (!node.children || node.children.length === 0) {
-    return [currentPath];
-  }
-  let paths = [];
-  for (const child of node.children) {
-    paths = paths.concat(getAllLeafPaths(child, [...currentPath, child.value]));
-  }
-  return paths;
-};
-
-// ͳһ淶ѡֵݵѡͶѡֽṹ
-const normalizeCategoryPaths = (paths) => {
-  if (!Array.isArray(paths) || paths.length === 0) return [];
-
-  if (Array.isArray(paths[0])) {
-    return paths
-      .filter(path => Array.isArray(path) && path.length > 0)
-      .map(path => [...path]);
-  }
-
-  return [paths];
-};
-
-const setCategorySelection = (paths = []) => {
-  const normalized = normalizeCategoryPaths(paths);
-  selectedCategoryPath.value = normalized;
-
-  const nextCategories = new Set();
-  normalized.forEach((path) => {
-    const leaf = path[path.length - 1];
-    if (leaf) nextCategories.add(leaf);
-  });
-
-  activeCategories.value = nextCategories;
-};
-
-const handleCascaderChange = () => {
-  const currentPaths = normalizeCategoryPaths(selectedCategoryPath.value);
-  
-  // 提取当前选中的所有最后一级类别名称 (Set)
-  const currentCategories = new Set();
-  const currentItems = [];
-  
-  // 兼容单选模式
-  // 多选模式下 currentPaths 是二维数组
-  const paths = currentPaths;
-  
-  paths.forEach(path => {
-    if (path.length > 0) {
-      const cat = path[path.length - 1];
-      currentCategories.add(cat);
-      currentItems.push({ category: cat, path });
-    }
-  });
-  
-  // 1. 计算需要移除的
-  for (const activeCat of activeCategories.value) {
-    if (!currentCategories.has(activeCat)) {
-       // 该类别被取消选中 -> 移除
-       emit('data-removed', activeCat);
-       activeCategories.value.delete(activeCat);
-       console.log('Removed category:', activeCat);
-    }
-  }
-  
-  // 2. 计算需要新增的
-  const toAdd = [];
-  for (const item of currentItems) {
-    if (!activeCategories.value.has(item.category)) {
-      toAdd.push(item);
-      activeCategories.value.add(item.category);
-    }
-  }
-  // 先同步到父组件，确保 AI 面板和主路由拿到最新分类约束。
-  emit('category-change', currentPaths); // 同步分类路径到父组件
-
-  if (toAdd.length === 0) return;
-
-  emit('loading-change', true);
-  
-  initWorker();
-  
-  // 计算当前的查询边界 (BBox)
-  // 优先级：上传/绘制的选区 > 当前地图视口 > 全球(null)
-  let searchBounds = null;
-  let searchGeometry = null;
-
-  // Ѵѡȷ geometry WKT bbox ɷΧŴ
-  if (props.selectedPolygon) {
-    searchGeometry = polygonToWKT(props.selectedPolygon);
-    if (!searchGeometry) {
-      searchBounds = getBoundsFromPolygon(props.selectedPolygon);
-    }
-  } else if (props.mapBounds) {
-    // 解构 Proxy 数组，确保 Worker postMessage 可序列化。
-    searchBounds = [...props.mapBounds];
-  }
-
-  // 3. Ϊ󣨸ǰռԼ
-  toAdd.forEach(item => {
-    const fullName = item.path.join(' > ');
-    console.log(`Loading new category: ${item.category}, bounds=`, searchBounds, 'geometry=', Boolean(searchGeometry));
-
-    dataWorker.value.postMessage({
-      category: item.category,
-      name: fullName,
-      limit: 500000,
-      baseUrl: SPATIAL_API_BASE_URL,
-      bounds: searchBounds,
-      geometry: searchGeometry
-    });
-  });
-};
-
-onBeforeUnmount(() => {
-  if (dataWorker.value) {
-    dataWorker.value.terminate();
-  }
-});
 
 // 语义查询按钮点击处理
 const handleSemanticQueryClick = () => {
@@ -779,18 +399,6 @@ const run = () => {
 };
 
 const reset = () => {
-  // ʼʱҪͬʱɸѡ״̬Լ
-  const categoriesToRemove = Array.from(activeCategories.value);
-  categoriesToRemove.forEach((category) => {
-    emit('data-removed', category);
-  });
-
-  activeCategories.value = new Set();
-  selectedCategoryPath.value = [];
-  categoryDrawerVisible.value = false;
-
-  emit('category-change', []);
-
   // 清空语义搜索状态，保持 UI 与数据源一致。
   hasSearchResult.value = false;
   searchKeyword.value = '';
@@ -913,7 +521,7 @@ const handleVectorFileUpload = async (event) => {
   }
 };
 
-defineExpose({ setDrawEnabled, setSearchResult, setSearching, setCategorySelection });
+defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* const debugShow = () => {
   if (!selectedGroup.value) {

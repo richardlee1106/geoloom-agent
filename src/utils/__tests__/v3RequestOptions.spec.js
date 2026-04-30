@@ -29,7 +29,6 @@ describe('filterV3ChatOptions', () => {
     expect(filtered).toEqual({
       requestId: 'req-1',
       sessionId: 'sess-1',
-      selectedCategories: ['餐饮美食'],
       spatialContext: {
         center: { lon: 114.3, lat: 30.5 },
         boundary: [[114.3, 30.5], [114.4, 30.5], [114.4, 30.6]]

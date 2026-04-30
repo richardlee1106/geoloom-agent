@@ -182,6 +182,7 @@ function formatQueryType(value: unknown): string {
   if (normalized === 'area_overview') return '区域解读'
   if (normalized === 'similar_regions') return '相似片区'
   if (normalized === 'compare_places') return '双地点比较'
+  if (normalized === 'composite_recommendation') return '复合行程推荐'
   return pickString(value)
 }
 
