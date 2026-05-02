@@ -94,6 +94,7 @@ export interface NarrativeChapter {
   region_id: string
   text: string
   web_source?: { title: string; url: string }
+  web_sources?: Array<{ title: string; url: string; snippet?: string }>
   length_ms?: number
 }
 
@@ -134,6 +135,7 @@ export interface NarrativeRequest {
   tone?: NarrationTone
   user_context?: Partial<UserContext>
   limit?: number
+  debug?: boolean
 }
 
 export interface NarrativeBuilder {

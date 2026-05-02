@@ -45,24 +45,37 @@ function candidate(id: string, role: RegionCandidate['role'], lon: number, lat: 
 describe('sampleNarrativePath', () => {
   const candidates = [
     candidate('a', 'primary_region', 114.34, 30.54, 0.9),
-    candidate('b', 'primary_region', 114.36, 30.56, 0.8),
-    candidate('c', 'landmark_anchor', 114.38, 30.58, 0.7),
-    candidate('d', 'support_region', 114.42, 30.62, 0.6),
-    candidate('outside', 'support_region', 115, 31, 1),
+    candidate('far', 'support_region', 114.46, 30.66, 0.88),
+    candidate('b', 'primary_region', 114.35, 30.545, 0.8),
+    candidate('c', 'landmark_anchor', 114.36, 30.55, 0.7),
+    candidate('d', 'support_region', 114.37, 30.56, 0.6),
   ]
 
-  it('is reproducible for the same seed and keeps nodes inside viewport', () => {
+  it('is reproducible for the same seed and follows nearest neighboring regions', () => {
     const left = sampleNarrativePath({ candidates, viewport, lod: 'meso', seed: 'seed-a' })
     const right = sampleNarrativePath({ candidates, viewport, lod: 'meso', seed: 'seed-a' })
 
     expect(left.nodes).toEqual(right.nodes)
-    expect(left.nodes.map((node) => node.region_id)).not.toContain('outside')
+    expect(left.nodes.map((node) => node.region_id)).toEqual(['a', 'b', 'c', 'd', 'far'])
   })
 
-  it('can produce observable differences for different seeds', () => {
+  it('keeps the gradual order stable across different seeds', () => {
     const left = sampleNarrativePath({ candidates, viewport, lod: 'meso', seed: 'seed-a' })
     const right = sampleNarrativePath({ candidates, viewport, lod: 'meso', seed: 'seed-b' })
 
-    expect(left.nodes.map((node) => node.region_id).join(',')).not.toBe(right.nodes.map((node) => node.region_id).join(','))
+    expect(left.nodes.map((node) => node.region_id)).toEqual(right.nodes.map((node) => node.region_id))
+  })
+
+  it('avoids a third consecutive region with the same role when a nearby alternative exists', () => {
+    const mixed = [
+      candidate('core', 'primary_region', 114.34, 30.54, 0.9),
+      candidate('campus-east', 'primary_region', 114.341, 30.54, 0.8),
+      candidate('campus-north', 'primary_region', 114.342, 30.54, 0.7),
+      candidate('park-edge', 'support_region', 114.356, 30.54, 0.68),
+    ]
+
+    const result = sampleNarrativePath({ candidates: mixed, viewport, lod: 'meso', seed: 'seed-a' })
+
+    expect(result.nodes.map((node) => node.region_id).slice(0, 3)).toEqual(['core', 'campus-east', 'park-edge'])
   })
 })

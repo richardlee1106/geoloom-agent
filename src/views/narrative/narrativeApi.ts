@@ -7,6 +7,7 @@ export interface FetchNarrativeOptions {
   tone?: NarrationTone
   user_context?: Partial<UserContext>
   limit?: number
+  debug?: boolean
 }
 
 export async function fetchNarrativeResponse(options: FetchNarrativeOptions): Promise<NarrativeResponse> {

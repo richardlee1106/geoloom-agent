@@ -131,6 +131,7 @@ export interface NarrativeChapter {
   region_id: string
   text: string
   web_source?: { title: string; url: string }
+  web_sources?: Array<{ title: string; url: string; snippet?: string }>
   length_ms?: number
 }
 
@@ -180,7 +181,7 @@ export interface TierStats {
 // 15. UI 配置（左/右面板控件）
 export interface NarrativeUiSettings {
   relevanceThreshold: number  // 0~1
-  opacityScale: number        // 0~1
+  viewportZoom: number
   durationPreset: 'casual' | 'standard' | 'detailed'
   tonePreset: NarrationTone
   centroidStrategy: 'auto' | 'region_first' | 'poi_first'

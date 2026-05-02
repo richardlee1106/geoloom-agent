@@ -17,10 +17,11 @@ export function sampleNarrativePath(input: {
   const valid = [...input.candidates]
   const selected: RegionCandidate[] = []
   const pool = valid.slice(0, Math.max(limit * 2, 6))
+  const first = pool.shift()
+  if (first) selected.push(first)
 
   while (selected.length < limit && pool.length > 0) {
-    const nextIndex = pool.findIndex((candidate) => !isHomogeneousWithLast(selected[selected.length - 1], candidate))
-    const index = nextIndex >= 0 ? nextIndex : 0
+    const index = pickNearestNextCandidate(selected, pool)
     selected.push(pool.splice(index, 1)[0])
   }
 
@@ -50,16 +51,37 @@ function resolveNarrationRole(candidate: RegionCandidate, index: number): PathNa
 
 function buildTransitionReason(previous: RegionCandidate | null, current: RegionCandidate): string {
   if (!previous) return '从当前视野中最有代表性的区域开始讲起。'
-  if (previous.role !== current.role) return `从${previous.display_name}转到${current.display_name}，切换到另一类空间角色。`
-  return `沿着当前视野的空间结构继续展开到${current.display_name}。`
+  if (previous.role !== current.role) return `从${previous.display_name}顺着相邻空间转到${current.display_name}，切换到另一类空间角色。`
+  return `沿着当前视野的邻近片区继续展开到${current.display_name}。`
 }
 
-function isHomogeneousWithLast(previous: RegionCandidate | undefined, next: RegionCandidate): boolean {
-  if (!previous) return false
-  if (previous.role === next.role) return true
-  const prevBounds = boundsFromBoundary(previous.boundary)
-  const nextBounds = boundsFromBoundary(next.boundary)
-  const prevCenter = [(prevBounds.west + prevBounds.east) / 2, (prevBounds.south + prevBounds.north) / 2]
-  const nextCenter = [(nextBounds.west + nextBounds.east) / 2, (nextBounds.south + nextBounds.north) / 2]
-  return Math.abs(prevCenter[0] - nextCenter[0]) < 0.003 && Math.abs(prevCenter[1] - nextCenter[1]) < 0.003
+function pickNearestNextCandidate(selected: RegionCandidate[], pool: RegionCandidate[]): number {
+  const previous = selected[selected.length - 1]
+  const avoidRole = selected.length >= 2 && selected[selected.length - 2].role === previous.role ? previous.role : null
+  let bestIndex = 0
+  let bestScore = Infinity
+  for (const [index, candidate] of pool.entries()) {
+    const score = spatialDistanceScore(previous, candidate)
+      + (previous.role === candidate.role ? 0.0002 : 0)
+      + (avoidRole && candidate.role === avoidRole ? 0.0012 : 0)
+      - candidate.score * 0.00005
+    if (score < bestScore) {
+      bestScore = score
+      bestIndex = index
+    }
+  }
+  return bestIndex
+}
+
+function spatialDistanceScore(left: RegionCandidate, right: RegionCandidate): number {
+  const [leftLon, leftLat] = centerOfCandidate(left)
+  const [rightLon, rightLat] = centerOfCandidate(right)
+  const dx = leftLon - rightLon
+  const dy = leftLat - rightLat
+  return dx * dx + dy * dy
+}
+
+function centerOfCandidate(candidate: RegionCandidate): [number, number] {
+  const bounds = boundsFromBoundary(candidate.boundary)
+  return [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2]
 }

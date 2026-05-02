@@ -1,15 +1,16 @@
 ---
-title: Narrative 解说引擎重建规范（阶段 1：宪法候选稿）
-status: reviewing
-phase: 1 / 4
+title: Narrative 解说引擎重建规范
+status: phase_3_acceptance_passed
+phase: 3 / 4
 created: 2026-04-29
+updated: 2026-05-02
 owner: GeoLoom Narrative Team
 ---
 
 # Narrative 解说引擎重建规范
 
-> **本规范是阶段 1 的产出，是后续所有 narrative 算法、UI、LLM 串讲、数据契约的强制依据候选稿。**
-> 在 `status = reviewing` 期间，原则性底线立即生效；字段级契约、阈值和阶段门禁允许根据阶段 2 Mock UI 与阶段 3 算法实测修订。
+> **本规范是 narrative 算法、UI、LLM 串讲、数据契约的强制依据。**
+> 当前 `status = phase_3_acceptance_passed`：阶段 3 算法替换已完成收口验收，后续进入阶段 4 产品打磨。
 > 任何对本规范的修改必须显式更新本文件，并在 PR 中说明动机。
 
 ---
@@ -1163,15 +1164,15 @@ assistant_response {
 
 ## 10. 阶段门禁（Phase Gates）
 
-### 10.1 阶段 1：规范（本文件）
+### ✅️ 10.1 阶段 1：规范（本文件）
 
 完成标准：
 
 - 用户认可本规范的原则性底线
-- 文档 status = reviewing，允许阶段 2 / 阶段 3 根据实测修订字段级契约
+- 阶段 1 期间文档 status = reviewing，允许阶段 2 / 阶段 3 根据实测修订字段级契约
 - 所有后续 PR 必须显式引用本规范条款，并说明是否修改契约
 
-### 10.2 阶段 2：Mock UI
+### ✅️ 10.2 阶段 2：Mock UI
 
 完成标准：
 
@@ -1183,13 +1184,13 @@ assistant_response {
 - 无任何真实算法依赖
 - 阶段 2 结束后单独锁定 `narrative-data-contract.md`
 
-### 10.3 阶段 3：算法替换
+### ✅️ 10.3 阶段 3：算法替换
 
 完成标准：
 
 - 替换顺序采用两阶段估计：
   - 粗召回 → 角色初判 → 粗 scene_profile → 粗 region candidates → LOD 判定
-  - 按 LOD 重算 region / tier / path → fact grounding → LLM narration
+  - 按 LOD 重算 region / tier / path → fact grounding → narration fallback / LLM 通道预留
 - 每一步替换不破坏 §8 前端契约
 - 每个子阶段必须有 golden viewport、单测和失败回退策略
 
@@ -1217,7 +1218,7 @@ assistant_response {
 
 阶段 3.5：Path sampler
   - 同 seed 可复现
-  - 不同 seed 有可观察差异
+  - 同 viewport 的渐进邻近顺序稳定，不因 seed 破坏空间连贯
   - 不连续同质节点
   - 不飞出 viewport
 
@@ -1227,6 +1228,19 @@ assistant_response {
   - 输出不含 forbidden_dictionary 命中
   - 数字 / 年份 / 人名必须来自 allowed_facts
 ```
+
+收口验收记录（2026-05-02）：
+
+- **状态**：阶段 3 算法替换通过收口验收，可进入阶段 4 打磨。
+- **验收测试**：新增 `backend/tests/unit/narrative/goldenViewportAcceptance.spec.ts`，覆盖 Micro / Meso / Macro golden viewport、噪声密集主链过滤、空召回 fallback。
+- **调试能力**：`/api/narrative` 支持 `debug: true`，后端返回 `recall / candidates / lod / path / facts / web_facts` 结构化快照；前端 `fetchNarrativeResponse` 类型已允许传入 `debug`。
+- **DeepSeek Search 接入**：`deepseek_search` 作为可选 web fact 来源补强，失败时不影响主叙事链路；环境变量采用 `DEEPSEEK_SEARCH_*`，兼容旧 `NEWAPI_SEARCH_*`。
+- **验收修订**：Path sampler 的阶段 3.5 门禁从“不同 seed 有可观察差异”修订为“同 viewport 的渐进邻近顺序稳定”，优先保证讲解路径空间连贯。
+- **DeepSeek Search 边界**：联网搜索不是默认强依赖；只有 `DEEPSEEK_SEARCH_BASE_URL`、`DEEPSEEK_SEARCH_API_KEY`、`DEEPSEEK_SEARCH_MODEL` 同时存在时才注册。它只补充 `web_sources`，不决定候选、排序、LOD 或主讲链路。
+- **当前文案边界**：阶段 3 的 facts 与 region 来自真实算法，但章节正文仍由 `factGrounding.ts` 模板生成；尚未进入 LLM 自然讲解阶段。
+- **当前路径边界**：`pathSampler.ts` 已实现代表性优先、空间邻近转场、连续同质节点惩罚与 transition_reason，但尚未构建“历史 / 商业 / 交通 / 生态”等高级关系图谱。
+- **当前片区边界**：算法已能稳定处理 AOI 主体与点云候选，但对“江汉路步行街 / 水塔街 / 徐东商圈”这类抽象商圈、街区、道路走廊、城市认知片区支持不足，需要阶段 4 增补抽象片区发现与命名。
+- **阶段 4 留项**：抽象片区发现与命名、来源质量分级、web fact 异步补齐缓存、调试面板与用户面板分离、播放节奏与视觉 polish、算法级重心策略。
 
 ### 10.4 阶段 4：打磨
 
@@ -1238,6 +1252,49 @@ assistant_response {
 - Assistant 打断、暂停、跳转、`request_replan` 行为稳定
 - 有性能预算：首屏 narrative、web 搜索、LLM narration 均有超时降级
 - 覆盖高校、公园、商圈、历史街区、混合城区、稀疏郊区回归场景
+
+阶段 4 开发分解：
+
+```text
+阶段 4.1：抽象片区发现与命名
+  - 识别商圈、街区、步行街、道路走廊、生活片区等非标准 AOI
+  - 支持江汉路步行街、水塔街、徐东商圈等城市认知片区
+  - 综合使用 POI 密度、道路 / 名称 token、AOI / 行政边界、DeepSeek Search / 地名词典候选
+  - 产出必须可追溯到真实 POI / AOI / region evidence，不允许凭空造地名
+
+阶段 4.2：叙事关系图谱与路径打磨
+  - 从“空间邻近”升级为“空间邻近 + 语义互补 + 主从关系 + 转场意图”
+  - 支持由核心到外围、由入口到腹地、由历史到现代、由商业到生活等路径策略
+  - `transition_reason` 必须自然解释为什么从 A 讲到 B
+
+阶段 4.3：Narrator LLM 自然讲解
+  - 当前模板文案只能作为 fallback
+  - LLM 只能消费 allowed_facts / web_sources / path skeleton，不允许决定主讲对象或顺序
+  - 输出必须经过 forbidden_dictionary、事实引用、数字 / 年份 / 人名白名单检查
+
+阶段 4.4：DeepSeek Search 异步事实补强
+  - web 搜索不阻塞首屏 narrative
+  - 建立 region query cache 与来源质量分级
+  - 官方站点、百科、权威媒体优先；论坛、营销、软文、低质聚合站降权或过滤
+
+阶段 4.5：调试面板与用户面板分离
+  - 用户面板继续隐藏 role / score / weight / debug
+  - 开发态调试面板展示 recall / candidates / lod / path / facts / web_facts
+  - 支持 golden viewport 一键回放与对比
+
+阶段 4.6：UI 播放与交互 polish
+  - 已删除左侧透明度调节
+  - 尺度滑杆必须真实控制地图 zoom
+  - 重心策略必须至少影响当前视野聚焦；后续再升级为后端 ranking 参数
+  - 打磨播放节奏、片区光晕、来源引用 hover、章节跳转和 Assistant 打断
+```
+
+阶段 4 第一轮优先级：
+
+1. **先做抽象片区发现与命名**：解决“片区数量有了，但缺少城市认知片区”的核心问题。
+2. **再做叙事关系图谱**：解决“谁和谁关系更密切、为什么这么讲”的连贯性问题。
+3. **再接 LLM 自然讲解**：避免在结构不稳时提前让 LLM 美化文案。
+4. **最后做 UI polish 与 debug 面板**：保证用户面稳定、开发面可解释。
 
 ### 10.5 偏离处理
 
@@ -1281,8 +1338,8 @@ assistant_response {
 - `narrative-ui-mock-spec.md`（阶段 2）
 - `narrative-data-contract.md`（阶段 2 末尾锁定 v1）
 - `narrative-implementation-roadmap.md`（阶段 3 起）
-- `narrative-polish-checklist.md`（阶段 4）
+- `narrative-polish-checklist.md`（阶段 4，active）
 
 ---
 
-**本规范当前处于 reviewing 状态；原则性底线立即生效，字段级契约在阶段 2 末尾锁定。**
+**本规范当前状态：阶段 3 收口验收通过，阶段 4 进入产品打磨与抽象片区增强。**

@@ -92,13 +92,6 @@
           </div>
           <input class="slider-input" type="range" min="0" max="1" step="0.01" v-model.number="ui.relevanceThreshold" />
           <div class="slider-ticks"><span>0%</span><span>50%</span><span>100%</span></div>
-
-          <div class="slider-row">
-            <span class="slider-label">透明度调节</span>
-            <span class="slider-value">{{ ui.opacityScale.toFixed(2) }}</span>
-          </div>
-          <input class="slider-input" type="range" min="0" max="1" step="0.01" v-model.number="ui.opacityScale" />
-          <div class="slider-ticks"><span>0%</span><span>50%</span><span>100%</span></div>
         </section>
 
         <!-- 4. 尺度与重心 -->
@@ -113,12 +106,12 @@
           </div>
           <div class="lod-row">
             <span class="lod-key">当前尺度档位</span>
-            <span class="lod-val accent">Level {{ Math.round(narrative.viewport.zoom) }}</span>
+            <span class="lod-val accent">Level {{ ui.viewportZoom.toFixed(1) }}</span>
           </div>
           <div class="lod-bar">
-            <span>近景（深挖）</span>
-            <div class="lod-track"><div class="lod-knob" :style="{ left: lodKnobLeft }" /></div>
             <span>远景（多讲）</span>
+            <input class="slider-input" type="range" min="10" max="17" step="0.1" v-model.number="ui.viewportZoom" @input="applyViewportZoom" />
+            <span>近景（深挖）</span>
           </div>
           <div class="centroid-row">
             <span class="centroid-key">重心策略</span>
@@ -128,11 +121,11 @@
               v-for="o in centroidStrategyOptions"
               :key="o.key"
               :class="['centroid-tab', { active: ui.centroidStrategy === o.key }]"
-              @click="ui.centroidStrategy = o.key"
+              @click="setCentroidStrategy(o.key)"
             >{{ o.label }}</button>
           </div>
           <div class="centroid-hint">
-            当前视角中{{ activeRegion.display_name }}占比{{ Math.round(narrative.dominant_coverage * 100) }}%，系统将以其为重心，优先讲解核心内容，适当扩展周边。
+            当前重心：{{ activeRegion.display_name }}。调整尺度或重心后，再点击“分析当前视野”刷新叙事。
           </div>
         </section>
       </aside>
@@ -269,7 +262,32 @@
           </div>
 
           <div class="narration-text">
-            <p>{{ typedText }}<span class="cursor" v-if="typing">▏</span></p>
+            <p>
+              {{ typedText }}
+              <template v-if="!typing">
+                <a
+                  v-for="(source, i) in activeChapterSources"
+                  :key="`${source.url}-${i}`"
+                  class="source-mark"
+                  :href="source.url"
+                  target="_blank"
+                  rel="noreferrer"
+                  :title="source.title"
+                >{{ i + 1 }}</a>
+              </template>
+              <span class="cursor" v-if="typing">▏</span>
+            </p>
+            <div v-if="!typing && activeChapterSources.length" class="source-list">
+              <a
+                v-for="(source, i) in activeChapterSources"
+                :key="`source-${source.url}-${i}`"
+                :href="source.url"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <sup>{{ i + 1 }}</sup>{{ source.title }}
+              </a>
+            </div>
           </div>
 
           <div class="seq-block">
@@ -481,7 +499,7 @@ const EMPTY_NARRATIVE_RESPONSE: NarrativeResponse = {
 
 const defaultUiSettings: NarrativeUiSettings = {
   relevanceThreshold: 0.25,
-  opacityScale: 0.35,
+  viewportZoom: INITIAL_VIEWPORT.zoom,
   durationPreset: 'standard',
   tonePreset: 'science',
   centroidStrategy: 'auto',
@@ -505,6 +523,13 @@ const centroidStrategyOptions = [
   { key: 'region_first' as const, label: '片区优先' },
   { key: 'poi_first' as const, label: 'POI 优先' }
 ]
+type CentroidStrategy = NarrativeUiSettings['centroidStrategy']
+
+function centroidStrategyLabel(strategy: CentroidStrategy): string {
+  if (strategy === 'region_first') return '片区优先'
+  if (strategy === 'poi_first') return 'POI 优先'
+  return '自动重心'
+}
 
 // ============================================================================
 // 模式 + 状态
@@ -512,7 +537,7 @@ const centroidStrategyOptions = [
 const narrative = ref<NarrativeResponse>(EMPTY_NARRATIVE_RESPONSE)
 const analysisStatus = ref<'preset' | 'analyzing' | 'ready' | 'error'>('preset')
 const analysisError = ref('')
-const canNarrate = computed(() => analysisStatus.value !== 'analyzing')
+const canNarrate = computed(() => analysisStatus.value === 'ready' && displayPathNodes.value.length > 0)
 const narrativeSourceLabel = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在分析'
   if (analysisStatus.value === 'ready') return '后端实时'
@@ -526,6 +551,20 @@ const displayChapters = computed(() => displayModel.value.chapters)
 const displayRegions = computed(() => displayModel.value.regions)
 const displayAllRenderablePois = computed(() => displayModel.value.allRenderablePois)
 const tierStats = computed(() => displayModel.value.tierStats)
+const activeChapterSources = computed(() => {
+  const chapter = displayChapters.value[activeStepIndex.value]
+  const sources = chapter?.web_sources?.length
+    ? chapter.web_sources
+    : chapter?.web_source
+      ? [chapter.web_source]
+      : []
+  const seen = new Set<string>()
+  return sources.filter((source) => {
+    if (!source?.url || seen.has(source.url)) return false
+    seen.add(source.url)
+    return true
+  }).slice(0, 3)
+})
 const ui = reactive<NarrativeUiSettings>({ ...defaultUiSettings })
 const mode = ref<ChatMode>('explore')
 
@@ -546,48 +585,26 @@ const activeRegion = computed(() => {
   return regionMap.value[node?.region_id ?? displayRegions.value[0]?.id] ?? displayRegions.value[0] ?? narrative.value.regions[0] ?? EMPTY_ACTIVE_REGION
 })
 
-// 时间线 DOM 引用：箭头切换 / 卡片点击 / 解说推进时，自动把激活卡片滚动到容器水平中央
+// 时间线 DOM 引用：箭头切换 / 卡片点击 / 解说推进时，自动把激活卡片滚动到容器水平中央；手动滚动只浏览卡片
 const timelineEl = ref<HTMLUListElement | null>(null)
-let timelineSnapTimer: ReturnType<typeof setTimeout> | null = null
 function scrollTimelineToActive() {
+  scrollTimelineCardToCenter(activeStepIndex.value, 'smooth')
+}
+function scrollTimelineCardToCenter(index: number, behavior: ScrollBehavior) {
   const container = timelineEl.value
   if (!container) return
   const cards = container.querySelectorAll<HTMLElement>('.tl-card')
-  const card = cards[activeStepIndex.value]
+  const card = cards[index]
   if (!card) return
   const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth)
   const targetLeft = card.offsetLeft - (container.clientWidth - card.clientWidth) / 2
-  container.scrollTo({ left: Math.min(maxLeft, Math.max(0, targetLeft)), behavior: 'smooth' })
-}
-function syncStepToNearestTimelineCard() {
-  const container = timelineEl.value
-  if (!container) return
-  const cards = [...container.querySelectorAll<HTMLElement>('.tl-card')]
-  if (cards.length === 0) return
-  const center = container.scrollLeft + container.clientWidth / 2
-  let nearestIndex = 0
-  let nearestDistance = Infinity
-  for (const [index, card] of cards.entries()) {
-    const cardCenter = card.offsetLeft + card.clientWidth / 2
-    const distance = Math.abs(cardCenter - center)
-    if (distance < nearestDistance) {
-      nearestDistance = distance
-      nearestIndex = index
-    }
-  }
-  if (nearestIndex !== activeStepIndex.value) {
-    applyStep(nearestIndex)
-  } else {
-    scrollTimelineToActive()
-  }
+  container.scrollTo({ left: Math.min(maxLeft, Math.max(0, targetLeft)), behavior })
 }
 function onTimelineWheel(e: WheelEvent) {
   const container = timelineEl.value
   if (!container) return
   const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
   container.scrollBy({ left: delta, behavior: 'auto' })
-  if (timelineSnapTimer) clearTimeout(timelineSnapTimer)
-  timelineSnapTimer = setTimeout(syncStepToNearestTimelineCard, 140)
 }
 watch(activeStepIndex, () => {
   // DOM 更新（active class 切换）之后再算偏移量
@@ -643,20 +660,9 @@ const totalPoi = computed(() => displayAllRenderablePois.value.length)
 const activeRegionAreaText = computed(() => `${(8.62).toFixed(2)} km²`)
 
 const lodLabel = computed(() => {
-  switch (narrative.value.lod) {
-    case 'micro':
-      return '近景（深挖）'
-    case 'meso':
-      return '中景（横向）'
-    case 'macro':
-      return '远景（合并）'
-  }
-})
-
-const lodKnobLeft = computed(() => {
-  if (narrative.value.lod === 'micro') return '15%'
-  if (narrative.value.lod === 'meso') return '50%'
-  return '85%'
+  if (ui.viewportZoom >= 15) return '近景（深挖）'
+  if (ui.viewportZoom >= 13) return '中景（横向）'
+  return '远景（多讲）'
 })
 
 // ============================================================================
@@ -819,6 +825,7 @@ function stopProgress() {
 }
 
 function applyStep(index: number, options: { fly?: boolean } = {}) {
+  if (index < 0 || index >= displayChapters.value.length) return
   activeStepIndex.value = index
   // 累计上一步的耗时基线
   let acc = 0
@@ -843,6 +850,7 @@ function applyStep(index: number, options: { fly?: boolean } = {}) {
 }
 
 function togglePlay() {
+  if (!canNarrate.value) return
   if (playing.value) {
     playing.value = false
     stopTyping()
@@ -902,6 +910,7 @@ function onSeek(e: MouseEvent) {
 }
 
 function restartNarration() {
+  if (!canNarrate.value) return
   stopAll()
   activeStepIndex.value = 0
   applyStep(0)
@@ -1021,7 +1030,7 @@ function toggleBaseLayer() {
   }))
 }
 
-function styleForTier(tier: VisualTier, opacityScale: number): Style | null {
+function styleForTier(tier: VisualTier): Style | null {
   if (tier === 'excluded') return null
   const palette: Record<Exclude<VisualTier, 'excluded'>, { fill: string; stroke: string; r: number; alpha: number }> = {
     core: { fill: '#ef4444', stroke: '#fff', r: 7, alpha: 1 },
@@ -1030,8 +1039,7 @@ function styleForTier(tier: VisualTier, opacityScale: number): Style | null {
     weak: { fill: '#3b82f6', stroke: 'rgba(255,255,255,0.25)', r: 3, alpha: 0.4 }
   }
   const cfg = palette[tier]
-  const alpha = Math.max(0, Math.min(1, cfg.alpha * (0.55 + 0.9 * opacityScale)))
-  const fillRgba = hexToRgba(cfg.fill, alpha)
+  const fillRgba = hexToRgba(cfg.fill, cfg.alpha)
   return new Style({
     image: new CircleStyle({
       radius: cfg.r,
@@ -1073,7 +1081,7 @@ function rebuildPoiLayer() {
 
     // 1. 散点：直接按 tier 颜色渲染
     const f = new Feature({ geometry: new Point(coord) })
-    const st = styleForTier(p.tier, ui.opacityScale)
+    const st = styleForTier(p.tier)
     if (st) {
       f.setStyle(st)
       f.set('tier', p.tier)
@@ -1202,12 +1210,73 @@ function zoomIn() {
   if (!olMap) return
   const v = olMap.getView()
   v.animate({ zoom: (v.getZoom() ?? 14) + 1, duration: 240 })
+  requestAnimationFrame(syncViewportZoomFromMap)
 }
 
 function zoomOut() {
   if (!olMap) return
   const v = olMap.getView()
   v.animate({ zoom: (v.getZoom() ?? 14) - 1, duration: 240 })
+  requestAnimationFrame(syncViewportZoomFromMap)
+}
+
+function applyViewportZoom() {
+  if (!olMap) return
+  const zoom = Math.max(10, Math.min(17, Number(ui.viewportZoom) || INITIAL_VIEWPORT.zoom))
+  ui.viewportZoom = Number(zoom.toFixed(1))
+  olMap.getView().setZoom(zoom)
+}
+
+function syncViewportZoomFromMap() {
+  if (!olMap) return
+  const zoom = olMap.getView().getZoom()
+  if (!Number.isFinite(zoom)) return
+  ui.viewportZoom = Number((zoom ?? INITIAL_VIEWPORT.zoom).toFixed(1))
+}
+
+function regionBoundaryPoints(region: NarrativeRegion): Array<[number, number]> {
+  return (region.boundary.coordinates[0] ?? [])
+    .filter((point): point is [number, number] => Number.isFinite(point[0]) && Number.isFinite(point[1]))
+}
+
+function regionPoiPoints(region: NarrativeRegion): Array<[number, number]> {
+  const pois = region.pois.map((poi): [number, number] => [poi.lon, poi.lat])
+  if (pois.length > 0) return pois
+  return (region.visual_layer.poi_heat?.points ?? []).map((point): [number, number] => [point.lon, point.lat])
+}
+
+function fitLonLatPoints(points: Array<[number, number]>) {
+  if (!olMap || points.length === 0) return false
+  if (points.length === 1) {
+    olMap.getView().animate({ center: fromLonLat(points[0]), zoom: ui.viewportZoom, duration: 420 })
+    return true
+  }
+  const projected = points.map((point) => fromLonLat(point))
+  const xs = projected.map((point) => point[0]).filter(Number.isFinite)
+  const ys = projected.map((point) => point[1]).filter(Number.isFinite)
+  if (xs.length === 0 || ys.length === 0) return false
+  olMap.getView().fit(
+    [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+    { padding: [90, 90, 90, 90], duration: 480, maxZoom: Math.max(14, ui.viewportZoom) },
+  )
+  return true
+}
+
+function focusByCentroidStrategy(strategy: CentroidStrategy = ui.centroidStrategy) {
+  if (!olMap) return
+  const region = activeRegion.value
+  if (strategy === 'poi_first' && fitLonLatPoints(regionPoiPoints(region))) return
+  if (strategy === 'region_first' && fitLonLatPoints(regionBoundaryPoints(region))) return
+  olMap.getView().animate({
+    center: fromLonLat([region.core_anchor.lon, region.core_anchor.lat]),
+    zoom: ui.viewportZoom,
+    duration: 420,
+  })
+}
+
+function setCentroidStrategy(strategy: CentroidStrategy) {
+  ui.centroidStrategy = strategy
+  focusByCentroidStrategy(strategy)
 }
 
 function getCurrentMapViewport(): ViewportBBox | null {
@@ -1241,7 +1310,10 @@ async function analyzeCurrentViewport() {
       session_id: narrative.value.session_id,
       viewport,
       tone: ui.tonePreset,
-      user_context: narrative.value.user_context
+      user_context: {
+        ...narrative.value.user_context,
+        preference_label: `${narrative.value.user_context.preference_label}｜${centroidStrategyLabel(ui.centroidStrategy)}｜Level ${ui.viewportZoom.toFixed(1)}`,
+      }
     })
     stopAll()
     narrative.value = response
@@ -1331,25 +1403,25 @@ function initMap() {
   rebuildPoiLayer()
   rebuildLabelLayer()
   syncHeatmapRadius()
+  syncViewportZoomFromMap()
 
   // zoom 变化时同步热力雾半径，实现 "密度雾随尺度融合 / 拆解" 的效果
-  olMap.getView().on('change:resolution', syncHeatmapRadius)
+  olMap.getView().on('change:resolution', () => {
+    syncHeatmapRadius()
+    syncViewportZoomFromMap()
+  })
 }
 
-watch(() => [ui.relevanceThreshold, ui.opacityScale], () => {
+watch(() => ui.relevanceThreshold, () => {
   rebuildPoiLayer()
 })
 
 onMounted(() => {
   initMap()
-  applyStep(0, { fly: false })
-  // 地图渲染后自动触发一次当前视野分析
-  nextTick(() => { setTimeout(() => void analyzeCurrentViewport(), 400) })
 })
 
 onBeforeUnmount(() => {
   stopAll()
-  if (timelineSnapTimer) clearTimeout(timelineSnapTimer)
   if (olMap) {
     olMap.setTarget(undefined)
     olMap = null
@@ -1696,18 +1768,6 @@ const ICONS = {
   font-size: 11px; color: var(--txt-mute);
   margin: 10px 0 12px;
 }
-.lod-track {
-  position: relative; height: 4px;
-  background: rgba(120,140,200,0.18);
-  border-radius: 2px;
-}
-.lod-knob {
-  position: absolute; top: -4px;
-  width: 12px; height: 12px;
-  background: var(--primary);
-  border-radius: 50%;
-  transform: translateX(-50%);
-}
 .centroid-row { font-size: 12px; color: var(--txt-mute); margin: 8px 0 6px; }
 .centroid-tabs {
   display: grid; grid-template-columns: repeat(3, 1fr);
@@ -2011,6 +2071,49 @@ const ICONS = {
   margin-bottom: 14px;
 }
 .narration-text p { margin: 0; }
+.source-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 3px;
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(59,130,246,0.28);
+  border: 1px solid rgba(147,197,253,0.35);
+  font-size: 9px;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: super;
+}
+.source-mark:hover {
+  color: #fff;
+  border-color: rgba(147,197,253,0.75);
+  background: rgba(59,130,246,0.45);
+}
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(148,163,184,0.16);
+}
+.source-list a {
+  color: var(--txt-mute);
+  font-size: 11px;
+  line-height: 1.4;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-list a:hover { color: #bfdbfe; }
+.source-list sup {
+  margin-right: 5px;
+  color: #93c5fd;
+}
 .cursor {
   color: var(--primary);
   animation: blink 1s steps(2) infinite;
@@ -2161,12 +2264,13 @@ const ICONS = {
 .tl-arrow:hover { color: #fff; background: rgba(59,130,246,0.15); }
 
 .timeline {
-  list-style: none; padding: 4px 0; margin: 0;
+  --tl-card-width: 132px;
+  --tl-edge-padding: max(8px, calc((100% - var(--tl-card-width)) / 2));
+  list-style: none; padding: 4px var(--tl-edge-padding); margin: 0;
   display: flex; gap: 12px;
   overflow-x: auto;
   scrollbar-width: none;
   scroll-behavior: smooth;
-  scroll-snap-type: x mandatory;
   overscroll-behavior-inline: contain;
 }
 .timeline::-webkit-scrollbar { display: none; }
@@ -2179,7 +2283,6 @@ const ICONS = {
   padding: 6px;
   cursor: pointer;
   transition: transform 0.2s ease, border-color 0.2s ease;
-  scroll-snap-align: center;
 }
 .tl-card:hover { background: var(--bg-elevated); border-color: var(--bd-accent); }
 .tl-card.active {

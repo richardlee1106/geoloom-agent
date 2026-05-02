@@ -1,0 +1,150 @@
+---
+title: Narrative 阶段 4 打磨清单
+status: active
+phase: 4 / 4
+created: 2026-05-02
+owner: GeoLoom Narrative Team
+---
+
+# Narrative 阶段 4 打磨清单
+
+本清单承接 `2026-04-29-narrative-engine-rebuild-spec.md` 的阶段 4。阶段 3 已完成空间结构算法替换；阶段 4 聚焦城市认知片区、叙事连贯性、自然讲解、异步事实补强与用户体验 polish。
+
+## 1. 当前真实边界
+
+- **DeepSeek Search**：不是默认强依赖；只在 `DEEPSEEK_SEARCH_BASE_URL`、`DEEPSEEK_SEARCH_API_KEY`、`DEEPSEEK_SEARCH_MODEL` 同时存在时接入。当前只补充 `web_sources`，不决定候选、排序、LOD 或主讲链路。
+- **章节文案**：事实和片区来自真实算法，但正文仍由 `factGrounding.ts` 模板生成。模板可作为 fallback，不能作为最终产品文案。
+- **路径顺序**：`pathSampler.ts` 已支持代表性优先、空间邻近转场、同质节点惩罚和 `transition_reason`，但还没有历史、商业、交通、生态等高级关系图谱。
+- **抽象片区**：当前能稳定处理 AOI 主体与 POI 点云候选，但对江汉路步行街、水塔街、徐东商圈等城市认知片区支持不足。
+- **UI 控件**：左侧透明度调节已删除；尺度滑杆已真实控制地图 zoom；重心策略当前影响地图聚焦，后续应升级为后端 ranking 参数。
+
+## 2. 阶段 4.1：抽象片区发现与命名
+
+目标：让系统稳定识别商圈、街区、步行街、道路走廊、生活片区等非标准 AOI。
+
+验收对象：
+
+- 江汉路步行街
+- 水塔街
+- 徐东商圈
+- 楚河汉街
+- 武昌江滩
+- 光谷步行街
+
+候选来源：
+
+- **AOI / 行政边界**：优先使用已有真实边界。
+- **POI 密度**：用高密度商业、餐饮、休闲、文化 POI 聚类生成候选。
+- **名称 token**：从 POI 名称、道路名、商场名中提取高频地名词。
+- **道路走廊**：沿街型对象可用道路轴线 + 周边 POI buffer 估计。
+- **DeepSeek Search / 地名词典**：只用于候选命名和事实补强，不能凭空创建不可追溯对象。
+
+硬约束：
+
+- 每个抽象片区必须能追溯到真实 POI / AOI / region evidence。
+- 抽象片区不能覆盖整个 viewport，必须有可解释边界或边界估计。
+- 抽象片区不得吞并更高优先级 AOI 主体，例如大学、公园、医院、交通枢纽。
+- 命名置信度不足时降级为普通点云片区，不展示不可靠地名。
+
+建议产物：
+
+- 后端新增 `abstractRegionDiscovery.ts`。
+- 新增 `AbstractRegionCandidate` 内部类型。
+- `buildRegionCandidates` 在 AOI 与点云之间插入抽象片区候选。
+- golden viewport 增加江汉路 / 徐东 / 水塔街回归。
+
+## 3. 阶段 4.2：叙事关系图谱与路径打磨
+
+目标：从“空间邻近”升级为“为什么从 A 讲到 B”。
+
+关系类型：
+
+- **空间邻近**：地理上相邻或路径自然。
+- **主从关系**：核心片区与支撑片区。
+- **功能互补**：商业、交通、文化、生态互补。
+- **时间线关系**：历史到现代、老街到新商圈。
+- **入口关系**：交通节点到消费 / 游览腹地。
+
+验收标准：
+
+- `transition_reason` 必须自然解释转场原因。
+- 不能连续堆叠同类型片区造成单调。
+- 同一 viewport 的路径应稳定，但允许在同等候选之间有轻微变化。
+
+## 4. 阶段 4.3：Narrator LLM 自然讲解
+
+目标：把模板文案升级为自然叙事，同时保持结构由算法决定。
+
+输入白名单：
+
+- `path.nodes`
+- `regions[].display_name`
+- `regions[].narrative_facts`
+- `chapters[].web_sources`
+- `scene_profile`
+- `user_context`
+
+输出约束：
+
+- LLM 不允许新增主讲对象。
+- LLM 不允许改变讲解顺序。
+- 数字、年份、人名必须来自 allowed facts 或 web sources。
+- 命中 forbidden dictionary 的文本必须回退到模板文案。
+
+## 5. 阶段 4.4：DeepSeek Search 异步事实补强
+
+目标：联网事实补强不阻塞首屏 narrative。
+
+开发项：
+
+- region query cache。
+- 来源质量评分。
+- 官方站点、百科、权威媒体优先。
+- 论坛、营销、软文、低质聚合站降权或过滤。
+- 搜索失败时保留模板文案和结构结果。
+
+## 6. 阶段 4.5：调试面板与用户面板分离
+
+目标：用户面保持干净，开发面可解释。
+
+用户面禁止展示：
+
+- role
+- score
+- weight
+- seed
+- debug
+
+开发面展示：
+
+- recall
+- candidates
+- lod
+- path
+- facts
+- web_facts
+- golden viewport 回放
+
+## 7. 阶段 4.6：UI 播放与交互 polish
+
+已完成：
+
+- 删除左侧透明度调节。
+- 尺度滑杆真实控制地图 zoom。
+- 重心策略按钮影响当前地图聚焦。
+
+待打磨：
+
+- 分析完成后的播放启动策略。
+- 来源引用 hover 与摘要展示。
+- 片区光晕层级与地图底图融合。
+- 时间线跳转手感。
+- Assistant 打断、暂停、跳转、重规划。
+
+## 8. 第一轮推荐开工顺序
+
+1. **抽象片区发现与命名**：先解决城市认知片区缺失。
+2. **叙事关系图谱**：再解决讲解顺序与连贯性。
+3. **Narrator LLM**：结构稳定后再做自然文案。
+4. **DeepSeek 异步缓存**：补来源质量与速度。
+5. **Debug 面板与 UI polish**：最后集中打磨体验。

@@ -91,6 +91,98 @@ describe('NarrativePhase3Runtime', () => {
     expect(response.regions.find((region) => region.display_name === '武昌江滩公园')?.visual_layer.poi_heat?.points.length).toBeGreaterThanOrEqual(7)
     expect(response.regions.flatMap((region) => region.pois).some((poi) => poi.display_name.includes('宿舍') && poi.tier === 'medium')).toBe(true)
     expect(response.path.nodes.length).toBe(response.narration.chapters.length)
-    expect(response.narration.chapters.every((chapter) => !/宿舍|广告|优惠/.test(chapter.text))).toBe(true)
+    expect(response.narration.chapters.every((chapter) => !/宿舍|广告|优惠|POI|样本|节点|权重|score|tier/.test(chapter.text))).toBe(true)
+    expect(response.debug).toBeUndefined()
+  })
+
+  it('returns a structured debug snapshot only when requested', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'debug-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.debug?.recall).toMatchObject({
+      features_count: 1,
+      poi_count: 1,
+      renderable_poi_count: 1,
+      aoi_count: 1,
+    })
+    expect(response.debug?.candidates).toMatchObject({
+      built_count: expect.any(Number),
+      response_count: response.regions.length,
+      fallback_used: false,
+    })
+    expect(response.debug?.lod).toMatchObject({ selected: response.lod })
+    expect(response.debug?.path).toMatchObject({ node_count: response.path.nodes.length })
+    expect(response.debug?.facts).toMatchObject({ selected_region_count: response.narration.chapters.length })
+  })
+
+  it('attaches optional web fact sources to narration chapters', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '武汉市沙湖公园管理处',
+          url: 'https://ylj.wuhan.gov.cn/zwgk/zwxxgkzl_12298/jggk_12304/xsdwszjzz_12308/202001/t20200110_726388.shtml',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.narration.chapters[0].web_sources?.[0]).toMatchObject({
+      title: '武汉市沙湖公园管理处',
+      url: expect.stringMatching(/^https:\/\//),
+    })
+    expect(response.debug?.web_facts).toMatchObject({
+      queried_region_count: 1,
+      source_count: 1,
+    })
   })
 })

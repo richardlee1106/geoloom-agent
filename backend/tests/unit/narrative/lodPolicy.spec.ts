@@ -4,9 +4,15 @@ import { applyLodHysteresis, classifyLod } from '../../../src/narrative/lodPolic
 
 describe('narrative LOD policy', () => {
   it('classifies golden viewport signals into micro, meso and macro', () => {
-    expect(classifyLod({ dominantCoverage: 0.62, candidateCount: 1, semanticDiversity: 0.4 }).lod).toBe('micro')
-    expect(classifyLod({ dominantCoverage: 0.34, candidateCount: 4, semanticDiversity: 1.1 }).lod).toBe('meso')
-    expect(classifyLod({ dominantCoverage: 0.12, candidateCount: 7, semanticDiversity: 1.8 }).lod).toBe('macro')
+    const cases = [
+      { name: '单主体校园视野', signals: { dominantCoverage: 0.62, candidateCount: 1, semanticDiversity: 0.4 }, expected: 'micro' },
+      { name: '高校加公园混合视野', signals: { dominantCoverage: 0.34, candidateCount: 4, semanticDiversity: 1.1 }, expected: 'meso' },
+      { name: '城市级多片区视野', signals: { dominantCoverage: 0.12, candidateCount: 7, semanticDiversity: 1.8 }, expected: 'macro' },
+    ] as const
+
+    for (const item of cases) {
+      expect(classifyLod(item.signals).lod, item.name).toBe(item.expected)
+    }
   })
 
   it('requires two stable frames before switching LOD through hysteresis', () => {
@@ -20,5 +26,15 @@ describe('narrative LOD policy', () => {
     const second = applyLodHysteresis(first, next)
     expect(second.current).toBe('macro')
     expect(second.pending).toBeNull()
+  })
+
+  it('does not switch LOD when the winning score margin is weak', () => {
+    const next = classifyLod({ dominantCoverage: 0.2, candidateCount: 2, semanticDiversity: 0.4 })
+
+    const result = applyLodHysteresis({ current: 'meso' }, next)
+
+    expect(next.lod).toBe('macro')
+    expect(result.current).toBe('meso')
+    expect(result.pending).toBeNull()
   })
 })

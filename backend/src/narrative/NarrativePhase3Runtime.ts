@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 
 import type { SpatialFeature, SpatialFetchRequest } from '../spatial/fetchSpatialFeatures.js'
+import type { SkillDefinition } from '../skills/types.js'
+import { createLogger } from '../utils/logger.js'
 import type {
+  NarrativeChapter,
   NarrationTone,
   NarrativeBuilder,
   NarrativePoi,
@@ -33,6 +36,20 @@ export class NarrativeContractError extends Error {
 export interface NarrativePhase3RuntimeOptions {
   fetchSpatialFeatures: (input: SpatialFetchRequest) => Promise<SpatialFeature[]>
   fetchAoiCandidates?: (viewport: ViewportBBox) => Promise<AoiCandidateRow[]>
+  searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
+}
+
+interface NarrativeWebSource {
+  title: string
+  url: string
+  snippet?: string
+}
+
+interface WebFactDebugItem {
+  region_id: string
+  query: string
+  source_count: number
+  latency_ms: number
 }
 
 const DEFAULT_USER_CONTEXT: UserContext = {
@@ -143,6 +160,149 @@ function resolveSelectedRegions(candidates: RegionCandidate[], pathRegionIds: st
   return pathRegionIds.map((id) => byId.get(id)).filter((candidate): candidate is RegionCandidate => Boolean(candidate))
 }
 
+function buildDebugSnapshot(input: {
+  featuresCount: number
+  pois: NarrativePoi[]
+  renderablePois: NarrativePoi[]
+  aois: AoiCandidateRow[]
+  builtCandidates: RegionCandidate[]
+  candidates: RegionCandidate[]
+  fallbackUsed: boolean
+  lodDecision: ReturnType<typeof classifyLod>
+  path: ReturnType<typeof sampleNarrativePath>
+  selectedRegions: RegionCandidate[]
+  webFactDebug: WebFactDebugItem[]
+}) {
+  const poiTierStats = input.pois.reduce<Record<string, number>>((acc, poi) => {
+    acc[poi.tier] = (acc[poi.tier] || 0) + 1
+    return acc
+  }, {})
+  return {
+    recall: {
+      features_count: input.featuresCount,
+      poi_count: input.pois.length,
+      renderable_poi_count: input.renderablePois.length,
+      aoi_count: input.aois.length,
+      poi_tier_stats: poiTierStats,
+    },
+    candidates: {
+      built_count: input.builtCandidates.length,
+      response_count: input.candidates.length,
+      fallback_used: input.fallbackUsed,
+      items: input.candidates.map((candidate, index) => ({
+        index,
+        id: candidate.id,
+        name: candidate.display_name,
+        source: candidate.source,
+        role: candidate.role,
+        score: Number(candidate.score.toFixed(4)),
+        coverage: Number(candidate.coverage.toFixed(4)),
+        diversity: Number(candidate.diversity.toFixed(4)),
+        poi_count: candidate.pois.length,
+        effective_poi_count: candidate.effectivePoiCount,
+        heat_point_count: candidate.visual_layer.poi_heat?.points.length ?? 0,
+      })),
+    },
+    lod: {
+      selected: input.lodDecision.lod,
+      scores: input.lodDecision.scores,
+    },
+    path: {
+      node_count: input.path.nodes.length,
+      alternatives_count: input.path.alternativesCount,
+      nodes: input.path.nodes.map((node, index) => {
+        const region = input.selectedRegions[index]
+        return {
+          index,
+          region_id: node.region_id,
+          name: region?.display_name ?? node.region_id,
+          narration_role: node.narration_role,
+          transition_reason: node.transition_reason,
+        }
+      }),
+    },
+    facts: {
+      selected_region_count: input.selectedRegions.length,
+      selected_regions: input.selectedRegions.map((region) => ({
+        id: region.id,
+        name: region.display_name,
+        fact_count: region.narrative_facts.length,
+        facts: region.narrative_facts.map((fact) => ({
+          claim: fact.claim,
+          source: fact.source,
+          confidence: fact.confidence,
+          verified: fact.verified,
+        })),
+      })),
+    },
+    web_facts: {
+      queried_region_count: input.webFactDebug.length,
+      source_count: input.webFactDebug.reduce((sum, item) => sum + item.source_count, 0),
+      items: input.webFactDebug,
+    },
+  }
+}
+
+export function buildDeepSeekNarrativeWebFactSearcher(skill: SkillDefinition) {
+  return async (query: string, maxResults: number): Promise<NarrativeWebSource[]> => {
+    const result = await skill.execute('search_web', { query, max_results: maxResults }, {
+      traceId: `narrative-webfact-${Date.now()}`,
+      requestId: 'narrative-webfact',
+      logger: createLogger({ surface: 'narrative-webfact' }),
+    })
+    if (!result.ok || !result.data || typeof result.data !== 'object') return []
+    const data = result.data as { results?: Array<{ title?: unknown; content?: unknown; snippet?: unknown; url?: unknown }> }
+    return (data.results || [])
+      .map((item) => ({
+        title: String(item.title || item.url || '').trim(),
+        url: String(item.url || '').trim(),
+        snippet: String(item.content || item.snippet || '').trim() || undefined,
+      }))
+      .filter((item) => item.title && /^https?:\/\//iu.test(item.url))
+      .slice(0, maxResults)
+  }
+}
+
+async function attachWebSources(input: {
+  chapters: NarrativeChapter[]
+  regions: RegionCandidate[]
+  searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
+}) {
+  const debug: WebFactDebugItem[] = []
+  if (!input.searchWebFacts) return { chapters: input.chapters, debug }
+  const limit = Math.min(Math.max(Number(process.env.NARRATIVE_WEB_FACT_REGION_LIMIT || '3'), 0), input.chapters.length)
+  const maxResults = Math.max(1, Math.min(Number(process.env.NARRATIVE_WEB_FACT_RESULT_LIMIT || '3'), 5))
+  const pairs = input.chapters.slice(0, limit).map((chapter, index) => ({
+    chapter,
+    region: input.regions[index],
+  }))
+  const settled = await Promise.allSettled(pairs.map(async ({ chapter, region }) => {
+    const name = region?.display_name || chapter.region_id
+    const query = `${name} 官方 介绍 城市空间`
+    const started = Date.now()
+    const sources = await input.searchWebFacts?.(query, maxResults) ?? []
+    return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
+  }))
+  const sourcesByRegion = new Map<string, NarrativeWebSource[]>()
+  for (const item of settled) {
+    if (item.status !== 'fulfilled') continue
+    sourcesByRegion.set(item.value.regionId, item.value.sources)
+    debug.push({
+      region_id: item.value.regionId,
+      query: item.value.query,
+      source_count: item.value.sources.length,
+      latency_ms: item.value.latencyMs,
+    })
+  }
+  return {
+    chapters: input.chapters.map((chapter) => ({
+      ...chapter,
+      web_sources: sourcesByRegion.get(chapter.region_id) || chapter.web_sources,
+    })),
+    debug,
+  }
+}
+
 export class NarrativePhase3Runtime implements NarrativeBuilder {
   constructor(private readonly options: NarrativePhase3RuntimeOptions) {}
 
@@ -161,7 +321,8 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     const aois = await (this.options.fetchAoiCandidates?.(viewport) ?? Promise.resolve([]))
     const scene = resolveSceneProfile(renderablePois)
     const builtCandidates = buildRegionCandidates({ viewport, pois, aois, scene })
-    const candidates = builtCandidates.length > 0 ? builtCandidates : [buildFallbackRegion({ viewport, pois, scene })]
+    const fallbackUsed = builtCandidates.length === 0
+    const candidates = fallbackUsed ? [buildFallbackRegion({ viewport, pois, scene })] : builtCandidates
     const dominantCoverage = Math.max(...candidates.map((candidate) => candidate.coverage), 0)
     const semanticDiversityValue = semanticDiversity(renderablePois)
     const lodDecision = classifyLod({
@@ -172,10 +333,15 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     const path = sampleNarrativePath({ candidates, viewport, lod: lodDecision.lod, seed })
     const responseRegions = candidates.map((region) => ({ ...region, narrative_facts: buildRegionFacts({ region, scene }) }))
     const selectedRegions = resolveSelectedRegions(responseRegions, path.nodes.map((node) => node.region_id))
-    const chapters = buildNarrationChapters({ regions: selectedRegions, tone, scene })
+    const chapterBuild = await attachWebSources({
+      chapters: buildNarrationChapters({ regions: selectedRegions, tone, scene }),
+      regions: selectedRegions,
+      searchWebFacts: this.options.searchWebFacts,
+    })
+    const chapters = chapterBuild.chapters
     const density = effectivePoiCount(renderablePois) / viewportAreaKm2(viewport)
 
-    return {
+    const response: NarrativeResponse = {
       session_id: sessionId,
       state_version: 1,
       scene_profile: scene,
@@ -197,5 +363,21 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       },
       user_context: userContext,
     }
+    if (input.debug) {
+      response.debug = buildDebugSnapshot({
+        featuresCount: features.length,
+        pois,
+        renderablePois,
+        aois,
+        builtCandidates,
+        candidates,
+        fallbackUsed,
+        lodDecision,
+        path,
+        selectedRegions,
+        webFactDebug: chapterBuild.debug,
+      })
+    }
+    return response
   }
 }

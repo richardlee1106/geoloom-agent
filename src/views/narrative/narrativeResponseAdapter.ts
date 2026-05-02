@@ -148,6 +148,7 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
         region_id: regionId,
         text: response.narration.chapters[index]?.text ?? `${region?.display_name ?? regionId}是当前解说路径中的一站。`,
         web_source: response.narration.chapters[index]?.web_source,
+        web_sources: response.narration.chapters[index]?.web_sources,
         length_ms: response.narration.chapters[index]?.length_ms
       }
     })

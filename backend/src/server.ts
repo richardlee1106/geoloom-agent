@@ -27,6 +27,7 @@ import { createRouteDistanceSkill } from './skills/route_distance/RouteDistanceS
 import { createSemanticSelectorSkill } from './skills/semantic_selector/SemanticSelectorSkill.js'
 import { createMultiSearchEngineSkill } from './skills/multi_search_engine/MultiSearchEngineSkill.js'
 import { createTavilySearchSkill } from './skills/tavily_search/TavilySearchSkill.js'
+import { createDeepSeekSearchSkill } from './skills/deepseek_search/index.js'
 import { createEntityAlignmentSkill } from './skills/entity_alignment/EntityAlignmentSkill.js'
 import { createWebPoiDiscoverySkill } from './skills/web_poi_discovery/index.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
@@ -35,7 +36,7 @@ import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
 import { EmbeddingIntentClassifier } from './catalog/embeddingIntentClassifier.js'
 import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
-import { NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
+import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
 import { fetchNarrativeAoiCandidates } from './narrative/aoiRepository.js'
 
 const port = Number(process.env.PORT || '3210')
@@ -172,6 +173,17 @@ if (tavilyApiKeys.length > 0) {
     timeoutMs: Number(process.env.TAVILY_TIMEOUT_MS || '15000'),
   }))
 }
+const deepSeekSearchBaseUrl = process.env.DEEPSEEK_SEARCH_BASE_URL || process.env.NEWAPI_SEARCH_BASE_URL
+const deepSeekSearchApiKey = process.env.DEEPSEEK_SEARCH_API_KEY || process.env.NEWAPI_SEARCH_API_KEY
+const deepSeekSearchModel = process.env.DEEPSEEK_SEARCH_MODEL || process.env.NEWAPI_SEARCH_MODEL
+if (deepSeekSearchBaseUrl && deepSeekSearchApiKey && deepSeekSearchModel) {
+  registry.register(createDeepSeekSearchSkill({
+    baseUrl: deepSeekSearchBaseUrl,
+    apiKey: deepSeekSearchApiKey,
+    model: deepSeekSearchModel,
+    timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '15000'),
+  }))
+}
 const jinaBridge = new JinaBridge()
 registry.register(createEntityAlignmentSkill({
   bridge: jinaBridge,
@@ -268,6 +280,9 @@ const narrative = new NarrativePhase3Runtime({
     console.warn(`[Narrative] AOI 候选查询失败，降级为 POI 聚合: ${describeStartupError(err)}`)
     return []
   }),
+  searchWebFacts: registry.get('deepseek_search')
+    ? buildDeepSeekNarrativeWebFactSearcher(registry.get('deepseek_search')!)
+    : undefined,
 })
 
 const app = createApp({
