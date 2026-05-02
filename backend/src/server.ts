@@ -35,6 +35,8 @@ import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
 import { EmbeddingIntentClassifier } from './catalog/embeddingIntentClassifier.js'
 import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
+import { NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
+import { fetchNarrativeAoiCandidates } from './narrative/aoiRepository.js'
 
 const port = Number(process.env.PORT || '3210')
 const host = process.env.HOST || '127.0.0.1'
@@ -254,6 +256,19 @@ const defaultChat = new GeoLoomAgent({
 const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
 })
+const narrative = new NarrativePhase3Runtime({
+  fetchSpatialFeatures: (input) => fetchSpatialFeaturesFromDatabase(
+    input,
+    (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+  ),
+  fetchAoiCandidates: (viewport) => fetchNarrativeAoiCandidates(
+    viewport,
+    (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
+  ).catch((err) => {
+    console.warn(`[Narrative] AOI 候选查询失败，降级为 POI 聚合: ${describeStartupError(err)}`)
+    return []
+  }),
+})
 
 const app = createApp({
   registry,
@@ -264,6 +279,7 @@ const app = createApp({
     input,
     (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   ),
+  narrative,
   chat,
 })
 

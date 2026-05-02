@@ -11,6 +11,8 @@ import { registerCategoryRoutes } from './routes/category.js'
 import type { CategoryTreeNode } from './catalog/categoryCatalog.js'
 import { registerSpatialRoutes } from './routes/spatial.js'
 import type { SpatialFetchRequest, SpatialFeature } from './spatial/fetchSpatialFeatures.js'
+import { registerNarrativeRoutes } from './routes/narrative.js'
+import type { NarrativeBuilder } from './narrative/contract.js'
 
 export interface ChatRuntime {
   createWriter(stream: NodeJS.WritableStream, traceId?: string): SSEWriter
@@ -24,6 +26,7 @@ export interface CreateAppOptions {
   checkDatabaseHealth: () => Promise<boolean>
   getCategoryTree?: () => Promise<CategoryTreeNode[]>
   fetchSpatialFeatures?: (input: SpatialFetchRequest) => Promise<SpatialFeature[]>
+  narrative?: NarrativeBuilder
   chat?: ChatRuntime
 }
 
@@ -48,6 +51,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       fetchSpatialFeatures: options.fetchSpatialFeatures,
     })
   }, { prefix: '/api/spatial' })
+
+  app.register(async (scope) => {
+    await registerNarrativeRoutes(scope, {
+      narrative: options.narrative,
+    })
+  }, { prefix: '/api/narrative' })
 
   app.register(async (scope) => {
     await registerGeoRoutes(scope, options)

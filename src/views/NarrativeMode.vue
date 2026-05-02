@@ -61,8 +61,15 @@
               <span>主体覆盖</span>
               <strong>{{ Math.round(narrative.dominant_coverage * 100) }}%</strong>
             </div>
+            <div class="region-info-row">
+              <span>数据状态</span>
+              <strong>{{ narrativeSourceLabel }}</strong>
+            </div>
           </div>
-          <button class="primary-btn">应用片区</button>
+          <div v-if="analysisError" class="analysis-error">{{ analysisError }}</div>
+          <button class="primary-btn" :disabled="analysisStatus === 'analyzing'" @click="analyzeCurrentViewport">
+            {{ analysisStatus === 'analyzing' ? '分析中…' : '分析当前视野' }}
+          </button>
         </section>
 
         <!-- 2. 点剔除与分层 -->
@@ -246,11 +253,11 @@
           </div>
 
           <div class="theme-row">
-            <span class="theme-label">当前解说主题（示例）</span>
+            <span class="theme-label">当前解说主题</span>
             <strong class="theme-text">「以{{ activeRegion.display_name }}为核心的文化教育圈」</strong>
           </div>
 
-          <!-- 波形（mock 静态条） -->
+          <!-- 波形 -->
           <div class="waveform">
             <span
               v-for="(h, i) in waveformHeights"
@@ -267,21 +274,21 @@
 
           <div class="seq-block">
             <div class="seq-head">
-              <span class="seq-title">解说顺序（随机生成）</span>
+              <span class="seq-title">解说顺序</span>
             </div>
             <ul class="seq-list">
               <li
-                v-for="(node, i) in narrative.path.nodes"
+                v-for="(node, i) in displayPathNodes"
                 :key="node.region_id"
                 :class="['seq-item', { active: i === activeStepIndex }]"
                 @click="goToStep(i)"
               >
                 <span class="seq-no">{{ i + 1 }}</span>
                 <span class="seq-name">{{ regionMap[node.region_id]?.display_name }}{{ i === 0 ? '（核心）' : '' }}</span>
-                <span class="seq-tag" :class="`tag-${node.narration_role}`">{{ regionMap[node.region_id]?.chapter_label }}</span>
+                <span class="seq-tag" :class="`tag-${node.narration_role}`">{{ node.chapter_label }}</span>
               </li>
             </ul>
-            <p class="seq-foot">解说顺序每次可能不同</p>
+            <p class="seq-foot">基于当前真实视野生成</p>
           </div>
 
           <div class="settings-block">
@@ -304,11 +311,11 @@
               <select class="select-input" v-model="ui.tonePreset">
                 <option v-for="o in tonePresetOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
               </select>
-              <button class="ghost-btn" @click="reshuffle"><span v-html="ICONS.dice" /><span>随机一下</span></button>
+              <button class="ghost-btn" @click="restartNarration"><span v-html="ICONS.dice" /><span>重新播放</span></button>
             </div>
 
-            <button class="primary-btn play-btn" @click="togglePlay">
-              {{ playing ? '暂停解说' : '开始解说' }}
+            <button class="primary-btn play-btn" :disabled="!canNarrate" @click="togglePlay">
+              {{ analysisStatus === 'analyzing' ? '分析中，请稍候' : playing ? '暂停解说' : '开始解说' }}
               <span v-html="playing ? ICONS.pause : ICONS.play" />
             </button>
           </div>
@@ -338,7 +345,7 @@
         v-if="assistantOpen"
         :active-step-index="activeStepIndex"
         :playing="playing"
-        :total-steps="narrative.path.nodes.length"
+        :total-steps="displayPathNodes.length"
         :chapters="chaptersForAssistant"
         @close="assistantOpen = false"
         @pause-request="onAssistantPause"
@@ -351,16 +358,26 @@
       <footer class="bottom-bar">
       <div class="timeline-wrap">
         <button class="tl-arrow" @click="goPrev"><span v-html="ICONS.chevronLeft" /></button>
-        <ul ref="timelineEl" class="timeline">
+        <ul ref="timelineEl" class="timeline" @wheel.prevent="onTimelineWheel">
           <li
-            v-for="(node, i) in narrative.path.nodes"
+            v-for="(node, i) in displayPathNodes"
             :key="`tl-${node.region_id}`"
             :class="['tl-card', { active: i === activeStepIndex }]"
             @click="goToStep(i)"
           >
             <div class="tl-thumb" :style="{ background: regionGradient(i) }">
+              <span
+                v-for="dot in timelineDotsByRegion[node.region_id] ?? []"
+                :key="dot.key"
+                class="tl-dot"
+                :class="`tier-${dot.tier}`"
+                :style="{ left: `${dot.x}%`, top: `${dot.y}%` }"
+              />
+              <span v-if="timelineDotsByRegion[node.region_id]?.length" class="tl-cluster">
+                {{ timelineDotsByRegion[node.region_id].length }}
+              </span>
               <span class="tl-no">{{ i + 1 }}</span>
-              <span class="tl-tag-mini">{{ regionMap[node.region_id]?.chapter_label }}</span>
+              <span class="tl-tag-mini">{{ node.chapter_label }}</span>
             </div>
             <div class="tl-name">{{ i + 1 }} {{ regionMap[node.region_id]?.display_name }}</div>
             <div class="tl-sub">{{ subtitleForRole(node.narration_role) }}</div>
@@ -399,37 +416,116 @@ import View from 'ol/View'
 import TileLayer from 'ol/layer/Tile'
 import XYZ from 'ol/source/XYZ'
 import VectorLayer from 'ol/layer/Vector'
+import HeatmapLayer from 'ol/layer/Heatmap'
 import VectorSource from 'ol/source/Vector'
 import Feature from 'ol/Feature'
 import Point from 'ol/geom/Point'
-import Polygon from 'ol/geom/Polygon'
-import { fromLonLat, transformExtent } from 'ol/proj'
+import { fromLonLat, toLonLat, transformExtent } from 'ol/proj'
 import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style'
 
-import {
-  allRenderablePois,
-  centroidStrategyOptions,
-  coverageBreakdown,
-  defaultUiSettings,
-  durationPresetOptions,
-  narrativeMock,
-  tierStats,
-  tonePresetOptions
-} from './narrative/mock/narrativeMockData'
 import AssistantDock from './narrative/AssistantDock.vue'
+import { useProjection } from '../composables/map/useProjection'
+import { fetchNarrativeResponse } from './narrative/narrativeApi'
+import { adaptNarrativeResponse } from './narrative/narrativeResponseAdapter'
 import type {
   NarrativeMode as ChatMode,
+  NarrativeResponse,
   NarrativePoi,
+  NarrativeRegion,
   NarrativeUiSettings,
+  ViewportBBox,
   PathNarrationRole,
-  PolygonRing,
   VisualTier
 } from './narrative/types'
+
+const INITIAL_VIEWPORT: ViewportBBox = {
+  west: 114.278,
+  south: 30.548,
+  east: 114.386,
+  north: 30.619,
+  zoom: 13.2,
+  center: [114.335, 30.583]
+}
+
+const EMPTY_ACTIVE_REGION: NarrativeRegion = {
+  id: 'current-viewport',
+  display_name: '当前视野',
+  role: 'scene_evidence',
+  core_anchor: { id: 'current-viewport-center', lon: INITIAL_VIEWPORT.center[0], lat: INITIAL_VIEWPORT.center[1] },
+  boundary: { type: 'Polygon', coordinates: [[]] },
+  visual_layer: { mode: 'poi_heat', poi_heat: { radius: 24, points: [] } },
+  pois: [],
+  narrative_facts: []
+}
+
+const EMPTY_NARRATIVE_RESPONSE: NarrativeResponse = {
+  session_id: '',
+  state_version: 0,
+  scene_profile: 'mixed_urban',
+  lod: 'meso',
+  viewport: INITIAL_VIEWPORT,
+  dominant_coverage: 0,
+  candidate_count: 0,
+  poi_density: 0,
+  semantic_diversity: 0,
+  regions: [],
+  path: { nodes: [], seed: '', alternatives_count: 0 },
+  narration: { chapters: [], tone: 'science' },
+  user_context: {
+    time_label: '当前时段',
+    weather_label: '未指定',
+    preference_label: '通用解说',
+    history_label: '首次进入'
+  }
+}
+
+const defaultUiSettings: NarrativeUiSettings = {
+  relevanceThreshold: 0.25,
+  opacityScale: 0.35,
+  durationPreset: 'standard',
+  tonePreset: 'science',
+  centroidStrategy: 'auto',
+  autoNarrate: true
+}
+
+const durationPresetOptions = [
+  { key: 'casual' as const, label: '随兴', hint: '约 1 分钟' },
+  { key: 'standard' as const, label: '标准', hint: '约 3 分钟' },
+  { key: 'detailed' as const, label: '详尽', hint: '约 5 分钟' }
+]
+
+const tonePresetOptions = [
+  { key: 'science' as const, label: '知识科普' },
+  { key: 'tour' as const, label: '导览解说' },
+  { key: 'humanity' as const, label: '人文叙事' }
+]
+
+const centroidStrategyOptions = [
+  { key: 'auto' as const, label: '自动' },
+  { key: 'region_first' as const, label: '片区优先' },
+  { key: 'poi_first' as const, label: 'POI 优先' }
+]
 
 // ============================================================================
 // 模式 + 状态
 // ============================================================================
-const narrative = narrativeMock
+const narrative = ref<NarrativeResponse>(EMPTY_NARRATIVE_RESPONSE)
+const analysisStatus = ref<'preset' | 'analyzing' | 'ready' | 'error'>('preset')
+const analysisError = ref('')
+const canNarrate = computed(() => analysisStatus.value !== 'analyzing')
+const narrativeSourceLabel = computed(() => {
+  if (analysisStatus.value === 'analyzing') return '正在分析'
+  if (analysisStatus.value === 'ready') return '后端实时'
+  if (analysisStatus.value === 'error') return '分析失败'
+  return '等待分析'
+})
+const { gcj02ToWgs84 } = useProjection()
+const displayModel = computed(() => adaptNarrativeResponse(narrative.value))
+const displayPathNodes = computed(() => displayModel.value.pathNodes)
+const displayChapters = computed(() => displayModel.value.chapters)
+const displayRegions = computed(() => displayModel.value.regions)
+const displayAllRenderablePois = computed(() => displayModel.value.allRenderablePois)
+const tierStats = computed(() => displayModel.value.tierStats)
 const ui = reactive<NarrativeUiSettings>({ ...defaultUiSettings })
 const mode = ref<ChatMode>('explore')
 
@@ -442,29 +538,64 @@ const modes: Array<{ key: ChatMode; label: string; icon: string }> = [
   { key: 'compare', label: '对比模式', icon: ICON_COMPARE() }
 ]
 
-const regionMap = computed(() =>
-  Object.fromEntries(narrative.regions.map((r) => [r.id, r]))
-)
+const regionMap = computed(() => displayModel.value.regionMap)
 
 const activeStepIndex = ref(0)
 const activeRegion = computed(() => {
-  const node = narrative.path.nodes[activeStepIndex.value]
-  return regionMap.value[node?.region_id ?? narrative.regions[0].id] ?? narrative.regions[0]
+  const node = displayPathNodes.value[activeStepIndex.value]
+  return regionMap.value[node?.region_id ?? displayRegions.value[0]?.id] ?? displayRegions.value[0] ?? narrative.value.regions[0] ?? EMPTY_ACTIVE_REGION
 })
 
 // 时间线 DOM 引用：箭头切换 / 卡片点击 / 解说推进时，自动把激活卡片滚动到容器水平中央
 const timelineEl = ref<HTMLUListElement | null>(null)
+let timelineSnapTimer: ReturnType<typeof setTimeout> | null = null
 function scrollTimelineToActive() {
   const container = timelineEl.value
   if (!container) return
   const cards = container.querySelectorAll<HTMLElement>('.tl-card')
   const card = cards[activeStepIndex.value]
   if (!card) return
+  const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth)
   const targetLeft = card.offsetLeft - (container.clientWidth - card.clientWidth) / 2
-  container.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' })
+  container.scrollTo({ left: Math.min(maxLeft, Math.max(0, targetLeft)), behavior: 'smooth' })
+}
+function syncStepToNearestTimelineCard() {
+  const container = timelineEl.value
+  if (!container) return
+  const cards = [...container.querySelectorAll<HTMLElement>('.tl-card')]
+  if (cards.length === 0) return
+  const center = container.scrollLeft + container.clientWidth / 2
+  let nearestIndex = 0
+  let nearestDistance = Infinity
+  for (const [index, card] of cards.entries()) {
+    const cardCenter = card.offsetLeft + card.clientWidth / 2
+    const distance = Math.abs(cardCenter - center)
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestIndex = index
+    }
+  }
+  if (nearestIndex !== activeStepIndex.value) {
+    applyStep(nearestIndex)
+  } else {
+    scrollTimelineToActive()
+  }
+}
+function onTimelineWheel(e: WheelEvent) {
+  const container = timelineEl.value
+  if (!container) return
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  container.scrollBy({ left: delta, behavior: 'auto' })
+  if (timelineSnapTimer) clearTimeout(timelineSnapTimer)
+  timelineSnapTimer = setTimeout(syncStepToNearestTimelineCard, 140)
 }
 watch(activeStepIndex, () => {
   // DOM 更新（active class 切换）之后再算偏移量
+  nextTick(scrollTimelineToActive)
+})
+watch(() => displayPathNodes.value.length, (length) => {
+  if (length === 0) return
+  if (activeStepIndex.value >= length) activeStepIndex.value = length - 1
   nextTick(scrollTimelineToActive)
 })
 
@@ -473,7 +604,7 @@ watch(activeStepIndex, () => {
 // 阶段 3 接后端 /api/narrative/assistant 时，这部分由 server-side state 覆盖
 // ============================================================================
 const chaptersForAssistant = computed(() =>
-  narrative.path.nodes.map((node, i) => ({
+  displayPathNodes.value.map((node, i) => ({
     region_id: node.region_id,
     display_name: regionMap.value[node.region_id]?.display_name ?? node.region_id,
     played: i < activeStepIndex.value
@@ -508,11 +639,11 @@ function onAssistantKeydown(e: KeyboardEvent) {
 window.addEventListener('keydown', onAssistantKeydown)
 onBeforeUnmount(() => window.removeEventListener('keydown', onAssistantKeydown))
 
-const totalPoi = computed(() => allRenderablePois.length)
+const totalPoi = computed(() => displayAllRenderablePois.value.length)
 const activeRegionAreaText = computed(() => `${(8.62).toFixed(2)} km²`)
 
 const lodLabel = computed(() => {
-  switch (narrative.lod) {
+  switch (narrative.value.lod) {
     case 'micro':
       return '近景（深挖）'
     case 'meso':
@@ -523,8 +654,8 @@ const lodLabel = computed(() => {
 })
 
 const lodKnobLeft = computed(() => {
-  if (narrative.lod === 'micro') return '15%'
-  if (narrative.lod === 'meso') return '50%'
+  if (narrative.value.lod === 'micro') return '15%'
+  if (narrative.value.lod === 'meso') return '50%'
   return '85%'
 })
 
@@ -532,15 +663,24 @@ const lodKnobLeft = computed(() => {
 // 覆盖环形图：dasharray 计算
 // ============================================================================
 const CIRC = 2 * Math.PI * 46
+const coverageBreakdown = computed(() => {
+  const coreRatio = Math.max(0, Math.min(1, narrative.value.dominant_coverage || 0))
+  const surroundingRatio = Math.max(0, Math.min(1 - coreRatio, (displayRegions.value.length - 1) * 0.08))
+  return {
+    core_ratio: coreRatio,
+    surrounding_ratio: surroundingRatio,
+    others_ratio: Math.max(0, 1 - coreRatio - surroundingRatio)
+  }
+})
 const donutDash = computed(() => ({
-  core: coverageBreakdown.core_ratio * CIRC,
-  surround: coverageBreakdown.surrounding_ratio * CIRC,
-  others: coverageBreakdown.others_ratio * CIRC
+  core: coverageBreakdown.value.core_ratio * CIRC,
+  surround: coverageBreakdown.value.surrounding_ratio * CIRC,
+  others: coverageBreakdown.value.others_ratio * CIRC
 }))
 const donutOffsets = computed(() => ({
   core: 0,
-  surround: -coverageBreakdown.core_ratio * CIRC,
-  others: -(coverageBreakdown.core_ratio + coverageBreakdown.surrounding_ratio) * CIRC
+  surround: -coverageBreakdown.value.core_ratio * CIRC,
+  others: -(coverageBreakdown.value.core_ratio + coverageBreakdown.value.surrounding_ratio) * CIRC
 }))
 
 // ============================================================================
@@ -553,6 +693,49 @@ const tierLegend: Array<{ key: VisualTier; label: string; color: string }> = [
   { key: 'weak', label: '低相关（边缘）', color: '#3b82f6' },
   { key: 'excluded', label: '已剔除', color: '#475569' }
 ]
+
+interface TimelineDot {
+  key: string
+  x: number
+  y: number
+  tier: VisualTier
+}
+
+function timelinePoiSource(region: NarrativeRegion): NarrativePoi[] {
+  if (region.pois.length > 0) return region.pois
+  return (region.visual_layer.poi_heat?.points ?? []).map((point, index) => ({
+    id: `timeline-heat-${region.id}-${index}`,
+    lon: point.lon,
+    lat: point.lat,
+    display_name: region.display_name,
+    tier: point.tier,
+    role: region.role,
+    category_main: region.display_name
+  }))
+}
+
+function buildTimelineDots(region: NarrativeRegion): TimelineDot[] {
+  const pois = timelinePoiSource(region).filter((poi) => poi.tier !== 'excluded')
+  const ring = region.boundary.coordinates[0] ?? []
+  const lons = [...ring.map((point) => point[0]), ...pois.map((poi) => poi.lon)].filter(Number.isFinite)
+  const lats = [...ring.map((point) => point[1]), ...pois.map((poi) => poi.lat)].filter(Number.isFinite)
+  const west = Math.min(...lons, region.core_anchor.lon)
+  const east = Math.max(...lons, region.core_anchor.lon)
+  const south = Math.min(...lats, region.core_anchor.lat)
+  const north = Math.max(...lats, region.core_anchor.lat)
+  const width = Math.max(east - west, 0.000001)
+  const height = Math.max(north - south, 0.000001)
+  return pois.slice(0, 18).map((poi) => ({
+    key: poi.id,
+    x: Math.max(8, Math.min(92, 10 + ((poi.lon - west) / width) * 80)),
+    y: Math.max(10, Math.min(90, 10 + ((north - poi.lat) / height) * 80)),
+    tier: poi.tier
+  }))
+}
+
+const timelineDotsByRegion = computed<Record<string, TimelineDot[]>>(() =>
+  Object.fromEntries(displayRegions.value.map((region) => [region.id, buildTimelineDots(region)]))
+)
 
 // ============================================================================
 // 解说时间线 / 打字机 / 自动播放
@@ -568,7 +751,7 @@ let advanceTimer: ReturnType<typeof setTimeout> | null = null
 let progressTimer: ReturnType<typeof setInterval> | null = null
 
 const totalDurationMs = computed(() =>
-  narrative.narration.chapters.reduce((acc, c) => acc + (c.length_ms ?? 8000), 0)
+  displayChapters.value.reduce((acc, c) => acc + (c.length_ms ?? 8000), 0)
 )
 
 const progressPercent = computed(() => {
@@ -583,7 +766,7 @@ const waveActive = ref(0)
 
 function startTyping() {
   stopTyping()
-  const chapter = narrative.narration.chapters[activeStepIndex.value]
+  const chapter = displayChapters.value[activeStepIndex.value]
   if (!chapter) return
   typedText.value = ''
   typing.value = true
@@ -635,22 +818,22 @@ function stopProgress() {
   }
 }
 
-function applyStep(index: number) {
+function applyStep(index: number, options: { fly?: boolean } = {}) {
   activeStepIndex.value = index
   // 累计上一步的耗时基线
   let acc = 0
   for (let i = 0; i < index; i++) {
-    acc += narrative.narration.chapters[i]?.length_ms ?? 8000
+    acc += displayChapters.value[i]?.length_ms ?? 8000
   }
   stepStartElapsedMs.value = acc
   elapsedMs.value = acc
-  flyToActiveRegion()
+  if (options.fly !== false) flyToActiveRegion()
   startTyping()
   if (playing.value && ui.autoNarrate) {
-    const ms = narrative.narration.chapters[index]?.length_ms ?? 8000
+    const ms = displayChapters.value[index]?.length_ms ?? 8000
     clearAdvanceTimer()
     advanceTimer = setTimeout(() => {
-      if (index < narrative.path.nodes.length - 1) {
+      if (index < displayPathNodes.value.length - 1) {
         applyStep(index + 1)
       } else {
         stopAll()
@@ -681,7 +864,7 @@ function stopAll() {
 }
 
 function goToStep(i: number) {
-  if (i < 0 || i >= narrative.path.nodes.length) return
+  if (i < 0 || i >= displayPathNodes.value.length) return
   applyStep(i)
 }
 
@@ -690,7 +873,7 @@ function goPrev() {
 }
 
 function goNext() {
-  goToStep(Math.min(narrative.path.nodes.length - 1, activeStepIndex.value + 1))
+  goToStep(Math.min(displayPathNodes.value.length - 1, activeStepIndex.value + 1))
 }
 
 function rewind() {
@@ -708,18 +891,17 @@ function onSeek(e: MouseEvent) {
   elapsedMs.value = ratio * totalDurationMs.value
   // 找到对应章节
   let acc = 0
-  for (let i = 0; i < narrative.narration.chapters.length; i++) {
-    acc += narrative.narration.chapters[i].length_ms ?? 8000
+  for (let i = 0; i < displayChapters.value.length; i++) {
+    acc += displayChapters.value[i].length_ms ?? 8000
     if (elapsedMs.value < acc) {
       goToStep(i)
       return
     }
   }
-  goToStep(narrative.path.nodes.length - 1)
+  goToStep(displayPathNodes.value.length - 1)
 }
 
-function reshuffle() {
-  // mock 阶段仅用于演示"每次解说可能不同"的语义，重新触发打字机
+function restartNarration() {
   stopAll()
   activeStepIndex.value = 0
   applyStep(0)
@@ -756,18 +938,70 @@ function formatTime(ms: number): string {
 }
 
 // ============================================================================
-// OpenLayers 地图：底图 + 三层光晕 + POI 5 档分层
+// OpenLayers 地图：底图 + 片区密度热力雾 + POI Cluster + 片区标签层
+// 设计原则：
+//   1. 每个片区一个独立 HeatmapLayer，gradient 单一色相，多层叠加时
+//      在重叠区出现色相对抗，让用户辨认相邻片区边界（如橙 vs 黄）。
+//   2. POI 走 Cluster source：低 zoom 多点融合成大圆+数量，高 zoom 自然散开。
+//   3. 不再画死循环的椭圆环；`visual_layer.region_glow.color` 仅作为色相来源。
 // ============================================================================
 
 const mapContainerEl = ref<HTMLDivElement | null>(null)
 let olMap: OlMap | null = null
 let baseLayer: TileLayer<XYZ> | null = null
-let glowOuterLayer: VectorLayer | null = null
-let glowInnerLayer: VectorLayer | null = null
-let glowCoreLayer: VectorLayer | null = null
+// 每个片区一个独立 heatmap source / layer：色相对抗
+const regionHeatSources: Record<string, VectorSource> = {}
+const regionHeatLayers: HeatmapLayer[] = []
+// POI 散点层（按 tier 颜色直接渲染，不聚合）
+let poiBaseSource: VectorSource | null = null
 let poiLayer: VectorLayer | null = null
 let labelLayer: VectorLayer | null = null
 
+// 片区色相统一来自后端 visual_layer.region_glow.color
+const regionPalette = computed<Record<string, string>>(() =>
+  Object.fromEntries(displayRegions.value.map((r) => [r.id, r.visual_layer.region_glow?.color ?? '#3b82f6']))
+)
+const DEFAULT_REGION_COLOR = '#3b82f6'
+
+// tier → heatmap 权重：核心点贡献最大热值，边缘点几乎不贡献
+const TIER_HEAT_WEIGHT: Record<VisualTier, number> = {
+  core: 1.0,
+  strong: 0.7,
+  medium: 0.4,
+  weak: 0,
+  excluded: 0
+}
+
+// 按最近 anchor 把 POI 分配到片区，结果缓存
+const poiRegionCache = new Map<string, string>()
+function nearestRegionId(lon: number, lat: number): string {
+  let best = ''
+  let bestD2 = Infinity
+  for (const r of displayRegions.value) {
+    const dx = lon - r.core_anchor.lon
+    const dy = lat - r.core_anchor.lat
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD2) {
+      bestD2 = d2
+      best = r.id
+    }
+  }
+  return best
+}
+function regionIdForPoi(id: string, lon: number, lat: number): string {
+  const cached = poiRegionCache.get(id)
+  if (cached) return cached
+  const rid = nearestRegionId(lon, lat)
+  poiRegionCache.set(id, rid)
+  return rid
+}
+
+/**
+ * 片区色相分配（地理相邻片区色相靠近但不同，在热力雾交叠时能看出边界）：
+ * - 昙华林（西南）橙 ↔ 黄鹤楼（与昙华林相邻）黄【用户明确点名的对抗】
+ * - 湖北大学（北）红 ↔ 沙湖公园（与 HBU 相邻）青绿
+ * - 武汉大学（东南独立）紫
+ */
 /**
  * 底图源：矢量路网 vs 卫星影像。两者互斥，不叠加。
  * 通过右上角图层按钮切换。
@@ -776,7 +1010,7 @@ const BASE_TILE_URL: Record<'vector' | 'satellite', string> = {
   vector: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
   satellite: 'https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'
 }
-const baseLayerMode = ref<'vector' | 'satellite'>('vector')
+const baseLayerMode = ref<'vector' | 'satellite'>('satellite')
 
 function toggleBaseLayer() {
   if (!baseLayer) return
@@ -785,14 +1019,6 @@ function toggleBaseLayer() {
     url: BASE_TILE_URL[baseLayerMode.value],
     crossOrigin: 'anonymous'
   }))
-}
-
-function ringToCoords(ring: PolygonRing): number[][][] {
-  return ring.rings.map((r) => r.map(([lon, lat]) => fromLonLat([lon, lat])))
-}
-
-function buildGlowFeature(ring: PolygonRing): Feature<Polygon> {
-  return new Feature({ geometry: new Polygon(ringToCoords(ring)) })
 }
 
 function styleForTier(tier: VisualTier, opacityScale: number): Style | null {
@@ -824,9 +1050,10 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 function rebuildPoiLayer() {
-  if (!poiLayer) return
-  const src = poiLayer.getSource()!
-  src.clear()
+  if (!poiBaseSource) return
+  poiBaseSource.clear()
+  for (const src of Object.values(regionHeatSources)) src.clear()
+
   const threshold = ui.relevanceThreshold
   // 阈值映射：高于阈值才显示对应 tier
   // weak >= 0.0 / medium >= 0.25 / strong >= 0.55 / core 永远显示
@@ -837,16 +1064,56 @@ function rebuildPoiLayer() {
     strong: 0.55,
     core: 0
   }
-  for (const p of allRenderablePois) {
-    if (threshold > tierMin[p.tier]) continue
+  for (const p of displayAllRenderablePois.value) {
     if (p.tier === 'excluded') continue
-    const f = new Feature({ geometry: new Point(fromLonLat([p.lon, p.lat])) })
+    if (threshold > tierMin[p.tier]) continue
+
+    const rid = regionIdForPoi(p.id, p.lon, p.lat)
+    const coord = fromLonLat([p.lon, p.lat])
+
+    // 1. 散点：直接按 tier 颜色渲染
+    const f = new Feature({ geometry: new Point(coord) })
     const st = styleForTier(p.tier, ui.opacityScale)
-    if (!st) continue
-    f.setStyle(st)
-    f.set('tier', p.tier)
-    f.set('name', p.display_name)
-    src.addFeature(f)
+    if (st) {
+      f.setStyle(st)
+      f.set('tier', p.tier)
+      f.set('name', p.display_name)
+      poiBaseSource.addFeature(f)
+    }
+
+    // 2. 片区 heat source：用于密度雾
+    const heatSrc = regionHeatSources[rid]
+    const heatWeight = TIER_HEAT_WEIGHT[p.tier]
+    if (heatSrc && heatWeight > 0) {
+      const hf = new Feature({ geometry: new Point(coord) })
+      hf.set('weight', heatWeight)
+      heatSrc.addFeature(hf)
+    }
+  }
+  for (const region of displayRegions.value) {
+    const heatSrc = regionHeatSources[region.id]
+    if (!heatSrc || heatSrc.getFeatures().length > 0) continue
+    for (const point of region.visual_layer.poi_heat?.points ?? []) {
+      const isWeakFallback = point.tier === 'weak'
+      if (!isWeakFallback && threshold > tierMin[point.tier]) continue
+      const heatWeight = isWeakFallback ? 0.14 : TIER_HEAT_WEIGHT[point.tier]
+      if (heatWeight <= 0) continue
+      const hf = new Feature({ geometry: new Point(fromLonLat([point.lon, point.lat])) })
+      hf.set('weight', heatWeight)
+      heatSrc.addFeature(hf)
+    }
+  }
+}
+
+// 根据当前 zoom 同步密度雾半径：远景大融合，近景小拆解
+function syncHeatmapRadius() {
+  if (!olMap) return
+  const z = olMap.getView().getZoom() ?? 14
+  const radius = Math.max(8, Math.min(34, 60 - z * 3))
+  const blur = Math.max(10, Math.min(38, radius + 6))
+  for (const hl of regionHeatLayers) {
+    hl.setRadius(radius)
+    hl.setBlur(blur)
   }
 }
 
@@ -854,7 +1121,7 @@ function rebuildLabelLayer() {
   if (!labelLayer) return
   const src = labelLayer.getSource()!
   src.clear()
-  for (const region of narrative.regions) {
+  for (const region of displayRegions.value) {
     const f = new Feature({
       geometry: new Point(fromLonLat([region.core_anchor.lon, region.core_anchor.lat]))
     })
@@ -874,19 +1141,50 @@ function rebuildLabelLayer() {
   }
 }
 
-function rebuildGlowLayers() {
-  const outer = glowOuterLayer?.getSource()
-  const inner = glowInnerLayer?.getSource()
-  const core = glowCoreLayer?.getSource()
-  if (!outer || !inner || !core) return
-  outer.clear()
-  inner.clear()
-  core.clear()
-  for (const r of narrative.regions) {
-    outer.addFeature(buildGlowFeature(r.glow_layers.outer))
-    inner.addFeature(buildGlowFeature(r.glow_layers.inner))
-    core.addFeature(buildGlowFeature(r.glow_layers.core))
+function clearRegionHeatLayers() {
+  if (!olMap) return
+  for (const layer of regionHeatLayers) olMap.removeLayer(layer)
+  regionHeatLayers.splice(0, regionHeatLayers.length)
+  for (const key of Object.keys(regionHeatSources)) delete regionHeatSources[key]
+}
+
+function rebuildRegionHeatLayers() {
+  if (!olMap || !poiLayer || !labelLayer) return
+  clearRegionHeatLayers()
+  for (const region of displayRegions.value) {
+    const src = new VectorSource()
+    regionHeatSources[region.id] = src
+    const color = regionPalette.value[region.id] ?? DEFAULT_REGION_COLOR
+    const hl = new HeatmapLayer({
+      source: src,
+      weight: (f) => (f.get('weight') as number) ?? 0.2,
+      radius: 18,
+      blur: 22,
+      gradient: [
+        hexToRgba(color, 0),
+        hexToRgba(color, 0.35),
+        hexToRgba(color, 0.65),
+        hexToRgba(color, 0.85),
+        hexToRgba(color, 1.0)
+      ],
+      opacity: 0.6,
+      zIndex: 5
+    })
+    regionHeatLayers.push(hl)
+    olMap.addLayer(hl)
   }
+  olMap.removeLayer(poiLayer)
+  olMap.removeLayer(labelLayer)
+  olMap.addLayer(poiLayer)
+  olMap.addLayer(labelLayer)
+}
+
+function refreshMapLayersAfterNarrativeChange() {
+  poiRegionCache.clear()
+  rebuildRegionHeatLayers()
+  rebuildPoiLayer()
+  rebuildLabelLayer()
+  syncHeatmapRadius()
 }
 
 function flyToActiveRegion() {
@@ -912,9 +1210,57 @@ function zoomOut() {
   v.animate({ zoom: (v.getZoom() ?? 14) - 1, duration: 240 })
 }
 
+function getCurrentMapViewport(): ViewportBBox | null {
+  if (!olMap) return null
+  const size = olMap.getSize()
+  if (!size) return null
+  const view = olMap.getView()
+  const extent3857 = view.calculateExtent(size)
+  const [displayWest, displaySouth, displayEast, displayNorth] = transformExtent(extent3857, 'EPSG:3857', 'EPSG:4326')
+  const [west, south] = gcj02ToWgs84(displayWest, displaySouth)
+  const [east, north] = gcj02ToWgs84(displayEast, displayNorth)
+  const displayCenter = toLonLat(view.getCenter() ?? fromLonLat(narrative.value.viewport.center)) as [number, number]
+  const center = gcj02ToWgs84(displayCenter[0], displayCenter[1])
+  return {
+    west,
+    south,
+    east,
+    north,
+    zoom: view.getZoom() ?? narrative.value.viewport.zoom,
+    center
+  }
+}
+
+async function analyzeCurrentViewport() {
+  const viewport = getCurrentMapViewport()
+  if (!viewport || analysisStatus.value === 'analyzing') return
+  analysisStatus.value = 'analyzing'
+  analysisError.value = ''
+  try {
+    const response = await fetchNarrativeResponse({
+      session_id: narrative.value.session_id,
+      viewport,
+      tone: ui.tonePreset,
+      user_context: narrative.value.user_context
+    })
+    stopAll()
+    narrative.value = response
+    analysisStatus.value = 'ready'
+    activeStepIndex.value = 0
+    refreshMapLayersAfterNarrativeChange()
+    applyStep(0, { fly: false })
+  } catch (error) {
+    analysisStatus.value = 'error'
+    analysisError.value = error instanceof Error ? error.message : '当前视野分析失败'
+    if (import.meta.env.DEV) {
+      console.warn('[Narrative] 当前视野分析失败', error)
+    }
+  }
+}
+
 function initMap() {
   if (!mapContainerEl.value) return
-  // 单一底图：默认矢量路网，可通过右上角「图层」按钮切到卫星影像。
+  // 单一底图：默认卫星影像，可通过右上角「图层」按钮切到矢量路网。
   // 不做叠加，保持画面干净。
   baseLayer = new TileLayer({
     source: new XYZ({
@@ -923,31 +1269,36 @@ function initMap() {
     })
   })
 
-  glowOuterLayer = new VectorLayer({
-    source: new VectorSource(),
-    style: new Style({
-      fill: new Fill({ color: 'rgba(59,130,246,0.10)' }),
-      stroke: new Stroke({ color: 'rgba(59,130,246,0.18)', width: 1 })
-    }),
-    zIndex: 5
+  // 1. 每个片区独立 heatmap，gradient 用片区色相
+  for (const region of displayRegions.value) {
+    const src = new VectorSource()
+    regionHeatSources[region.id] = src
+    const color = regionPalette.value[region.id] ?? DEFAULT_REGION_COLOR
+    const hl = new HeatmapLayer({
+      source: src,
+      weight: (f) => (f.get('weight') as number) ?? 0.2,
+      radius: 18,
+      blur: 22,
+      gradient: [
+        hexToRgba(color, 0),
+        hexToRgba(color, 0.35),
+        hexToRgba(color, 0.65),
+        hexToRgba(color, 0.85),
+        hexToRgba(color, 1.0)
+      ],
+      opacity: 0.6,
+      zIndex: 5
+    })
+    regionHeatLayers.push(hl)
+  }
+
+  // 2. POI 散点层（按 tier 颜色直接渲染）
+  poiBaseSource = new VectorSource()
+  poiLayer = new VectorLayer({
+    source: poiBaseSource,
+    zIndex: 10
   })
-  glowInnerLayer = new VectorLayer({
-    source: new VectorSource(),
-    style: new Style({
-      fill: new Fill({ color: 'rgba(245,158,11,0.16)' }),
-      stroke: new Stroke({ color: 'rgba(245,158,11,0.30)', width: 1 })
-    }),
-    zIndex: 6
-  })
-  glowCoreLayer = new VectorLayer({
-    source: new VectorSource(),
-    style: new Style({
-      fill: new Fill({ color: 'rgba(239,68,68,0.30)' }),
-      stroke: new Stroke({ color: 'rgba(239,68,68,0.65)', width: 1.5 })
-    }),
-    zIndex: 7
-  })
-  poiLayer = new VectorLayer({ source: new VectorSource(), zIndex: 10 })
+
   labelLayer = new VectorLayer({ source: new VectorSource(), zIndex: 20, declutter: true })
 
   // LOD 限制（按规范 §0.2 + 用户约束）：
@@ -962,11 +1313,11 @@ function initMap() {
 
   olMap = new OlMap({
     target: mapContainerEl.value,
-    layers: [baseLayer, glowOuterLayer, glowInnerLayer, glowCoreLayer, poiLayer, labelLayer],
+    layers: [baseLayer, ...regionHeatLayers, poiLayer, labelLayer],
     controls: [],
     view: new View({
-      center: fromLonLat(narrative.viewport.center),
-      zoom: narrative.viewport.zoom,
+      center: fromLonLat(narrative.value.viewport.center),
+      zoom: narrative.value.viewport.zoom,
       // minZoom 10：武汉市 bbox 大约 1.4° × 1.5°，zoom 10 时能完整看到全市
       minZoom: 10,
       maxZoom: 17,
@@ -977,9 +1328,12 @@ function initMap() {
     })
   })
 
-  rebuildGlowLayers()
   rebuildPoiLayer()
   rebuildLabelLayer()
+  syncHeatmapRadius()
+
+  // zoom 变化时同步热力雾半径，实现 "密度雾随尺度融合 / 拆解" 的效果
+  olMap.getView().on('change:resolution', syncHeatmapRadius)
 }
 
 watch(() => [ui.relevanceThreshold, ui.opacityScale], () => {
@@ -988,11 +1342,14 @@ watch(() => [ui.relevanceThreshold, ui.opacityScale], () => {
 
 onMounted(() => {
   initMap()
-  applyStep(0)
+  applyStep(0, { fly: false })
+  // 地图渲染后自动触发一次当前视野分析
+  nextTick(() => { setTimeout(() => void analyzeCurrentViewport(), 400) })
 })
 
 onBeforeUnmount(() => {
   stopAll()
+  if (timelineSnapTimer) clearTimeout(timelineSnapTimer)
   if (olMap) {
     olMap.setTarget(undefined)
     olMap = null
@@ -1266,6 +1623,21 @@ const ICONS = {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
 .primary-btn:hover { background: #2563eb; }
+.primary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  background: #334155;
+}
+.analysis-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(248,113,113,0.35);
+  background: rgba(127,29,29,0.28);
+  color: #fecaca;
+  font-size: 12px;
+  line-height: 1.45;
+}
 
 /* ----- 点剔除与分层 ----- */
 .tier-list { list-style: none; padding: 0; margin: 0 0 14px 0; }
@@ -1793,6 +2165,9 @@ const ICONS = {
   display: flex; gap: 12px;
   overflow-x: auto;
   scrollbar-width: none;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-inline: contain;
 }
 .timeline::-webkit-scrollbar { display: none; }
 
@@ -1804,6 +2179,7 @@ const ICONS = {
   padding: 6px;
   cursor: pointer;
   transition: transform 0.2s ease, border-color 0.2s ease;
+  scroll-snap-align: center;
 }
 .tl-card:hover { background: var(--bg-elevated); border-color: var(--bd-accent); }
 .tl-card.active {
@@ -1815,6 +2191,45 @@ const ICONS = {
   height: 60px;
   border-radius: 7px;
   overflow: hidden;
+}
+.tl-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.86);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.tl-dot.tier-core {
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+}
+.tl-dot.tier-strong { background: #f97316; }
+.tl-dot.tier-medium { background: #eab308; }
+.tl-dot.tier-weak {
+  width: 4px;
+  height: 4px;
+  background: #60a5fa;
+  opacity: 0.72;
+}
+.tl-cluster {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(15,23,42,0.72);
+  border: 1px solid rgba(255,255,255,0.45);
 }
 .tl-no {
   position: absolute; top: 5px; left: 6px;

@@ -98,6 +98,12 @@ export default defineConfig(({ mode }) => {
           timeout: streamProxyTimeoutMs,
           proxyTimeout: streamProxyTimeoutMs,
         },
+        '/api/narrative': {
+          target: proxyTarget,
+          changeOrigin: true,
+          timeout: streamProxyTimeoutMs,
+          proxyTimeout: streamProxyTimeoutMs,
+        },
         '/api/search': {
           target: proxyTarget,
           changeOrigin: true,

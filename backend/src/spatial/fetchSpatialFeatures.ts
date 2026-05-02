@@ -130,6 +130,8 @@ function buildSpatialClause(params: unknown[], input: SpatialFetchRequest) {
 function toFeature(row: Record<string, unknown>): SpatialFeature | null {
   const longitude = Number(row.longitude)
   const latitude = Number(row.latitude)
+  const geomLongitude = Number(row.geom_longitude)
+  const geomLatitude = Number(row.geom_latitude)
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
     return null
   }
@@ -163,6 +165,9 @@ function toFeature(row: Record<string, unknown>): SpatialFeature | null {
       小类: brandCategory,
       longitude,
       latitude,
+      geom_longitude: Number.isFinite(geomLongitude) ? geomLongitude : null,
+      geom_latitude: Number.isFinite(geomLatitude) ? geomLatitude : null,
+      geomCoordSys: 'wgs84',
       coordSys,
       _coordSys: coordSys,
     },
@@ -191,7 +196,9 @@ export async function fetchSpatialFeaturesFromDatabase(
       category_sub,
       brand_category,
       longitude,
-      latitude
+      latitude,
+      ST_X(geom) AS geom_longitude,
+      ST_Y(geom) AS geom_latitude
     FROM public.pois
     WHERE longitude IS NOT NULL
       AND latitude IS NOT NULL
