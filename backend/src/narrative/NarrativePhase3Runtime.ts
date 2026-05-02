@@ -43,6 +43,8 @@ interface NarrativeWebSource {
   title: string
   url: string
   snippet?: string
+  quality?: 'official' | 'encyclopedia' | 'media' | 'general'
+  quality_score?: number
 }
 
 interface WebFactDebugItem {
@@ -58,6 +60,11 @@ const DEFAULT_USER_CONTEXT: UserContext = {
   preference_label: '通用解说',
   history_label: '首次进入',
 }
+
+const OFFICIAL_SOURCE_RE = /(gov\.cn|edu\.cn|org\.cn|wuhan\.gov|wh\.gov|官网|管理处|委员会|人民政府|文旅局|园林|规划|自然资源)/iu
+const ENCYCLOPEDIA_SOURCE_RE = /(baike\.baidu\.com|wikipedia\.org|百科)/iu
+const MEDIA_SOURCE_RE = /(news|xinhuanet|people\.com\.cn|cctv|chinanews|thepaper|长江日报|湖北日报|新华社|人民网|央视|澎湃)/iu
+const LOW_QUALITY_SOURCE_RE = /(广告|优惠|团购|预订|点评|论坛|贴吧|小红书|营销|软文|自媒体|携程|马蜂窝|去哪儿|美团|大众点评)/iu
 
 function readFiniteNumber(value: unknown): number | null {
   const n = Number(value)
@@ -112,6 +119,26 @@ function mergeUserContext(value: unknown): UserContext {
     preference_label: String(raw.preference_label || DEFAULT_USER_CONTEXT.preference_label),
     history_label: String(raw.history_label || DEFAULT_USER_CONTEXT.history_label),
   }
+}
+
+function classifyWebSourceQuality(source: Pick<NarrativeWebSource, 'title' | 'url' | 'snippet'>): Required<Pick<NarrativeWebSource, 'quality' | 'quality_score'>> {
+  const text = `${source.title} ${source.url} ${source.snippet || ''}`
+  if (OFFICIAL_SOURCE_RE.test(text)) return { quality: 'official', quality_score: 0.95 }
+  if (ENCYCLOPEDIA_SOURCE_RE.test(text)) return { quality: 'encyclopedia', quality_score: 0.78 }
+  if (MEDIA_SOURCE_RE.test(text)) return { quality: 'media', quality_score: 0.68 }
+  if (LOW_QUALITY_SOURCE_RE.test(text)) return { quality: 'general', quality_score: 0.35 }
+  return { quality: 'general', quality_score: 0.5 }
+}
+
+function enrichWebSourceQuality(source: NarrativeWebSource): NarrativeWebSource {
+  const quality = classifyWebSourceQuality(source)
+  return { ...source, ...quality }
+}
+
+function sortWebSourcesByQuality(sources: NarrativeWebSource[]): NarrativeWebSource[] {
+  return sources
+    .map(enrichWebSourceQuality)
+    .sort((left, right) => (right.quality_score ?? 0) - (left.quality_score ?? 0))
 }
 
 function featureToPoi(feature: SpatialFeature): NarrativePoi | null {
@@ -259,6 +286,8 @@ export function buildDeepSeekNarrativeWebFactSearcher(skill: SkillDefinition) {
         snippet: String(item.content || item.snippet || '').trim() || undefined,
       }))
       .filter((item) => item.title && /^https?:\/\//iu.test(item.url))
+      .map(enrichWebSourceQuality)
+      .sort((left, right) => (right.quality_score ?? 0) - (left.quality_score ?? 0))
       .slice(0, maxResults)
   }
 }
@@ -280,7 +309,7 @@ async function attachWebSources(input: {
     const name = region?.display_name || chapter.region_id
     const query = `${name} 官方 介绍 城市空间`
     const started = Date.now()
-    const sources = await input.searchWebFacts?.(query, maxResults) ?? []
+    const sources = sortWebSourcesByQuality(await input.searchWebFacts?.(query, maxResults) ?? []).slice(0, maxResults)
     return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
   }))
   const sourcesByRegion = new Map<string, NarrativeWebSource[]>()

@@ -131,7 +131,7 @@ export interface NarrativeChapter {
   region_id: string
   text: string
   web_source?: { title: string; url: string }
-  web_sources?: Array<{ title: string; url: string; snippet?: string }>
+  web_sources?: Array<{ title: string; url: string; snippet?: string; quality?: 'official' | 'encyclopedia' | 'media' | 'general'; quality_score?: number }>
   length_ms?: number
 }
 

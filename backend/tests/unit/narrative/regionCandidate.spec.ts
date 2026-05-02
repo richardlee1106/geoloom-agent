@@ -246,6 +246,48 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].role).toBe('support_region')
   })
 
+  it('道路走廊型抽象片区使用更收敛的走廊边界', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'mixed_urban',
+      aois: [],
+      pois: [
+        { ...poi('a', 114.32, 30.55, '餐饮服务', 'medium'), display_name: '水塔街咖啡馆' },
+        { ...poi('b', 114.36, 30.551, '购物服务', 'medium'), display_name: '水塔街书店' },
+        { ...poi('c', 114.38, 30.552, '餐饮服务', 'weak'), display_name: '水塔街小吃店' },
+      ],
+    })
+
+    const ring = candidates[0].boundary.coordinates[0]
+    const lats = ring.map((point) => point[1])
+    const lons = ring.map((point) => point[0])
+    expect(Math.max(...lons) - Math.min(...lons)).toBeGreaterThan(Math.max(...lats) - Math.min(...lats))
+    expect(Math.max(...lats) - Math.min(...lats)).toBeLessThan(0.01)
+  })
+
+  it('行政边界命中时不会抑制同名抽象片区', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'mixed_urban',
+      pois: [
+        { ...poi('coffee', 114.35, 30.55, '餐饮服务', 'medium'), display_name: '水塔街咖啡馆' },
+        { ...poi('book', 114.351, 30.551, '购物服务', 'medium'), display_name: '水塔街书店' },
+        { ...poi('snack', 114.352, 30.552, '餐饮服务', 'weak'), display_name: '水塔街小吃店' },
+      ],
+      aois: [
+        {
+          id: 'shuita-subdistrict',
+          name: '水塔街道',
+          fclass: 'administrative',
+          areaSqm: 320_000,
+          boundary: polygonFromBounds({ west: 114.345, south: 30.545, east: 114.36, north: 30.56 }),
+        },
+      ],
+    })
+
+    expect(candidates.some((candidate) => candidate.display_name === '水塔街' && candidate.source === 'abstract_region')).toBe(true)
+  })
+
   it('已有同名 AOI 时不重复生成抽象片区抢占主体', () => {
     const candidates = buildRegionCandidates({
       viewport,

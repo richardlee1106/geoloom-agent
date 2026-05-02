@@ -413,14 +413,26 @@ function passesDiversityGate(pois: NarrativePoi[]): boolean {
 function mergeOverlappingCandidates(candidates: RegionCandidate[]): RegionCandidate[] {
   const out: RegionCandidate[] = []
   for (const candidate of candidates) {
-    const duplicated = out.some((existing) => {
+    const duplicatedIndex = out.findIndex((existing) => {
       const shared = candidate.pois.filter((poi) => existing.pois.some((item) => item.id === poi.id)).length
       const minCount = Math.min(candidate.pois.length, existing.pois.length)
       return minCount > 0 && shared / minCount >= 0.6
     })
-    if (!duplicated) out.push(candidate)
+    if (duplicatedIndex < 0) {
+      out.push(candidate)
+      continue
+    }
+    if (shouldReplaceOverlappingCandidate(out[duplicatedIndex], candidate)) {
+      out[duplicatedIndex] = candidate
+    }
   }
   return out
+}
+
+function shouldReplaceOverlappingCandidate(existing: RegionCandidate, candidate: RegionCandidate): boolean {
+  return existing.source === 'aoi'
+    && candidate.source === 'abstract_region'
+    && /(街道|社区|行政|乡镇|镇|村)$/u.test(existing.display_name)
 }
 
 function colorForCandidate(id: string, scene: SceneProfile): string {

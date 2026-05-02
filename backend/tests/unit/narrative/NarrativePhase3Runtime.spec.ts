@@ -179,10 +179,57 @@ describe('NarrativePhase3Runtime', () => {
     expect(response.narration.chapters[0].web_sources?.[0]).toMatchObject({
       title: '武汉市沙湖公园管理处',
       url: expect.stringMatching(/^https:\/\//),
+      quality: 'official',
+      quality_score: 0.95,
     })
     expect(response.debug?.web_facts).toMatchObject({
       queried_region_count: 1,
       source_count: 1,
     })
+  })
+
+  it('sorts optional web fact sources by quality before attaching', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园团购优惠',
+          url: 'https://example.com/deal',
+          snippet: '团购优惠信息',
+        },
+        {
+          title: '武汉市园林和林业局 沙湖公园',
+          url: 'https://ylj.wuhan.gov.cn/official',
+          snippet: '官方介绍',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-quality-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.narration.chapters[0].web_sources?.map((source) => source.quality)).toEqual(['official', 'general'])
+    expect(response.narration.chapters[0].web_sources?.[0].title).toContain('园林')
   })
 })
