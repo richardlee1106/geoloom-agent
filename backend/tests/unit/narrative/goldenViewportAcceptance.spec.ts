@@ -15,7 +15,7 @@ interface GoldenWorld {
 
 interface DebugSnapshot {
   recall?: { features_count?: number; aoi_count?: number; renderable_poi_count?: number }
-  candidates?: { built_count?: number; fallback_used?: boolean; items?: Array<{ name?: string; role?: string; coverage?: number }> }
+  candidates?: { built_count?: number; fallback_used?: boolean; items?: Array<{ name?: string; role?: string; source?: string; coverage?: number }> }
   lod?: { selected?: string }
   path?: { node_count?: number }
   facts?: { selected_region_count?: number }
@@ -112,12 +112,13 @@ function commercialFeatures(prefix: string, name: string, lon: number, lat: numb
   ]
 }
 
-function viewport(name: 'micro' | 'meso' | 'macro' | 'dense' | 'empty'): ViewportBBox {
+function viewport(name: 'micro' | 'meso' | 'macro' | 'dense' | 'abstract' | 'empty'): ViewportBBox {
   const values = {
     micro: { west: 114.32, south: 30.52, east: 114.36, north: 30.56, zoom: 15, center: [114.34, 30.54] },
     meso: { west: 114.31, south: 30.52, east: 114.39, north: 30.60, zoom: 14, center: [114.35, 30.56] },
     macro: { west: 114.24, south: 30.48, east: 114.52, north: 30.68, zoom: 12, center: [114.38, 30.58] },
     dense: { west: 114.32, south: 30.53, east: 114.37, north: 30.58, zoom: 15, center: [114.345, 30.555] },
+    abstract: { west: 114.25, south: 30.54, east: 114.39, north: 30.63, zoom: 13, center: [114.32, 30.585] },
     empty: { west: 114.1, south: 30.1, east: 114.12, north: 30.12, zoom: 15, center: [114.11, 30.11] },
   } satisfies Record<string, ViewportBBox>
   return values[name]
@@ -182,6 +183,23 @@ function denseNoiseWorld(): GoldenWorld {
       feature('noise-dorm-2', '湖北大学二号学生宿舍', 114.343, 30.553, '科教文化服务', '宿舍'),
     ],
     aois: [aoi('hbu', '湖北大学', { west: 114.327, south: 30.537, east: 114.363, north: 30.573 }, 'university', 1_500_000)],
+  }
+}
+
+function abstractRegionWorld(): GoldenWorld {
+  return {
+    features: [
+      feature('jianghan-food', '江汉路步行街小吃店', 114.285, 30.585, '餐饮服务', '小吃'),
+      feature('jianghan-shop', '江汉路步行街服饰店', 114.287, 30.587, '购物服务', '服饰'),
+      feature('jianghan-book', '江汉路步行街书店', 114.289, 30.589, '购物服务', '书店'),
+      feature('xudong-mall', '徐东商圈购物入口', 114.34, 30.59, '购物服务', '商场'),
+      feature('xudong-food', '徐东商圈美食餐饮', 114.342, 30.592, '餐饮服务', '中餐厅'),
+      feature('xudong-cinema', '徐东商圈影城', 114.344, 30.594, '体育休闲服务', '电影院'),
+      feature('shuita-coffee', '水塔街咖啡馆', 114.295, 30.575, '餐饮服务', '咖啡厅'),
+      feature('shuita-book', '水塔街书店', 114.297, 30.577, '购物服务', '书店'),
+      feature('shuita-snack', '水塔街小吃店', 114.299, 30.579, '餐饮服务', '小吃'),
+    ],
+    aois: [],
   }
 }
 
@@ -266,6 +284,20 @@ describe('Narrative phase 3 golden viewport acceptance', () => {
     expect(response.regions[0]?.display_name).toBe('湖北大学')
     expect(pathRoles).not.toContain('micro_facility')
     expect(pathRoles).not.toContain('noise')
+  })
+
+  it('通过城市认知抽象片区视野验收', async () => {
+    const runtime = runtimeFromWorld(abstractRegionWorld())
+    const response = await runtime.build({ session_id: 'golden-abstract-region', viewport: viewport('abstract'), debug: true })
+    const regionNames = response.regions.map((region) => region.display_name)
+    const debug = response.debug as DebugSnapshot
+
+    expectCommonPhase3Invariants(response)
+    expect(regionNames).toContain('江汉路步行街')
+    expect(regionNames).toContain('徐东商圈')
+    expect(regionNames).toContain('水塔街')
+    expect(debug.candidates?.items?.filter((item) => item.source === 'abstract_region').length).toBeGreaterThanOrEqual(3)
+    expect(response.path.nodes.length).toBeGreaterThanOrEqual(3)
   })
 
   it('通过空召回视野的 fallback 验收', async () => {

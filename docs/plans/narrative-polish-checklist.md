@@ -22,6 +22,16 @@ owner: GeoLoom Narrative Team
 
 目标：让系统稳定识别商圈、街区、步行街、道路走廊、生活片区等非标准 AOI。
 
+第一轮 MVP（2026-05-02）：
+
+- `regionCandidate.ts` 已在 AOI 候选与普通点云候选之间接入 `abstract_region` 候选。
+- 抽象片区发现逻辑已拆分到 `backend/src/narrative/abstractRegionDiscovery.ts`。
+- 已支持从 POI 名称中提取步行街、商业街、商圈、街区、道路走廊、商业综合体等抽象片区 token。
+- 已补充江汉路步行街、徐东商圈、水塔街、同名 AOI 抑制四类单测。
+- 已在 `goldenViewportAcceptance.spec.ts` 增加城市认知抽象片区 golden viewport。
+- 已保留真实 AOI 优先级：同名 AOI 存在时，不重复生成抽象片区抢占主体。
+- 当前仍是名称 token + POI 证据的保守 MVP，尚未接入道路轴线、行政边界、DeepSeek Search 候选地名或来源质量评分。
+
 验收对象：
 
 - 江汉路步行街
@@ -48,10 +58,10 @@ owner: GeoLoom Narrative Team
 
 建议产物：
 
-- 后端新增 `abstractRegionDiscovery.ts`。
+- 后端新增 `abstractRegionDiscovery.ts`。（已完成 MVP）
 - 新增 `AbstractRegionCandidate` 内部类型。
 - `buildRegionCandidates` 在 AOI 与点云之间插入抽象片区候选。
-- golden viewport 增加江汉路 / 徐东 / 水塔街回归。
+- golden viewport 增加江汉路 / 徐东 / 水塔街回归。（已完成 MVP）
 
 ## 3. 阶段 4.2：叙事关系图谱与路径打磨
 

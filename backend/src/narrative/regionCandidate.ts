@@ -1,4 +1,5 @@
 import { classifyNarrativeEntity } from './entityClassifier.js'
+import { discoverAbstractRegionCandidates } from './abstractRegionDiscovery.js'
 import type {
   NarrativeBoundaryGeometry,
   NarrativePoi,
@@ -32,7 +33,7 @@ export interface AoiCandidateRow {
 
 export interface RegionCandidate extends NarrativeRegion {
   score: number
-  source: 'aoi' | 'point_cloud' | 'viewport_fallback'
+  source: 'aoi' | 'abstract_region' | 'point_cloud' | 'viewport_fallback'
   coverage: number
   diversity: number
   effectivePoiCount: number
@@ -56,6 +57,7 @@ export function buildRegionCandidates(input: {
 }): RegionCandidate[] {
   const candidates = [
     ...buildAoiRegionCandidates(input),
+    ...buildAbstractRegionCandidates(input),
     ...buildPointCloudRegionCandidates(input),
   ]
     .filter(isCandidateVisibleEnough)
@@ -70,7 +72,7 @@ function compareCandidates(left: RegionCandidate, right: RegionCandidate): numbe
 
 function candidateRank(candidate: RegionCandidate): number {
   const roleBoost = candidate.role === 'primary_region' ? 0.35 : candidate.role === 'support_region' || candidate.role === 'landmark_anchor' ? 0.2 : 0
-  const sourceBoost = candidate.source === 'aoi' ? 0.15 : 0
+  const sourceBoost = candidate.source === 'aoi' ? 0.15 : candidate.source === 'abstract_region' ? 0.08 : 0
   return candidate.score + roleBoost + sourceBoost
 }
 
@@ -303,6 +305,19 @@ function buildPointCloudRegionCandidates(input: {
     }))
   }
   return out
+}
+
+function buildAbstractRegionCandidates(input: {
+  viewport: ViewportBBox
+  pois: NarrativePoi[]
+  aois: AoiCandidateRow[]
+  scene: SceneProfile
+}): RegionCandidate[] {
+  return discoverAbstractRegionCandidates(input).map((candidate) => materializeCandidate({
+    ...candidate,
+    scene: input.scene,
+    source: 'abstract_region',
+  }))
 }
 
 function isPointCloudSeedPoi(poi: NarrativePoi): boolean {

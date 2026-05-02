@@ -193,4 +193,80 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].visual_layer.poi_heat?.points.length).toBeGreaterThanOrEqual(7)
     expect(candidates[0].effectivePoiCount).toBe(3)
   })
+
+  it('从 POI 名称中发现步行街抽象片区', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'commercial_leisure',
+      aois: [],
+      pois: [
+        { ...poi('food', 114.34, 30.54, '餐饮服务', 'weak'), display_name: '江汉路步行街小吃店' },
+        { ...poi('shop', 114.341, 30.541, '购物服务', 'weak'), display_name: '江汉路步行街服饰店' },
+        { ...poi('book', 114.342, 30.542, '购物服务', 'weak'), display_name: '江汉路步行街书店' },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('江汉路步行街')
+    expect(candidates[0].source).toBe('abstract_region')
+    expect(candidates[0].role).toBe('primary_region')
+    expect(candidates[0].effectivePoiCount).toBe(3)
+  })
+
+  it('从商业证据中发现商圈抽象片区', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'commercial_leisure',
+      aois: [],
+      pois: [
+        { ...poi('mall', 114.36, 30.56, '购物服务', 'medium'), display_name: '徐东商圈购物入口' },
+        { ...poi('food', 114.361, 30.561, '餐饮服务', 'medium'), display_name: '徐东商圈美食餐饮' },
+        { ...poi('cinema', 114.362, 30.562, '体育休闲服务', 'weak'), display_name: '徐东商圈影城' },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('徐东商圈')
+    expect(candidates[0].source).toBe('abstract_region')
+    expect(candidates[0].role).toBe('primary_region')
+  })
+
+  it('从道路命名和多点证据中发现街区走廊', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'mixed_urban',
+      aois: [],
+      pois: [
+        { ...poi('coffee', 114.35, 30.55, '餐饮服务', 'medium'), display_name: '水塔街咖啡馆' },
+        { ...poi('book', 114.351, 30.551, '购物服务', 'medium'), display_name: '水塔街书店' },
+        { ...poi('snack', 114.352, 30.552, '餐饮服务', 'weak'), display_name: '水塔街小吃店' },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('水塔街')
+    expect(candidates[0].source).toBe('abstract_region')
+    expect(candidates[0].role).toBe('support_region')
+  })
+
+  it('已有同名 AOI 时不重复生成抽象片区抢占主体', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'commercial_leisure',
+      pois: [
+        { ...poi('food', 114.34, 30.54, '餐饮服务', 'weak'), display_name: '江汉路步行街小吃店' },
+        { ...poi('shop', 114.341, 30.541, '购物服务', 'weak'), display_name: '江汉路步行街服饰店' },
+      ],
+      aois: [
+        {
+          id: 'jianghan-road',
+          name: '江汉路步行街',
+          fclass: 'commercial',
+          areaSqm: 180_000,
+          boundary: polygonFromBounds({ west: 114.33, south: 30.53, east: 114.35, north: 30.55 }),
+        },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('江汉路步行街')
+    expect(candidates[0].source).toBe('aoi')
+    expect(candidates.filter((candidate) => candidate.source === 'abstract_region')).toHaveLength(0)
+  })
 })
