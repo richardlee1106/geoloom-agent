@@ -232,4 +232,57 @@ describe('NarrativePhase3Runtime', () => {
     expect(response.narration.chapters[0].web_sources?.map((source) => source.quality)).toEqual(['official', 'general'])
     expect(response.narration.chapters[0].web_sources?.[0].title).toContain('园林')
   })
+
+  it('keeps web name candidates debug-only without changing structural regions', async () => {
+    let queryCount = 0
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => {
+        queryCount += 1
+        return [
+          {
+            title: '武汉市文旅局介绍江汉路步行街与徐东商圈',
+            url: 'https://wlj.wuhan.gov.cn/example',
+            snippet: '江汉路步行街、徐东商圈和水塔街是武汉重要城市认知片区。',
+          },
+        ]
+      },
+    })
+
+    const response = await runtime.build({
+      session_id: 'web-name-debug-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    const debug = response.debug as {
+      web_name_candidates?: {
+        candidate_count?: number
+        structural_effect?: string
+        items?: Array<{ name?: string; confidence?: number }>
+      }
+    }
+    expect(queryCount).toBeGreaterThanOrEqual(2)
+    expect(debug.web_name_candidates?.structural_effect).toBe('debug_only')
+    expect(debug.web_name_candidates?.items?.some((item) => item.name === '江汉路步行街')).toBe(true)
+    expect(response.regions.some((region) => region.display_name === '江汉路步行街')).toBe(false)
+  })
 })

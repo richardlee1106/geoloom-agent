@@ -54,6 +54,16 @@ interface WebFactDebugItem {
   latency_ms: number
 }
 
+interface WebNameCandidateDebugItem {
+  name: string
+  query: string
+  confidence: number
+  source_title: string
+  source_url: string
+  source_quality?: NarrativeWebSource['quality']
+  evidence_snippet?: string
+}
+
 const DEFAULT_USER_CONTEXT: UserContext = {
   time_label: '当前时段',
   weather_label: '天气未指定',
@@ -65,6 +75,7 @@ const OFFICIAL_SOURCE_RE = /(gov\.cn|edu\.cn|org\.cn|wuhan\.gov|wh\.gov|官网|�
 const ENCYCLOPEDIA_SOURCE_RE = /(baike\.baidu\.com|wikipedia\.org|百科)/iu
 const MEDIA_SOURCE_RE = /(news|xinhuanet|people\.com\.cn|cctv|chinanews|thepaper|长江日报|湖北日报|新华社|人民网|央视|澎湃)/iu
 const LOW_QUALITY_SOURCE_RE = /(广告|优惠|团购|预订|点评|论坛|贴吧|小红书|营销|软文|自媒体|携程|马蜂窝|去哪儿|美团|大众点评)/iu
+const WEB_NAME_CANDIDATE_RE = /([\u4e00-\u9fa5A-Za-z0-9·]{2,18}(?:步行街|商业街|商圈|街区|汉街|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|购物中心|购物广场|商业广场|K11|SKP|路|街|大道|巷))/giu
 
 function readFiniteNumber(value: unknown): number | null {
   const n = Number(value)
@@ -199,6 +210,7 @@ function buildDebugSnapshot(input: {
   path: ReturnType<typeof sampleNarrativePath>
   selectedRegions: RegionCandidate[]
   webFactDebug: WebFactDebugItem[]
+  webNameCandidates: WebNameCandidateDebugItem[]
 }) {
   const poiTierStats = input.pois.reduce<Record<string, number>>((acc, poi) => {
     acc[poi.tier] = (acc[poi.tier] || 0) + 1
@@ -267,6 +279,11 @@ function buildDebugSnapshot(input: {
       source_count: input.webFactDebug.reduce((sum, item) => sum + item.source_count, 0),
       items: input.webFactDebug,
     },
+    web_name_candidates: {
+      candidate_count: input.webNameCandidates.length,
+      items: input.webNameCandidates,
+      structural_effect: 'debug_only',
+    },
   }
 }
 
@@ -332,6 +349,74 @@ async function attachWebSources(input: {
   }
 }
 
+async function probeWebNameCandidates(input: {
+  viewport: ViewportBBox
+  scene: SceneProfile
+  candidates: RegionCandidate[]
+  searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
+}): Promise<WebNameCandidateDebugItem[]> {
+  if (!input.searchWebFacts) return []
+  const anchorNames = input.candidates
+    .slice(0, 5)
+    .map((candidate) => candidate.display_name)
+    .filter(Boolean)
+  const query = `${sceneLabel(input.scene)} ${anchorNames.join(' ')} 商圈 步行街 街区 地名`
+  const maxResults = Math.max(1, Math.min(Number(process.env.NARRATIVE_WEB_NAME_CANDIDATE_RESULT_LIMIT || '3'), 5))
+  try {
+    const sources = sortWebSourcesByQuality(await input.searchWebFacts(query, maxResults)).slice(0, maxResults)
+    return extractWebNameCandidates({ query, sources }).slice(0, 8)
+  } catch {
+    return []
+  }
+}
+
+function extractWebNameCandidates(input: {
+  query: string
+  sources: NarrativeWebSource[]
+}): WebNameCandidateDebugItem[] {
+  const byName = new Map<string, WebNameCandidateDebugItem>()
+  for (const source of input.sources) {
+    const text = `${source.title} ${source.snippet || ''}`
+    for (const match of text.matchAll(WEB_NAME_CANDIDATE_RE)) {
+      const name = normalizeWebNameCandidate(match[1])
+      if (!name || byName.has(name)) continue
+      byName.set(name, {
+        name,
+        query: input.query,
+        confidence: webNameCandidateConfidence(name, source),
+        source_title: source.title,
+        source_url: source.url,
+        source_quality: source.quality,
+        evidence_snippet: source.snippet,
+      })
+    }
+  }
+  return [...byName.values()].sort((left, right) => right.confidence - left.confidence)
+}
+
+function normalizeWebNameCandidate(value: string): string | null {
+  const name = value.trim().replace(/[，。、“”"'（）()【】[\]\s]+$/gu, '')
+  if (name.length < 2 || name.length > 18) return null
+  if (/^(城市|武汉|商业|购物|街区|商圈|步行街|道路|大道|街道)$/u.test(name)) return null
+  return name
+}
+
+function webNameCandidateConfidence(name: string, source: NarrativeWebSource): number {
+  const suffixScore = /(步行街|商业街|商圈|街区|汉街|天地|购物中心|购物广场|商业广场|万达广场|销品茂|K11|SKP)$/iu.test(name) ? 0.2 : 0.08
+  const sourceScore = Math.min(0.25, Math.max(0, (source.quality_score ?? 0.5) - 0.5))
+  return Number(Math.min(0.95, 0.55 + suffixScore + sourceScore).toFixed(2))
+}
+
+function sceneLabel(scene: SceneProfile): string {
+  switch (scene) {
+    case 'education_culture': return '教育文化'
+    case 'heritage_tourism': return '历史游览'
+    case 'commercial_leisure': return '商业休闲'
+    case 'natural_ecology': return '自然生态'
+    case 'mixed_urban': return '混合城区'
+  }
+}
+
 export class NarrativePhase3Runtime implements NarrativeBuilder {
   constructor(private readonly options: NarrativePhase3RuntimeOptions) {}
 
@@ -368,6 +453,14 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       searchWebFacts: this.options.searchWebFacts,
     })
     const chapters = chapterBuild.chapters
+    const webNameCandidates = input.debug
+      ? await probeWebNameCandidates({
+        viewport,
+        scene,
+        candidates,
+        searchWebFacts: this.options.searchWebFacts,
+      })
+      : []
     const density = effectivePoiCount(renderablePois) / viewportAreaKm2(viewport)
 
     const response: NarrativeResponse = {
@@ -405,6 +498,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         path,
         selectedRegions,
         webFactDebug: chapterBuild.debug,
+        webNameCandidates,
       })
     }
     return response

@@ -33,7 +33,8 @@ owner: GeoLoom Narrative Team
 - 已补充道路走廊边界估计：道路型抽象片区使用更收敛的 corridor boundary。
 - 已补充行政边界 hint：街道 / 社区级 AOI 可作为边界线索，但不抑制更具体的抽象片区。
 - 已补充 DeepSeek Search 来源质量评分：`web_sources` 增加 `quality` / `quality_score`，并优先展示官方、百科、权威媒体来源。
-- 当前仍未让 DeepSeek Search 决定候选、排序、LOD 或主讲链路；候选地名补强仍需后续异步流程设计。
+- 已补充 DeepSeek Search 候选地名 debug-only 探针：仅在 `debug: true` 时写入 `web_name_candidates`，不改变候选、排序、LOD 或主讲链路。
+- 当前仍未让 DeepSeek Search 决定候选、排序、LOD 或主讲链路；后续如需结构接入，必须另设人工可解释门禁。
 
 验收对象：
 
@@ -160,5 +161,5 @@ owner: GeoLoom Narrative Team
 2. **叙事关系图谱**：再解决讲解顺序与连贯性。
 3. **Narrator LLM**：结构稳定后再做自然文案。
 4. **DeepSeek 异步缓存**：补来源质量与速度。
-5. **DeepSeek 候选地名补强**：在不改变主链结构的前提下，作为低优先级命名候选进入人工可解释 debug。
+5. **DeepSeek 候选地名补强**：在不改变主链结构的前提下，作为低优先级命名候选进入人工可解释 debug。（已完成 debug-only MVP）
 6. **Debug 面板与 UI polish**：最后集中打磨体验。
