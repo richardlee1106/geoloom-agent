@@ -30,6 +30,7 @@ import { createTavilySearchSkill } from './skills/tavily_search/TavilySearchSkil
 import { createDeepSeekSearchSkill } from './skills/deepseek_search/index.js'
 import { createEntityAlignmentSkill } from './skills/entity_alignment/EntityAlignmentSkill.js'
 import { createWebPoiDiscoverySkill } from './skills/web_poi_discovery/index.js'
+import { createDefaultLLMProvider } from './llm/createDefaultLLMProvider.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
 import { CategoryEmbeddingIndex } from './catalog/categoryEmbeddingIndex.js'
 import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
@@ -269,6 +270,7 @@ const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
 })
 const narrativeWebFactSkill = registry.get('deepseek_search')
+const narrativeLlmProvider = createDefaultLLMProvider()
 const narrative = new NarrativePhase3Runtime({
   fetchSpatialFeatures: (input) => fetchSpatialFeaturesFromDatabase(
     input,
@@ -284,6 +286,7 @@ const narrative = new NarrativePhase3Runtime({
   searchWebFacts: narrativeWebFactSkill
     ? buildDeepSeekNarrativeWebFactSearcher(narrativeWebFactSkill)
     : undefined,
+  llmProvider: narrativeLlmProvider,
 })
 
 const app = createApp({

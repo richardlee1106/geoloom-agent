@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import type { LLMProvider } from '../llm/types.js'
 import type { SpatialFeature, SpatialFetchRequest } from '../spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../skills/types.js'
 import { createLogger } from '../utils/logger.js'
@@ -18,6 +19,7 @@ import { classifyNarrativeEntity } from './entityClassifier.js'
 import { gcj02ToWgs84 } from './gcj02.js'
 import { buildNarrationChapters, buildRegionFacts } from './factGrounding.js'
 import { semanticDiversity, viewportAreaKm2 } from './geometry.js'
+import { buildGraphNarration, type LlmNarratorDebug } from './llmNarrator.js'
 import { classifyLod } from './lodPolicy.js'
 import { sampleNarrativePath } from './pathSampler.js'
 import { buildFallbackRegion, buildRegionCandidates, type AoiCandidateRow, type RegionCandidate } from './regionCandidate.js'
@@ -37,6 +39,7 @@ export interface NarrativePhase3RuntimeOptions {
   fetchSpatialFeatures: (input: SpatialFetchRequest) => Promise<SpatialFeature[]>
   fetchAoiCandidates?: (viewport: ViewportBBox) => Promise<AoiCandidateRow[]>
   searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
+  llmProvider?: LLMProvider
 }
 
 interface NarrativeWebSource {
@@ -287,6 +290,7 @@ function buildDebugSnapshot(input: {
   selectedRegions: RegionCandidate[]
   webFactDebug: WebFactDebugItem[]
   webNameCandidates: WebNameCandidateDebugItem[]
+  llmNarratorDebug: LlmNarratorDebug
 }) {
   const poiTierStats = input.pois.reduce<Record<string, number>>((acc, poi) => {
     acc[poi.tier] = (acc[poi.tier] || 0) + 1
@@ -360,8 +364,9 @@ function buildDebugSnapshot(input: {
       source_count: input.webFactDebug.reduce((sum, item) => sum + item.source_count, 0),
       items: input.webFactDebug,
     },
+    llm_narrator: input.llmNarratorDebug,
     web_name_candidates: {
-      candidate_count: input.webNameCandidates.length,
+      count: input.webNameCandidates.length,
       items: input.webNameCandidates,
       structural_effect: 'debug_only',
     },
@@ -505,6 +510,11 @@ function sceneLabel(scene: SceneProfile): string {
   }
 }
 
+function resolveNarrativeLlmEnabled(): boolean {
+  const raw = String(process.env.NARRATIVE_LLM_NARRATION_ENABLED || 'true').trim().toLowerCase()
+  return !['0', 'false', 'no', 'off'].includes(raw)
+}
+
 export class NarrativePhase3Runtime implements NarrativeBuilder {
   constructor(private readonly options: NarrativePhase3RuntimeOptions) {}
 
@@ -540,7 +550,17 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       regions: selectedRegions,
       searchWebFacts: this.options.searchWebFacts,
     })
-    const chapters = chapterBuild.chapters
+    const graphNarration = await buildGraphNarration({
+      chapters: chapterBuild.chapters,
+      regions: selectedRegions,
+      path,
+      scene,
+      tone,
+      userContext,
+      llmProvider: this.options.llmProvider,
+      enabled: resolveNarrativeLlmEnabled(),
+    })
+    const chapters = graphNarration.chapters
     const webNameCandidates = input.debug
       ? await probeWebNameCandidates({
         viewport,
@@ -587,6 +607,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         selectedRegions,
         webFactDebug: chapterBuild.debug,
         webNameCandidates,
+        llmNarratorDebug: graphNarration.debug,
       })
     }
     return response

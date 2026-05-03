@@ -172,6 +172,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
 
     try {
+      const tools = toToolDefinitions(request)
       const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -182,8 +183,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
         body: JSON.stringify({
           model: this.model,
           messages: toProviderMessages(request),
-          tools: toToolDefinitions(request),
-          tool_choice: 'auto',
+          tools: tools.length > 0 ? tools : undefined,
+          tool_choice: tools.length > 0 ? 'auto' : undefined,
           temperature: Number.isFinite(Number(request.temperature)) ? Number(request.temperature) : undefined,
           top_p: Number.isFinite(Number(request.topP)) ? Number(request.topP) : undefined,
           presence_penalty: Number.isFinite(Number(request.presencePenalty)) ? Number(request.presencePenalty) : undefined,

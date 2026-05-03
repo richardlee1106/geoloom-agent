@@ -212,5 +212,7 @@ describe('OpenAICompatibleProvider', () => {
     expect(body.model).toBe('astron-code-latest')
     expect(body).not.toHaveProperty('enable_thinking')
     expect(body).not.toHaveProperty('extra_body')
+    expect(body).not.toHaveProperty('tools')
+    expect(body).not.toHaveProperty('tool_choice')
   })
 })

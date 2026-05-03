@@ -112,6 +112,13 @@ owner: GeoLoom Narrative Team
 - 数字、年份、人名必须来自 allowed facts 或 web sources。
 - 命中 forbidden dictionary 的文本必须回退到模板文案。
 
+第一轮 MVP（2026-05-03）：
+
+- 新增 `llmNarrator.ts`，把 path、relations、region facts、supporting places 和 web sources 组装为外部 geograph / GraphRAG 上下文。
+- `NarrativePhase3Runtime` 在模板文案和 web sources 完成后调用 LLM narrator；LLM 只生成同顺序章节文本，不能修改 `region_id` 或路径结构。
+- 输出校验失败、LLM 未配置或请求失败时自动回退到 `factGrounding.ts` 模板文案。
+- `debug.llm_narrator` 输出 provider、是否使用、耗时和 fallback 原因。
+
 ## 5. 阶段 4.4：DeepSeek Search 异步事实补强
 
 目标：联网事实补强不阻塞首屏 narrative。
