@@ -143,6 +143,32 @@ export interface UserContext {
   history_label: string
 }
 
+export type NarrativeEnrichmentMode = 'sync' | 'async' | 'cache_only' | 'off'
+export type NarrativeEnrichmentStatus = 'disabled' | 'pending' | 'running' | 'completed' | 'failed'
+
+export interface NarrativeEnrichmentSummary {
+  job_id?: string
+  mode: NarrativeEnrichmentMode
+  status: NarrativeEnrichmentStatus
+  phase: 'initial' | 'enriched'
+  total_region_count: number
+  completed_region_count: number
+  cached_region_count: number
+  source_count: number
+  error?: string
+  started_at?: string
+  updated_at?: string
+  completed_at?: string
+}
+
+export interface NarrativeEnrichmentJob {
+  job_id: string
+  status: NarrativeEnrichmentStatus
+  summary: NarrativeEnrichmentSummary
+  response?: NarrativeResponse
+  error?: string
+}
+
 // 13. 顶层响应（§8.1）
 export interface NarrativeResponse {
   session_id: string
@@ -165,6 +191,7 @@ export interface NarrativeResponse {
     tone: NarrationTone
   }
   user_context: UserContext
+  enrichment?: NarrativeEnrichmentSummary
   // §8.3 调试字段，仅开发模式可见
   debug?: Record<string, unknown>
 }

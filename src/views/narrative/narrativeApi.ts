@@ -1,5 +1,5 @@
 import { SPATIAL_API_BASE_URL } from '../../config'
-import type { NarrativeResponse, NarrationTone, UserContext, ViewportBBox } from './types'
+import type { NarrativeEnrichmentJob, NarrativeEnrichmentMode, NarrativeResponse, NarrationTone, UserContext, ViewportBBox } from './types'
 
 export interface FetchNarrativeOptions {
   session_id?: string
@@ -8,6 +8,7 @@ export interface FetchNarrativeOptions {
   user_context?: Partial<UserContext>
   limit?: number
   debug?: boolean
+  enrichment_mode?: NarrativeEnrichmentMode
 }
 
 export async function fetchNarrativeResponse(options: FetchNarrativeOptions): Promise<NarrativeResponse> {
@@ -23,4 +24,15 @@ export async function fetchNarrativeResponse(options: FetchNarrativeOptions): Pr
   }
 
   return await response.json() as NarrativeResponse
+}
+
+export async function fetchNarrativeEnrichmentJob(jobId: string): Promise<NarrativeEnrichmentJob> {
+  const response = await fetch(`${SPATIAL_API_BASE_URL}/api/narrative/enrichment/${encodeURIComponent(jobId)}`)
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`narrative enrichment request failed (${response.status})${text ? `: ${text}` : ''}`)
+  }
+
+  return await response.json() as NarrativeEnrichmentJob
 }

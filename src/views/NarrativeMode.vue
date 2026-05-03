@@ -443,7 +443,7 @@ import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style'
 
 import AssistantDock from './narrative/AssistantDock.vue'
 import { useProjection } from '../composables/map/useProjection'
-import { fetchNarrativeResponse } from './narrative/narrativeApi'
+import { fetchNarrativeEnrichmentJob, fetchNarrativeResponse } from './narrative/narrativeApi'
 import { adaptNarrativeResponse } from './narrative/narrativeResponseAdapter'
 import type {
   NarrativeMode as ChatMode,
@@ -537,9 +537,14 @@ function centroidStrategyLabel(strategy: CentroidStrategy): string {
 const narrative = ref<NarrativeResponse>(EMPTY_NARRATIVE_RESPONSE)
 const analysisStatus = ref<'preset' | 'analyzing' | 'ready' | 'error'>('preset')
 const analysisError = ref('')
+const enrichmentStatus = ref<'idle' | 'pending' | 'running' | 'completed' | 'failed'>('idle')
+let enrichmentPollToken = 0
 const canNarrate = computed(() => analysisStatus.value === 'ready' && displayPathNodes.value.length > 0)
 const narrativeSourceLabel = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在分析'
+  if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充资料'
+  if (enrichmentStatus.value === 'completed') return '已增强'
+  if (enrichmentStatus.value === 'failed') return '资料补强失败'
   if (analysisStatus.value === 'ready') return '后端实时'
   if (analysisStatus.value === 'error') return '分析失败'
   return '等待分析'
@@ -1308,7 +1313,9 @@ function getCurrentMapViewport(): ViewportBBox | null {
 async function analyzeCurrentViewport() {
   const viewport = getCurrentMapViewport()
   if (!viewport || analysisStatus.value === 'analyzing') return
+  enrichmentPollToken += 1
   analysisStatus.value = 'analyzing'
+  enrichmentStatus.value = 'idle'
   analysisError.value = ''
   try {
     const response = await fetchNarrativeResponse({
@@ -1316,6 +1323,7 @@ async function analyzeCurrentViewport() {
       viewport,
       tone: ui.tonePreset,
       debug: import.meta.env.DEV,
+      enrichment_mode: 'async',
       user_context: {
         ...narrative.value.user_context,
         preference_label: `${narrative.value.user_context.preference_label}｜${centroidStrategyLabel(ui.centroidStrategy)}｜Level ${ui.viewportZoom.toFixed(1)}`,
@@ -1340,13 +1348,44 @@ async function analyzeCurrentViewport() {
     activeStepIndex.value = 0
     refreshMapLayersAfterNarrativeChange()
     applyStep(0, { fly: false })
+    if (response.enrichment?.job_id) {
+      pollNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken)
+    }
   } catch (error) {
     analysisStatus.value = 'error'
+    enrichmentStatus.value = 'idle'
     analysisError.value = error instanceof Error ? error.message : '当前视野分析失败'
     if (import.meta.env.DEV) {
       console.warn('[Narrative] 当前视野分析失败', error)
     }
   }
+}
+
+async function pollNarrativeEnrichment(jobId: string, token: number) {
+  enrichmentStatus.value = 'pending'
+  for (let attempt = 0; attempt < 45; attempt += 1) {
+    if (token !== enrichmentPollToken) return
+    await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1200 : 2200))
+    if (token !== enrichmentPollToken) return
+    try {
+      const job = await fetchNarrativeEnrichmentJob(jobId)
+      enrichmentStatus.value = job.status === 'pending' ? 'pending' : job.status === 'running' ? 'running' : job.status === 'completed' ? 'completed' : 'failed'
+      if (job.status === 'completed' && job.response) {
+        narrative.value = job.response
+        refreshMapLayersAfterNarrativeChange()
+        applyStep(activeStepIndex.value, { fly: false })
+        return
+      }
+      if (job.status === 'failed') return
+    } catch (error) {
+      enrichmentStatus.value = 'failed'
+      if (import.meta.env.DEV) {
+        console.warn('[Narrative] 资料补强轮询失败', error)
+      }
+      return
+    }
+  }
+  if (token === enrichmentPollToken) enrichmentStatus.value = 'failed'
 }
 
 function initMap() {

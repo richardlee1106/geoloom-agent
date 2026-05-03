@@ -116,4 +116,27 @@ describe('buildGraphNarration', () => {
     expect(result.debug).toMatchObject({ used: false, fallback_reason: 'invalid_llm_output' })
     expect(result.chapters).toBe(chapters)
   })
+
+  it('keeps valid generated chapters and falls back only invalid chapter items', async () => {
+    const provider = createProvider(JSON.stringify({
+      chapters: [
+        { region_id: 'east-lake', text: '广告优惠热线。' },
+        { region_id: 'wuda', text: '武汉大学这一段先从校园和周边文化空间讲起，视线落在教育文化底色上，同时保留真实地界和支撑事实。' },
+      ],
+    }))
+
+    const result = await buildGraphNarration({
+      chapters,
+      regions: [candidate('wuda', '武汉大学', '科教文化服务'), candidate('east-lake', '东湖风景区', '风景名胜')],
+      path,
+      scene: 'education_culture',
+      tone: 'tour',
+      userContext: { time_label: '下午', weather_label: '晴', preference_label: '游览', history_label: '首次进入' },
+      llmProvider: provider,
+    })
+
+    expect(result.debug).toMatchObject({ used: true, fallback_reason: 'partial_invalid_llm_output', partial_fallback_count: 1 })
+    expect(result.chapters[0].text).toContain('教育文化底色')
+    expect(result.chapters[1].text).toBe(chapters[1].text)
+  })
 })

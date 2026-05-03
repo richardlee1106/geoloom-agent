@@ -48,4 +48,28 @@ export async function registerNarrativeRoutes(
       })
     }
   })
+
+  app.get('/enrichment/:jobId', async (request, reply) => {
+    if (!deps.narrative?.getEnrichmentJob) {
+      return reply.status(503).send({
+        success: false,
+        error: {
+          code: 'narrative_enrichment_unavailable',
+          message: 'Narrative enrichment is unavailable',
+        },
+      })
+    }
+    const jobId = String((request.params as { jobId?: string }).jobId || '').trim()
+    const job = deps.narrative.getEnrichmentJob(jobId)
+    if (!job) {
+      return reply.status(404).send({
+        success: false,
+        error: {
+          code: 'narrative_enrichment_not_found',
+          message: 'Narrative enrichment job was not found',
+        },
+      })
+    }
+    return reply.send(job)
+  })
 }

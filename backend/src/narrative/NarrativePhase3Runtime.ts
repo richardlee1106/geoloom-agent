@@ -6,11 +6,15 @@ import type { SkillDefinition } from '../skills/types.js'
 import { createLogger } from '../utils/logger.js'
 import type {
   NarrativeChapter,
+  NarrativeEnrichmentJob,
+  NarrativeEnrichmentMode,
+  NarrativeEnrichmentSummary,
   NarrationTone,
   NarrativeBuilder,
   NarrativePoi,
   NarrativeRequest,
   NarrativeResponse,
+  NarrativeWebSource,
   SceneProfile,
   UserContext,
   ViewportBBox,
@@ -21,6 +25,7 @@ import { buildNarrationChapters, buildRegionFacts } from './factGrounding.js'
 import { semanticDiversity, viewportAreaKm2 } from './geometry.js'
 import { buildGraphNarration, type LlmNarratorDebug } from './llmNarrator.js'
 import { classifyLod } from './lodPolicy.js'
+import { NarrativeWebFactCache, type NarrativeWebFactCacheStatus } from './NarrativeWebFactCache.js'
 import { sampleNarrativePath } from './pathSampler.js'
 import { buildFallbackRegion, buildRegionCandidates, type AoiCandidateRow, type RegionCandidate } from './regionCandidate.js'
 
@@ -40,14 +45,7 @@ export interface NarrativePhase3RuntimeOptions {
   fetchAoiCandidates?: (viewport: ViewportBBox) => Promise<AoiCandidateRow[]>
   searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
   llmProvider?: LLMProvider
-}
-
-interface NarrativeWebSource {
-  title: string
-  url: string
-  snippet?: string
-  quality?: 'official' | 'encyclopedia' | 'media' | 'general'
-  quality_score?: number
+  webFactCache?: NarrativeWebFactCache
 }
 
 interface WebFactDebugItem {
@@ -55,6 +53,7 @@ interface WebFactDebugItem {
   query: string
   source_count: number
   latency_ms: number
+  cache_status?: NarrativeWebFactCacheStatus
   error?: string
 }
 
@@ -400,9 +399,11 @@ async function attachWebSources(input: {
   chapters: NarrativeChapter[]
   regions: RegionCandidate[]
   searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
+  webFactCache: NarrativeWebFactCache
+  mode: NarrativeEnrichmentMode
 }) {
   const debug: WebFactDebugItem[] = []
-  if (!input.searchWebFacts) return { chapters: input.chapters, debug }
+  if (input.mode === 'off') return { chapters: input.chapters, debug }
   const limit = Math.min(Math.max(Number(process.env.NARRATIVE_WEB_FACT_REGION_LIMIT || '3'), 0), input.chapters.length)
   const maxResults = Math.max(1, Math.min(Number(process.env.NARRATIVE_WEB_FACT_RESULT_LIMIT || '3'), 5))
   const pairs = input.chapters.slice(0, limit).map((chapter, index) => ({
@@ -413,11 +414,28 @@ async function attachWebSources(input: {
     const name = region?.display_name || chapter.region_id
     const query = `${name} 介绍`
     const started = Date.now()
+    const cached = input.webFactCache.get(query, maxResults)
+    if (cached.entry) {
+      return {
+        regionId: chapter.region_id,
+        query,
+        sources: sortWebSourcesByQuality(cached.entry.sources).slice(0, maxResults),
+        latencyMs: Date.now() - started,
+        cacheStatus: cached.status,
+        error: cached.entry.error,
+      }
+    }
+    if (input.mode === 'cache_only' || !input.searchWebFacts) {
+      return { regionId: chapter.region_id, query, sources: [], latencyMs: Date.now() - started, cacheStatus: cached.status }
+    }
     try {
       const sources = sortWebSourcesByQuality(await input.searchWebFacts?.(query, maxResults) ?? []).slice(0, maxResults)
-      return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
+      input.webFactCache.set(query, maxResults, sources)
+      return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started, cacheStatus: 'stored' as const }
     } catch (error) {
-      return { regionId: chapter.region_id, query, sources: [], latencyMs: Date.now() - started, error: describeWebFactError(error) }
+      const message = describeWebFactError(error)
+      input.webFactCache.setError(query, maxResults, message)
+      return { regionId: chapter.region_id, query, sources: [], latencyMs: Date.now() - started, cacheStatus: 'error_stored' as const, error: message }
     }
   }))
   const sourcesByRegion = new Map<string, NarrativeWebSource[]>()
@@ -429,6 +447,7 @@ async function attachWebSources(input: {
       query: item.value.query,
       source_count: item.value.sources.length,
       latency_ms: item.value.latencyMs,
+      cache_status: item.value.cacheStatus,
       error: item.value.error,
     })
   }
@@ -515,10 +534,71 @@ function resolveNarrativeLlmEnabled(): boolean {
   return !['0', 'false', 'no', 'off'].includes(raw)
 }
 
+function resolveEnrichmentMode(value: unknown): NarrativeEnrichmentMode {
+  return value === 'async' || value === 'cache_only' || value === 'off' || value === 'sync' ? value : 'sync'
+}
+
+function countCompletedWebFactRegions(items: WebFactDebugItem[]): number {
+  return items.filter((item) => item.source_count > 0).length
+}
+
+function countCachedWebFactRegions(items: WebFactDebugItem[]): number {
+  return items.filter((item) => item.cache_status === 'hit').length
+}
+
+function buildEnrichmentSummary(input: {
+  jobId?: string
+  mode: NarrativeEnrichmentMode
+  status: NarrativeEnrichmentSummary['status']
+  phase: NarrativeEnrichmentSummary['phase']
+  totalRegionCount: number
+  webFactDebug: WebFactDebugItem[]
+  error?: string
+  startedAt?: string
+  updatedAt?: string
+  completedAt?: string
+}): NarrativeEnrichmentSummary {
+  return {
+    job_id: input.jobId,
+    mode: input.mode,
+    status: input.status,
+    phase: input.phase,
+    total_region_count: input.totalRegionCount,
+    completed_region_count: countCompletedWebFactRegions(input.webFactDebug),
+    cached_region_count: countCachedWebFactRegions(input.webFactDebug),
+    source_count: input.webFactDebug.reduce((sum, item) => sum + item.source_count, 0),
+    error: input.error,
+    started_at: input.startedAt,
+    updated_at: input.updatedAt,
+    completed_at: input.completedAt,
+  }
+}
+
 export class NarrativePhase3Runtime implements NarrativeBuilder {
-  constructor(private readonly options: NarrativePhase3RuntimeOptions) {}
+  private readonly webFactCache: NarrativeWebFactCache
+  private readonly enrichmentJobs = new Map<string, NarrativeEnrichmentJob>()
+
+  constructor(private readonly options: NarrativePhase3RuntimeOptions) {
+    this.webFactCache = options.webFactCache || new NarrativeWebFactCache()
+  }
 
   async build(input: NarrativeRequest): Promise<NarrativeResponse> {
+    const mode = resolveEnrichmentMode(input.enrichment_mode)
+    if (mode === 'async') {
+      const initialResponse = await this.buildOnce({ ...input, enrichment_mode: 'cache_only' }, 'cache_only')
+      const job = this.createEnrichmentJob(initialResponse)
+      initialResponse.enrichment = job.summary
+      this.runEnrichmentJob(job.job_id, input)
+      return initialResponse
+    }
+    return this.buildOnce(input, mode)
+  }
+
+  getEnrichmentJob(jobId: string): NarrativeEnrichmentJob | undefined {
+    return this.enrichmentJobs.get(jobId)
+  }
+
+  private async buildOnce(input: NarrativeRequest, mode: NarrativeEnrichmentMode): Promise<NarrativeResponse> {
     const viewport = normalizeViewport(input.viewport)
     const tone = resolveTone(input.tone)
     const userContext = mergeUserContext(input.user_context)
@@ -549,6 +629,8 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       chapters: buildNarrationChapters({ regions: selectedRegions, tone, scene }),
       regions: selectedRegions,
       searchWebFacts: this.options.searchWebFacts,
+      webFactCache: this.webFactCache,
+      mode,
     })
     const graphNarration = await buildGraphNarration({
       chapters: chapterBuild.chapters,
@@ -558,10 +640,10 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       tone,
       userContext,
       llmProvider: this.options.llmProvider,
-      enabled: resolveNarrativeLlmEnabled(),
+      enabled: mode === 'sync' && resolveNarrativeLlmEnabled(),
     })
     const chapters = graphNarration.chapters
-    const webNameCandidates = input.debug
+    const webNameCandidates = input.debug && mode === 'sync'
       ? await probeWebNameCandidates({
         viewport,
         scene,
@@ -592,6 +674,13 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         tone,
       },
       user_context: userContext,
+      enrichment: buildEnrichmentSummary({
+        mode,
+        status: mode === 'off' ? 'disabled' : 'completed',
+        phase: mode === 'sync' ? 'enriched' : 'initial',
+        totalRegionCount: chapters.length,
+        webFactDebug: chapterBuild.debug,
+      }),
     }
     if (input.debug) {
       response.debug = buildDebugSnapshot({
@@ -611,5 +700,91 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       })
     }
     return response
+  }
+
+  private createEnrichmentJob(response: NarrativeResponse): NarrativeEnrichmentJob {
+    const now = new Date().toISOString()
+    const jobId = randomUUID()
+    const summary: NarrativeEnrichmentSummary = {
+      ...(response.enrichment || {
+        mode: 'async',
+        status: 'pending',
+        phase: 'initial',
+        total_region_count: response.narration.chapters.length,
+        completed_region_count: 0,
+        cached_region_count: 0,
+        source_count: 0,
+      }),
+      job_id: jobId,
+      mode: 'async',
+      status: 'pending',
+      phase: 'initial',
+      started_at: now,
+      updated_at: now,
+    }
+    const job: NarrativeEnrichmentJob = {
+      job_id: jobId,
+      status: 'pending',
+      summary,
+    }
+    this.enrichmentJobs.set(jobId, job)
+    return job
+  }
+
+  private runEnrichmentJob(jobId: string, input: NarrativeRequest) {
+    const job = this.enrichmentJobs.get(jobId)
+    if (!job) return
+    const startedAt = job.summary.started_at || new Date().toISOString()
+    job.status = 'running'
+    job.summary = {
+      ...job.summary,
+      status: 'running',
+      updated_at: new Date().toISOString(),
+    }
+    this.enrichmentJobs.set(jobId, job)
+    void this.buildOnce({ ...input, enrichment_mode: 'sync' }, 'sync')
+      .then((response) => {
+        const completedAt = new Date().toISOString()
+        response.enrichment = {
+          ...(response.enrichment || {
+            mode: 'async',
+            status: 'completed',
+            phase: 'enriched',
+            total_region_count: response.narration.chapters.length,
+            completed_region_count: 0,
+            cached_region_count: 0,
+            source_count: 0,
+          }),
+          job_id: jobId,
+          mode: 'async',
+          status: 'completed',
+          phase: 'enriched',
+          started_at: startedAt,
+          updated_at: completedAt,
+          completed_at: completedAt,
+        }
+        this.enrichmentJobs.set(jobId, {
+          job_id: jobId,
+          status: 'completed',
+          summary: response.enrichment,
+          response,
+        })
+      })
+      .catch((error) => {
+        const updatedAt = new Date().toISOString()
+        const message = error instanceof Error ? error.message : String(error)
+        this.enrichmentJobs.set(jobId, {
+          job_id: jobId,
+          status: 'failed',
+          summary: {
+            ...job.summary,
+            status: 'failed',
+            error: message,
+            updated_at: updatedAt,
+            completed_at: updatedAt,
+          },
+          error: message,
+        })
+      })
   }
 }

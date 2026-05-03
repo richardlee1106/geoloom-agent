@@ -11,6 +11,7 @@ export interface LlmNarratorDebug {
   latency_ms?: number
   error?: string
   fallback_reason?: string
+  partial_fallback_count?: number
 }
 
 export interface GraphNarrationResult {
@@ -19,6 +20,12 @@ export interface GraphNarrationResult {
 }
 
 const NARRATOR_FORBIDDEN_RE = /(宿舍|家属区|楼栋|服务中心|广告|优惠|促销|热线|联系电话|招商|加盟|POI|样本|节点|权重|score|tier|GraphRAG|graph|算法|提示词|URL|http)/iu
+
+interface GeneratedChaptersResult {
+  chapters: NarrativeChapter[]
+  generatedCount: number
+  fallbackCount: number
+}
 
 export async function buildGraphNarration(input: {
   chapters: NarrativeChapter[]
@@ -50,16 +57,23 @@ export async function buildGraphNarration(input: {
     })
     const content = response.assistantMessage.content || ''
     const parsed = extractJsonObject(content)
-    const chapters = normalizeGeneratedChapters(parsed?.chapters, input.chapters, input.regions)
-    if (!chapters) {
+    const generated = normalizeGeneratedChapters(parsed?.chapters, input.chapters, input.regions)
+    if (!generated || generated.generatedCount === 0) {
       return {
         chapters: input.chapters,
         debug: { enabled, used: false, provider: providerStatus, latency_ms: Date.now() - started, fallback_reason: 'invalid_llm_output' },
       }
     }
     return {
-      chapters,
-      debug: { enabled, used: true, provider: providerStatus, latency_ms: Date.now() - started },
+      chapters: generated.chapters,
+      debug: {
+        enabled,
+        used: true,
+        provider: providerStatus,
+        latency_ms: Date.now() - started,
+        fallback_reason: generated.fallbackCount > 0 ? 'partial_invalid_llm_output' : undefined,
+        partial_fallback_count: generated.fallbackCount > 0 ? generated.fallbackCount : undefined,
+      },
     }
   } catch (error) {
     return {
@@ -150,20 +164,40 @@ function buildGraphContext(input: {
   })
 }
 
-function normalizeGeneratedChapters(value: unknown, fallback: NarrativeChapter[], regions: RegionCandidate[]): NarrativeChapter[] | null {
-  if (!Array.isArray(value) || value.length !== fallback.length) return null
+function normalizeGeneratedChapters(value: unknown, fallback: NarrativeChapter[], regions: RegionCandidate[]): GeneratedChaptersResult | null {
+  if (!Array.isArray(value)) return null
   const regionNames = new Map(regions.map((region) => [region.id, region.display_name]))
-  const normalized: NarrativeChapter[] = []
-  for (const [index, item] of value.entries()) {
-    if (!item || typeof item !== 'object') return null
+  const fallbackRegionIds = new Set(fallback.map((chapter) => chapter.region_id))
+  const byRegionId = new Map<string, Record<string, unknown>>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
     const raw = item as Record<string, unknown>
     const regionId = String(raw.region_id || '').trim()
-    if (regionId !== fallback[index].region_id) return null
-    const text = normalizeNarrationText(String(raw.text || ''), regionNames.get(regionId) || regionId)
-    if (!isUsableNarrationText(text)) return null
-    normalized.push({ ...fallback[index], text })
+    if (!fallbackRegionIds.has(regionId) || byRegionId.has(regionId)) continue
+    byRegionId.set(regionId, raw)
   }
-  return normalized
+  if (byRegionId.size === 0) return null
+  const normalized: NarrativeChapter[] = []
+  let generatedCount = 0
+  for (const chapter of fallback) {
+    const raw = byRegionId.get(chapter.region_id)
+    if (!raw) {
+      normalized.push(chapter)
+      continue
+    }
+    const text = normalizeNarrationText(String(raw.text || ''), regionNames.get(chapter.region_id) || chapter.region_id)
+    if (!isUsableNarrationText(text)) {
+      normalized.push(chapter)
+      continue
+    }
+    generatedCount += 1
+    normalized.push({ ...chapter, text })
+  }
+  return {
+    chapters: normalized,
+    generatedCount,
+    fallbackCount: fallback.length - generatedCount,
+  }
 }
 
 function normalizeNarrationText(text: string, regionName: string): string {
@@ -173,8 +207,8 @@ function normalizeNarrationText(text: string, regionName: string): string {
     .replace(/\s+/gu, ' ')
     .trim()
   if (!trimmed) return ''
-  if (trimmed.includes(regionName)) return trimmed
-  return `${regionName}这一段，${trimmed}`
+  const withName = trimmed.includes(regionName) ? trimmed : `${regionName}这一段，${trimmed}`
+  return clipNarrationText(withName)
 }
 
 function isUsableNarrationText(text: string): boolean {
@@ -182,6 +216,12 @@ function isUsableNarrationText(text: string): boolean {
   if (text.length > 260) return false
   if (NARRATOR_FORBIDDEN_RE.test(text)) return false
   return true
+}
+
+function clipNarrationText(text: string): string {
+  if (text.length <= 240) return text
+  const clipped = text.slice(0, 240).replace(/[，、；：,.!?！？;:]*$/u, '')
+  return /[。！？]$/u.test(clipped) ? clipped : `${clipped}。`
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {

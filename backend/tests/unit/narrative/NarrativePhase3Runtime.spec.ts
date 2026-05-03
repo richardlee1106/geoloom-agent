@@ -2,6 +2,7 @@
 
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
 import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
+import { NarrativeWebFactCache } from '../../../src/narrative/NarrativeWebFactCache.js'
 import type { SpatialFeature } from '../../../src/spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../../../src/skills/types.js'
 
@@ -453,4 +454,122 @@ describe('NarrativePhase3Runtime', () => {
     expect(debug.web_name_candidates?.items?.some((item) => item.name === '江汉路步行街')).toBe(true)
     expect(response.regions.some((region) => region.display_name === '江汉路步行街')).toBe(false)
   })
+
+  it('reuses cached narrative web facts without repeating upstream search', async () => {
+    let queryCount = 0
+    const webFactCache = new NarrativeWebFactCache()
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async (query) => {
+        if (query === '沙湖公园 介绍') queryCount += 1
+        return [
+          {
+            title: '沙湖公园介绍',
+            url: 'https://example.com/shahu-cache',
+            snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+          },
+        ]
+      },
+      webFactCache,
+    })
+    const request = {
+      session_id: 'webfact-cache-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56] as [number, number],
+      },
+    }
+
+    await runtime.build(request)
+    const second = await runtime.build(request)
+
+    expect(queryCount).toBe(1)
+    expect(second.debug?.web_facts).toMatchObject({
+      source_count: 1,
+      items: [
+        expect.objectContaining({
+          cache_status: 'hit',
+        }),
+      ],
+    })
+  })
+
+  it('returns an async initial narrative immediately and stores enriched job response later', async () => {
+    let queryCount = 0
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async (query) => {
+        if (query === '沙湖公园 介绍') queryCount += 1
+        return [
+          {
+            title: '沙湖公园介绍',
+            url: 'https://example.com/shahu-async',
+            snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+          },
+        ]
+      },
+    })
+
+    const initial = await runtime.build({
+      session_id: 'webfact-async-session',
+      debug: true,
+      enrichment_mode: 'async',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+    const jobId = initial.enrichment?.job_id
+
+    expect(jobId).toBeTruthy()
+    expect(initial.enrichment).toMatchObject({ mode: 'async', status: 'pending', phase: 'initial' })
+    expect(initial.narration.chapters[0].web_sources || []).toHaveLength(0)
+
+    const job = await waitForEnrichmentJob(runtime, jobId!)
+
+    expect(queryCount).toBe(1)
+    expect(job.status).toBe('completed')
+    expect(job.response?.enrichment).toMatchObject({ mode: 'async', status: 'completed', phase: 'enriched', source_count: 1 })
+    expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-async')
+  })
 })
+
+async function waitForEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const job = runtime.getEnrichmentJob(jobId)
+    if (job?.status === 'completed' || job?.status === 'failed') return job
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('enrichment job did not settle')
+}

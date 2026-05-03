@@ -141,9 +141,13 @@ owner: GeoLoom Narrative Team
 
 当前状态（2026-05-03）：
 
-- 同步 web facts 已跑通，但仍阻塞 narrative 完整响应；后续应拆成首屏结构先返回、事实补强随后刷新。
-- DeepSeek 单次搜索在实测中约 11-16 秒，必须依赖 cache、并发限制和超时降级保证体验。
-- `debug.web_facts.items[].error` 已能暴露 timeout / upstream failure，后续 debug 面板可直接展示。
+- 已完成第一轮异步化：`POST /api/narrative` 支持 `enrichment_mode=async`，首包只读缓存并返回 `enrichment.job_id`，不再同步等待 DeepSeek Search 和 narrator。
+- 新增 `GET /api/narrative/enrichment/:jobId`，前端轮询后台 job；job 完成后用增强版 narrative response 回填章节、来源和 LLM 解说。
+- 新增进程内 `NarrativeWebFactCache`，支持成功结果 TTL、失败短 TTL、防御性复制、debug cache status；后续如需跨进程 / 重启保留，可迁移到 Postgres。
+- 前端 `NarrativeMode.vue` 已接入 async 首包和 enrichment 轮询，用户面显示“正在补充资料 / 已增强 / 资料补强失败”。
+- DeepSeek 单次搜索在实测中约 11-16 秒，异步化后首包实测约 1.1 秒；后台完成后武汉样例 viewport 仍可回填 9 条 `web_sources`。
+- `llmNarrator.ts` 已从 all-or-nothing 校验升级为按 `region_id` 对齐的部分采纳：可用章节采用 LLM 文案，异常章节单独 fallback 到模板。
+- `debug.web_facts.items[].error` 已能暴露 timeout / upstream failure，`debug.llm_narrator.partial_fallback_count` 可观察按章 fallback 数。
 
 ## 6. 阶段 4.5：调试面板与用户面板分离
 
@@ -188,6 +192,6 @@ owner: GeoLoom Narrative Team
 1. **抽象片区发现与命名**：先解决城市认知片区缺失。（已完成第一轮）
 2. **叙事关系图谱**：再解决讲解顺序与连贯性。（已完成第一轮）
 3. **Narrator LLM**：结构稳定后再做自然文案。（已完成第一轮并完成 DeepSeek 实测）
-4. **DeepSeek 异步缓存**：补来源质量与速度。（下一步优先）
+4. **DeepSeek 异步缓存**：补来源质量与速度。（已完成第一轮：async job + cache + 前端轮询）
 5. **DeepSeek 候选地名补强**：在不改变主链结构的前提下，作为低优先级命名候选进入人工可解释 debug。（已完成 debug-only MVP）
 6. **Debug 面板与 UI polish**：最后集中打磨体验。
