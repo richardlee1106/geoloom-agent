@@ -31,6 +31,7 @@ import { createDeepSeekSearchSkill } from './skills/deepseek_search/index.js'
 import { createEntityAlignmentSkill } from './skills/entity_alignment/EntityAlignmentSkill.js'
 import { createWebPoiDiscoverySkill } from './skills/web_poi_discovery/index.js'
 import { createDefaultLLMProvider } from './llm/createDefaultLLMProvider.js'
+import { OpenAICompatibleProvider } from './llm/OpenAICompatibleProvider.js'
 import { loadCategoryTreeFromDatabase } from './catalog/categoryCatalog.js'
 import { CategoryEmbeddingIndex } from './catalog/categoryEmbeddingIndex.js'
 import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
@@ -182,7 +183,7 @@ if (deepSeekSearchBaseUrl && deepSeekSearchApiKey && deepSeekSearchModel) {
     baseUrl: deepSeekSearchBaseUrl,
     apiKey: deepSeekSearchApiKey,
     model: deepSeekSearchModel,
-    timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '6000'),
+    timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '18000'),
   }))
 }
 const jinaBridge = new JinaBridge()
@@ -270,7 +271,15 @@ const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
 })
 const narrativeWebFactSkill = registry.get('deepseek_search')
-const narrativeLlmProvider = createDefaultLLMProvider()
+const narrativeDedicatedLlmProvider = new OpenAICompatibleProvider({
+  baseUrl: process.env.NARRATIVE_LLM_BASE_URL,
+  apiKey: process.env.NARRATIVE_LLM_API_KEY,
+  model: process.env.NARRATIVE_LLM_MODEL,
+  timeoutMs: process.env.NARRATIVE_LLM_NARRATION_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS,
+})
+const narrativeLlmProvider = narrativeDedicatedLlmProvider.isReady()
+  ? narrativeDedicatedLlmProvider
+  : createDefaultLLMProvider()
 const narrative = new NarrativePhase3Runtime({
   fetchSpatialFeatures: (input) => fetchSpatialFeaturesFromDatabase(
     input,
