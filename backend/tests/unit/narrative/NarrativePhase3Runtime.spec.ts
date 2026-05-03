@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
-import { NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
+import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
 import type { SpatialFeature } from '../../../src/spatial/fetchSpatialFeatures.js'
+import type { SkillDefinition } from '../../../src/skills/types.js'
 
 function feature(id: string, name: string, lon: number, lat: number, categoryMain = '科教文化服务', categorySub = '高等院校'): SpatialFeature {
   return {
@@ -85,12 +86,18 @@ describe('NarrativePhase3Runtime', () => {
     })
 
     expect(response.session_id).toBe('session-1')
-    expect(response.regions.length).toBeGreaterThanOrEqual(6)
-    expect(response.path.nodes.length).toBeGreaterThanOrEqual(5)
+    expect(response.regions.length).toBeGreaterThanOrEqual(2)
+    expect(response.path.nodes.length).toBeGreaterThanOrEqual(2)
     expect(response.regions.some((region) => region.role === 'primary_region')).toBe(true)
-    expect(response.regions.find((region) => region.display_name === '武昌江滩公园')?.visual_layer.poi_heat?.points.length).toBeGreaterThanOrEqual(7)
-    expect(response.regions.flatMap((region) => region.pois).some((poi) => poi.display_name.includes('宿舍') && poi.tier === 'medium')).toBe(true)
+    const riverfront = response.regions.find((region) => region.display_name === '武昌江滩公园')
+    const riverfrontEvidenceCount = riverfront?.pois.filter((poi) => poi.tier === 'core' || poi.tier === 'strong' || poi.tier === 'medium').length
+    expect(riverfront?.visual_layer.poi_heat?.points.length).toBe(riverfrontEvidenceCount)
+    expect(response.regions.flatMap((region) => region.pois).some((poi) => poi.display_name.includes('宿舍'))).toBe(false)
     expect(response.path.nodes.length).toBe(response.narration.chapters.length)
+    expect(response.narration.chapters.every((chapter) => {
+      const region = response.regions.find((item) => item.id === chapter.region_id)
+      return !region || !chapter.text.includes(`${region.display_name}。${region.display_name}`)
+    })).toBe(true)
     expect(response.narration.chapters.every((chapter) => !/宿舍|广告|优惠|POI|样本|节点|权重|score|tier/.test(chapter.text))).toBe(true)
     expect(response.debug).toBeUndefined()
   })
@@ -141,6 +148,7 @@ describe('NarrativePhase3Runtime', () => {
   })
 
   it('attaches optional web fact sources to narration chapters', async () => {
+    const queries: string[] = []
     const runtime = new NarrativePhase3Runtime({
       fetchSpatialFeatures: async () => [
         feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
@@ -154,13 +162,16 @@ describe('NarrativePhase3Runtime', () => {
           boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
         },
       ],
-      searchWebFacts: async () => [
-        {
-          title: '武汉市沙湖公园管理处',
-          url: 'https://ylj.wuhan.gov.cn/zwgk/zwxxgkzl_12298/jggk_12304/xsdwszjzz_12308/202001/t20200110_726388.shtml',
-          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
-        },
-      ],
+      searchWebFacts: async (query) => {
+        queries.push(query)
+        return [
+          {
+            title: '武汉市沙湖公园管理处',
+            url: 'https://ylj.wuhan.gov.cn/zwgk/zwxxgkzl_12298/jggk_12304/xsdwszjzz_12308/202001/t20200110_726388.shtml',
+            snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+          },
+        ]
+      },
     })
 
     const response = await runtime.build({
@@ -182,10 +193,166 @@ describe('NarrativePhase3Runtime', () => {
       quality: 'official',
       quality_score: 0.95,
     })
+    expect(queries[0]).toBe('沙湖公园 介绍')
+    expect(response.narration.chapters[0].text).toContain('参考资料显示，沙湖公园是武汉市中心城区最大的综合性公园。')
     expect(response.debug?.web_facts).toMatchObject({
       queried_region_count: 1,
       source_count: 1,
     })
+  })
+
+  it('uses DeepSeek search results as narrative web fact sources', async () => {
+    const skill: SkillDefinition = {
+      name: 'deepseek_search',
+      description: 'test',
+      capabilities: ['search_web'],
+      actions: {
+        search_web: {
+          name: 'search_web',
+          description: 'test',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+        },
+      },
+      async execute(action, payload) {
+        expect(action).toBe('search_web')
+        expect(payload).toMatchObject({ query: '沙湖公园 介绍', max_results: 2 })
+        return {
+          ok: true,
+          data: {
+            results: [
+              {
+                title: '武汉市沙湖公园介绍',
+                url: 'https://example.com/shahu',
+                snippet: '武汉市中心城区综合性公园。',
+              },
+            ],
+          },
+          meta: { action, audited: false },
+        }
+      },
+    }
+
+    const sources = await buildDeepSeekNarrativeWebFactSearcher(skill)('沙湖公园 介绍', 2)
+
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toMatchObject({
+      title: '武汉市沙湖公园介绍',
+      url: 'https://example.com/shahu',
+      snippet: '武汉市中心城区综合性公园。',
+    })
+  })
+
+  it('标题命中当前片区时也会把网页摘要注入章节文本并保留引用', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园介绍',
+          url: 'https://example.com/shahu-intro',
+          snippet: '武汉市中心城区综合性公园。',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-title-session',
+      debug: true,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.narration.chapters[0].text).toContain('参考资料显示，武汉市中心城区综合性公园。')
+    expect(response.narration.chapters[0].web_sources?.[0]?.title).toBe('沙湖公园介绍')
+  })
+
+  it('不会把跨城区商圈列表型网页摘要追加到当前徐东章节', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('xudong-xpm', '销品茂购物中心', 114.342, 30.59, '购物服务', '购物中心'),
+        feature('xudong-oyd', '欧亚达家居徐东店', 114.343, 30.591, '购物服务', '家居'),
+        feature('xudong-mix', '武汉徐东万象汇', 114.344, 30.592, '购物服务', '购物中心'),
+      ],
+      fetchAoiCandidates: async () => [],
+      searchWebFacts: async () => [
+        {
+          title: '武汉主要商圈介绍',
+          url: 'https://example.com/wuhan-business',
+          snippet: '武汉主要商圈包括菱角湖商圈、吉庆街、昙华林、汉正街、武汉天地等。',
+        },
+        {
+          title: '徐东商圈介绍',
+          url: 'https://example.com/xudong',
+          snippet: '徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'xudong-webfact-session',
+      debug: true,
+      viewport: {
+        west: 114.33,
+        south: 30.575,
+        east: 114.39,
+        north: 30.6,
+        zoom: 14,
+        center: [114.36, 30.59],
+      },
+    })
+
+    const chapterText = response.narration.chapters.map((chapter) => chapter.text).join(' ')
+    expect(response.regions.map((region) => region.display_name)).toContain('徐东商圈')
+    expect(chapterText).toContain('参考资料显示，徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。')
+    expect(chapterText).not.toMatch(/菱角湖|吉庆街|昙华林|汉正街|武汉天地/)
+  })
+
+  it('点云品类不足以生成正式活力区时降级为当前视野概览', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('scenic-1', '景观节点一', 114.34, 30.58, '风景名胜', '景点'),
+        feature('scenic-2', '景观节点二', 114.35, 30.581, '风景名胜', '景点'),
+        feature('scenic-3', '景观节点三', 114.36, 30.582, '风景名胜', '景点'),
+        feature('gov-1', '政府机构一', 114.345, 30.59, '政府机构及社会团体', '政府机关'),
+        feature('gov-2', '政府机构二', 114.355, 30.591, '政府机构及社会团体', '政府机关'),
+        feature('gov-3', '政府机构三', 114.365, 30.592, '政府机构及社会团体', '政府机关'),
+      ],
+      fetchAoiCandidates: async () => [],
+    })
+
+    const response = await runtime.build({
+      session_id: 'point-cloud-block-session',
+      debug: true,
+      viewport: {
+        west: 114.33,
+        south: 30.57,
+        east: 114.39,
+        north: 30.61,
+        zoom: 14,
+        center: [114.36, 30.59],
+      },
+    })
+
+    expect(response.regions.some((region) => /活力区/u.test(region.display_name))).toBe(false)
+    expect(response.regions[0]?.display_name).toMatch(/概览$/u)
+    expect(response.debug?.candidates).toMatchObject({ fallback_used: true })
   })
 
   it('sorts optional web fact sources by quality before attaching', async () => {

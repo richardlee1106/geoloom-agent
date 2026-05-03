@@ -708,16 +708,7 @@ interface TimelineDot {
 }
 
 function timelinePoiSource(region: NarrativeRegion): NarrativePoi[] {
-  if (region.pois.length > 0) return region.pois
-  return (region.visual_layer.poi_heat?.points ?? []).map((point, index) => ({
-    id: `timeline-heat-${region.id}-${index}`,
-    lon: point.lon,
-    lat: point.lat,
-    display_name: region.display_name,
-    tier: point.tier,
-    role: region.role,
-    category_main: region.display_name
-  }))
+  return region.pois
 }
 
 function buildTimelineDots(region: NarrativeRegion): TimelineDot[] {
@@ -965,6 +956,7 @@ const regionHeatLayers: HeatmapLayer[] = []
 let poiBaseSource: VectorSource | null = null
 let poiLayer: VectorLayer | null = null
 let labelLayer: VectorLayer | null = null
+let renderedNarrativeSignature = ''
 
 // 片区色相统一来自后端 visual_layer.region_glow.color
 const regionPalette = computed<Record<string, string>>(() =>
@@ -981,27 +973,32 @@ const TIER_HEAT_WEIGHT: Record<VisualTier, number> = {
   excluded: 0
 }
 
-// 按最近 anchor 把 POI 分配到片区，结果缓存
+// 按当前片区边界把 POI 分配到片区，结果缓存
 const poiRegionCache = new Map<string, string>()
-function nearestRegionId(lon: number, lat: number): string {
-  let best = ''
-  let bestD2 = Infinity
-  for (const r of displayRegions.value) {
-    const dx = lon - r.core_anchor.lon
-    const dy = lat - r.core_anchor.lat
-    const d2 = dx * dx + dy * dy
-    if (d2 < bestD2) {
-      bestD2 = d2
-      best = r.id
-    }
+function pointInRegion(lon: number, lat: number, region: NarrativeRegion): boolean {
+  const ring = region.boundary.coordinates[0] ?? []
+  if (ring.length < 4) return false
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    const intersects = ((yi > lat) !== (yj > lat))
+      && (lon < (xj - xi) * (lat - yi) / ((yj - yi) || Number.EPSILON) + xi)
+    if (intersects) inside = !inside
   }
-  return best
+  return inside
+}
+function containingRegionId(lon: number, lat: number): string {
+  for (const r of displayRegions.value) {
+    if (pointInRegion(lon, lat, r)) return r.id
+  }
+  return ''
 }
 function regionIdForPoi(id: string, lon: number, lat: number): string {
   const cached = poiRegionCache.get(id)
-  if (cached) return cached
-  const rid = nearestRegionId(lon, lat)
-  poiRegionCache.set(id, rid)
+  if (cached && regionHeatSources[cached] && displayRegions.value.some((region) => region.id === cached && pointInRegion(lon, lat, region))) return cached
+  const rid = containingRegionId(lon, lat)
+  if (rid) poiRegionCache.set(id, rid)
   return rid
 }
 
@@ -1077,6 +1074,7 @@ function rebuildPoiLayer() {
     if (threshold > tierMin[p.tier]) continue
 
     const rid = regionIdForPoi(p.id, p.lon, p.lat)
+    if (!rid) continue
     const coord = fromLonLat([p.lon, p.lat])
 
     // 1. 散点：直接按 tier 颜色渲染
@@ -1188,6 +1186,13 @@ function rebuildRegionHeatLayers() {
 }
 
 function refreshMapLayersAfterNarrativeChange() {
+  const signature = `${narrative.value.session_id}:${narrative.value.state_version}:${narrative.value.path.seed}:${narrative.value.regions.map((region) => region.id).join('|')}`
+  if (signature !== renderedNarrativeSignature) {
+    renderedNarrativeSignature = signature
+    poiBaseSource?.clear()
+    labelLayer?.getSource()?.clear()
+    for (const src of Object.values(regionHeatSources)) src.clear()
+  }
   poiRegionCache.clear()
   rebuildRegionHeatLayers()
   rebuildPoiLayer()
@@ -1310,11 +1315,20 @@ async function analyzeCurrentViewport() {
       session_id: narrative.value.session_id,
       viewport,
       tone: ui.tonePreset,
+      debug: import.meta.env.DEV,
       user_context: {
         ...narrative.value.user_context,
         preference_label: `${narrative.value.user_context.preference_label}｜${centroidStrategyLabel(ui.centroidStrategy)}｜Level ${ui.viewportZoom.toFixed(1)}`,
       }
     })
+    if (import.meta.env.DEV) {
+      console.info('[Narrative] 后端实时分析结果', {
+        runtime: response.debug?.runtime,
+        viewport,
+        regions: response.regions.map((region) => ({ id: region.id, name: region.display_name })),
+        candidates: response.debug?.candidates,
+      })
+    }
     stopAll()
     narrative.value = response
     analysisStatus.value = 'ready'

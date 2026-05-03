@@ -36,7 +36,6 @@ const CHAPTER_LABEL_BY_ROLE: Record<PathNarrationRole, string> = {
   ecological: '生态'
 }
 
-const stableRegionPois = new Map<string, NarrativePoi[]>()
 const TIER_ORDER: Record<NarrativePoi['tier'], number> = {
   core: 0,
   strong: 1,
@@ -44,6 +43,7 @@ const TIER_ORDER: Record<NarrativePoi['tier'], number> = {
   weak: 3,
   excluded: 4
 }
+const INVALID_REGION_NAME_RE = /^(none|null|undefined|nan|未命名|未命名地点|未知|未知地点)$/i
 
 export function labelForNarrationRole(role: PathNarrationRole): string {
   return CHAPTER_LABEL_BY_ROLE[role] ?? '解说'
@@ -57,17 +57,23 @@ function normalizeRegionKey(value: string): string {
     .replace(/(公园|景区|风景区|旅游区)$/u, '')
 }
 
-function visualHeatPoisForRegion(region: NarrativeRegion): NarrativePoi[] {
-  const points = region.visual_layer.poi_heat?.points ?? []
-  return points.map((point, index) => ({
-    id: `heat-${region.id}-${index}`,
-    lon: point.lon,
-    lat: point.lat,
-    display_name: region.display_name,
-    tier: point.tier,
-    role: region.role,
-    category_main: region.display_name
-  }))
+function isUsableRegionName(value: string): boolean {
+  const normalized = value.trim()
+  return Boolean(normalized) && !INVALID_REGION_NAME_RE.test(normalized)
+}
+
+function pointInRegionBoundary(poi: NarrativePoi, region: NarrativeRegion): boolean {
+  const ring = region.boundary.coordinates[0] ?? []
+  if (ring.length < 4) return true
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    const intersects = ((yi > poi.lat) !== (yj > poi.lat))
+      && (poi.lon < (xj - xi) * (poi.lat - yi) / ((yj - yi) || Number.EPSILON) + xi)
+    if (intersects) inside = !inside
+  }
+  return inside
 }
 
 function poiKey(poi: NarrativePoi): string {
@@ -76,6 +82,10 @@ function poiKey(poi: NarrativePoi): string {
 
 function evidenceCount(pois: NarrativePoi[]): number {
   return pois.filter((poi) => poi.tier === 'core' || poi.tier === 'strong' || poi.tier === 'medium').length
+}
+
+function hasRenderablePoiEvidence(region: NarrativeRegion): boolean {
+  return region.pois.some((poi) => poi.tier !== 'excluded')
 }
 
 function stableSortPois(pois: NarrativePoi[]): NarrativePoi[] {
@@ -97,12 +107,8 @@ function dedupePois(pois: NarrativePoi[]): NarrativePoi[] {
 }
 
 function stabilizeRegion(region: NarrativeRegion): NarrativeRegion {
-  const key = normalizeRegionKey(region.display_name) || region.id
-  const currentPois = dedupePois([...region.pois, ...visualHeatPoisForRegion(region)])
-  const cachedPois = stableRegionPois.get(key) ?? []
-  const stablePois = evidenceCount(currentPois) >= evidenceCount(cachedPois) ? currentPois : cachedPois
-  if (stablePois.length > 0) stableRegionPois.set(key, stablePois.slice(0, 240))
-  const pois = (stableRegionPois.get(key) ?? stablePois).slice(0, 240)
+  const currentPois = dedupePois(region.pois).filter((poi) => pointInRegionBoundary(poi, region))
+  const pois = currentPois.slice(0, 240)
   const evidencePois = pois.filter((poi) => poi.tier === 'core' || poi.tier === 'strong' || poi.tier === 'medium')
   const heatPois = evidencePois.length > 0 ? evidencePois : pois.filter((poi) => poi.tier === 'weak').slice(0, 80)
   return {
@@ -123,6 +129,7 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
   const regionKeyToId = new Map<string, string>()
   const uniqueRegions: NarrativeRegion[] = []
   for (const region of response.regions) {
+    if (!isUsableRegionName(region.display_name)) continue
     const key = normalizeRegionKey(region.display_name) || region.id
     const existingId = regionKeyToId.get(key)
     if (existingId) {
@@ -139,6 +146,7 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
   for (const [index, node] of response.path.nodes.entries()) {
     const regionId = regionAlias.get(node.region_id) ?? node.region_id
     const region = uniqueRegions.find((item) => item.id === regionId)
+    if (!region) continue
     const pathKey = normalizeRegionKey(region?.display_name ?? regionId) || regionId
     if (seenPathKeys.has(pathKey)) continue
     seenPathKeys.add(pathKey)
@@ -154,14 +162,17 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
     })
   }
 
-  const stableRegions = uniqueRegions.map((region) => renderablePois ? region : stabilizeRegion(region))
+  const stableRegions = uniqueRegions
+    .map((region) => renderablePois ? region : stabilizeRegion(region))
+    .filter(hasRenderablePoiEvidence)
   const pathRoleByRegion = new Map(pathPairs.map(({ node }) => [node.region_id, node.narration_role]))
   const regions = stableRegions.map<NarrativeDisplayRegion>((region) => ({
     ...region,
     chapter_label: labelForNarrationRole(pathRoleByRegion.get(region.id) ?? 'related')
   }))
   const regionMap = Object.fromEntries(regions.map((region) => [region.id, region]))
-  const pathNodes = pathPairs.map<NarrativeDisplayPathNode>(({ node }) => {
+  const displayPathPairs = pathPairs.filter(({ node }) => regionMap[node.region_id])
+  const pathNodes = displayPathPairs.map<NarrativeDisplayPathNode>(({ node }) => {
     const region = regionMap[node.region_id]
     return {
       ...node,
@@ -169,14 +180,14 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
       display_name: region?.display_name ?? node.region_id
     }
   })
-  const allRenderablePois = renderablePois ?? regions.flatMap((region) => region.pois.length > 0 ? region.pois : visualHeatPoisForRegion(region))
+  const allRenderablePois = renderablePois ?? regions.flatMap((region) => region.pois)
   const tierStats = computeTierStats(allRenderablePois)
   return {
     response,
     regions,
     regionMap,
     pathNodes,
-    chapters: pathPairs.map(({ chapter }) => chapter),
+    chapters: displayPathPairs.map(({ chapter }) => chapter),
     allRenderablePois,
     tierStats
   }

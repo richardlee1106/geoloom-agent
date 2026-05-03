@@ -45,7 +45,7 @@ export function buildNarrationChapters(input: {
 }): NarrativeChapter[] {
   return input.regions.map((region, index) => {
     const allowed = region.narrative_facts.filter(isAllowedFact)
-    const sampleFact = allowed[0]?.claim || `${region.display_name}位于当前视野范围内。`
+    const sampleFact = stripRepeatedRegionPrefix(allowed[0]?.claim || `${region.display_name}位于当前视野范围内。`, region.display_name)
     const text = buildChapterText(region, sampleFact, input.scene, index)
     return {
       region_id: region.id,
@@ -60,6 +60,17 @@ export function isAllowedFact(fact: NarrativeFact): boolean {
   if (fact.confidence < 0.7) return false
   if (FORBIDDEN_RE.test(fact.claim)) return false
   return true
+}
+
+function stripRepeatedRegionPrefix(fact: string, regionName: string): string {
+  let normalized = fact.trim()
+  const name = regionName.trim()
+  if (!name || !normalized.startsWith(name)) return normalized
+  normalized = normalized.slice(name.length).replace(/^[，,。；;：:\s]+/u, '')
+  while (normalized.startsWith(name)) {
+    normalized = normalized.slice(name.length).replace(/^[，,。；;：:\s]+/u, '')
+  }
+  return normalized || fact.trim()
 }
 
 function buildChapterText(region: RegionCandidate, fact: string, scene: SceneProfile, index: number): string {

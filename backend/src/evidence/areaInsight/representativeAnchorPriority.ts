@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AreaAoiContextItem,
   EvidenceItem,
   ViewportContextMeta,
@@ -18,7 +18,7 @@ const MEDICAL_PATTERNS = [
 ]
 
 const CONTINUING_EDUCATION_PATTERNS = [
-  /老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院/u,
+  /老年大学|开放大学|社区学院|老年学校|社区教育中心|继续教育学院|党校|干部学院|行政学院|社会主义学院/u,
   /continuing education|open university|community college|lifelong learning/i,
 ]
 

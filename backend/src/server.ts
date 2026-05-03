@@ -268,6 +268,7 @@ const defaultChat = new GeoLoomAgent({
 const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
 })
+const narrativeWebFactSkill = registry.get('deepseek_search')
 const narrative = new NarrativePhase3Runtime({
   fetchSpatialFeatures: (input) => fetchSpatialFeaturesFromDatabase(
     input,
@@ -280,8 +281,8 @@ const narrative = new NarrativePhase3Runtime({
     console.warn(`[Narrative] AOI 候选查询失败，降级为 POI 聚合: ${describeStartupError(err)}`)
     return []
   }),
-  searchWebFacts: registry.get('deepseek_search')
-    ? buildDeepSeekNarrativeWebFactSearcher(registry.get('deepseek_search')!)
+  searchWebFacts: narrativeWebFactSkill
+    ? buildDeepSeekNarrativeWebFactSearcher(narrativeWebFactSkill)
     : undefined,
 })
 

@@ -75,7 +75,29 @@ const OFFICIAL_SOURCE_RE = /(gov\.cn|edu\.cn|org\.cn|wuhan\.gov|wh\.gov|官网|�
 const ENCYCLOPEDIA_SOURCE_RE = /(baike\.baidu\.com|wikipedia\.org|百科)/iu
 const MEDIA_SOURCE_RE = /(news|xinhuanet|people\.com\.cn|cctv|chinanews|thepaper|长江日报|湖北日报|新华社|人民网|央视|澎湃)/iu
 const LOW_QUALITY_SOURCE_RE = /(广告|优惠|团购|预订|点评|论坛|贴吧|小红书|营销|软文|自媒体|携程|马蜂窝|去哪儿|美团|大众点评)/iu
+const WEB_INTRO_FORBIDDEN_RE = /(广告|优惠|团购|预订|招商|加盟|联系电话|热线|小红书|大众点评|携程|马蜂窝|去哪儿)/iu
 const WEB_NAME_CANDIDATE_RE = /([\u4e00-\u9fa5A-Za-z0-9·]{2,18}(?:步行街|商业街|商圈|街区|汉街|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|购物中心|购物广场|商业广场|K11|SKP|路|街|大道|巷))/giu
+const WEB_INTRO_ABSTRACT_REGION_NAMES = [
+  '江汉路步行街',
+  '楚河汉街',
+  '光谷步行街',
+  '武广商圈',
+  '中南中北商圈',
+  '徐东商圈',
+  '街道口商圈',
+  '王家湾商圈',
+  '钟家村商圈',
+  '菱角湖商圈',
+  '武汉天地',
+  '汉正街',
+  '司门口商圈',
+  '万松园',
+  '吉庆街',
+  '黎黄陂路',
+  '昙华林',
+  '水塔街',
+]
+const NARRATIVE_RUNTIME_BUILD = 'phase3-wuhan-profile-bounds-no-point-cloud-2026-05-03'
 
 function readFiniteNumber(value: unknown): number | null {
   const n = Number(value)
@@ -113,8 +135,8 @@ function normalizeViewport(value: unknown): ViewportBBox {
 
 function resolveLimit(value: unknown): number {
   const n = Number(value)
-  if (!Number.isFinite(n)) return 3000
-  return Math.max(50, Math.min(Math.trunc(n), 10000))
+  if (!Number.isFinite(n)) return 20000
+  return Math.max(500, Math.min(Math.trunc(n), 50000))
 }
 
 function resolveTone(value: unknown): NarrationTone {
@@ -150,6 +172,54 @@ function sortWebSourcesByQuality(sources: NarrativeWebSource[]): NarrativeWebSou
   return sources
     .map(enrichWebSourceQuality)
     .sort((left, right) => (right.quality_score ?? 0) - (left.quality_score ?? 0))
+}
+
+function normalizeWebIntroSnippet(value: unknown): string {
+  const normalized = String(value || '')
+    .replace(/\s+/gu, ' ')
+    .replace(/^[\s"'“”‘’：:，,。；;]+|[\s"'“”‘’]+$/gu, '')
+    .trim()
+  if (!normalized || WEB_INTRO_FORBIDDEN_RE.test(normalized)) return ''
+  const clipped = normalized.length > 96 ? `${normalized.slice(0, 96)}…` : normalized
+  return /[。！？]$/u.test(clipped) ? clipped : `${clipped}。`
+}
+
+function buildWebIntroSentence(sources: NarrativeWebSource[], regionName: string): string {
+  const source = sources.find((item) => isWebIntroSourceRelevant(item, regionName))
+  if (!source) return ''
+  return `参考资料显示，${normalizeWebIntroSnippet(source.snippet)}`
+}
+
+function attachIntroToChapterText(text: string, sources: NarrativeWebSource[], regionName: string): string {
+  const intro = buildWebIntroSentence(sources, regionName)
+  if (!intro || text.includes(intro)) return text
+  return `${text}${intro}`
+}
+
+function isWebIntroSourceRelevant(source: NarrativeWebSource, regionName: string): boolean {
+  const snippet = normalizeWebIntroSnippet(source.snippet)
+  if (!snippet) return false
+  const searchableText = `${source.title || ''} ${snippet}`
+  const tokens = webIntroRegionTokens(regionName)
+  if (tokens.length === 0) return true
+  if (!tokens.some((token) => searchableText.includes(token))) return false
+  return !mentionsOtherAbstractRegion(searchableText, tokens)
+}
+
+function webIntroRegionTokens(regionName: string): string[] {
+  const compact = String(regionName || '').replace(/\s+/gu, '').trim()
+  if (!compact) return []
+  const stripped = compact.replace(/(步行街|商业街|商圈|街区)$/u, '')
+  return [...new Set([compact, stripped].filter((token) => token.length >= 2))]
+}
+
+function mentionsOtherAbstractRegion(snippet: string, targetTokens: string[]): boolean {
+  return WEB_INTRO_ABSTRACT_REGION_NAMES.some((name) => {
+    const tokens = webIntroRegionTokens(name)
+    const sameRegion = tokens.some((token) => targetTokens.includes(token)) || targetTokens.some((token) => tokens.includes(token))
+    if (sameRegion) return false
+    return tokens.some((token) => snippet.includes(token))
+  })
 }
 
 function featureToPoi(feature: SpatialFeature): NarrativePoi | null {
@@ -217,6 +287,10 @@ function buildDebugSnapshot(input: {
     return acc
   }, {})
   return {
+    runtime: {
+      engine: 'NarrativePhase3Runtime',
+      build: NARRATIVE_RUNTIME_BUILD,
+    },
     recall: {
       features_count: input.featuresCount,
       poi_count: input.pois.length,
@@ -324,7 +398,7 @@ async function attachWebSources(input: {
   }))
   const settled = await Promise.allSettled(pairs.map(async ({ chapter, region }) => {
     const name = region?.display_name || chapter.region_id
-    const query = `${name} 官方 介绍 城市空间`
+    const query = `${name} 介绍`
     const started = Date.now()
     const sources = sortWebSourcesByQuality(await input.searchWebFacts?.(query, maxResults) ?? []).slice(0, maxResults)
     return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
@@ -343,6 +417,7 @@ async function attachWebSources(input: {
   return {
     chapters: input.chapters.map((chapter) => ({
       ...chapter,
+      text: attachIntroToChapterText(chapter.text, sourcesByRegion.get(chapter.region_id) || [], input.regions.find((region) => region.id === chapter.region_id)?.display_name || chapter.region_id),
       web_sources: sourcesByRegion.get(chapter.region_id) || chapter.web_sources,
     })),
     debug,
@@ -360,7 +435,7 @@ async function probeWebNameCandidates(input: {
     .slice(0, 5)
     .map((candidate) => candidate.display_name)
     .filter(Boolean)
-  const query = `${sceneLabel(input.scene)} ${anchorNames.join(' ')} 商圈 步行街 街区 地名`
+  const query = `${anchorNames.join(' ')} 介绍 商圈 步行街 街区`
   const maxResults = Math.max(1, Math.min(Number(process.env.NARRATIVE_WEB_NAME_CANDIDATE_RESULT_LIMIT || '3'), 5))
   try {
     const sources = sortWebSourcesByQuality(await input.searchWebFacts(query, maxResults)).slice(0, maxResults)

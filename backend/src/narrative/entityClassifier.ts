@@ -20,6 +20,11 @@ export interface NarrativeEntityClassification {
   reason: string
 }
 
+const PLACEHOLDER_NAME_RE = /^(none|null|undefined|nan|未命名|未命名地点|未知|未知地点)$/iu
+const AMBIGUOUS_FRAGMENT_NAME_RE = /^(?:武汉)?(?:和平|团结)$/u
+const PARTY_SCHOOL_RE = /(党校|干部学院|行政学院|社会主义学院)/u
+const HOSPITAL_EXCLUDE_RE = /(医院|医学院|医学部|医疗|附属医院|中心医院|人民医院|卫生院|诊所|门诊|卫生服务中心|协和|同济|省医|市医|hospital|medical|clinic|healthcare)/iu
+const CAMPUS_INTERNAL_FACILITY_RE = /(大学|学院|校区|校园).{0,24}(图书馆|体育馆|体育场|操场|运动场|教学楼|实验室|行政楼|校史馆|礼堂|活动中心|学生中心|文化中心)/u
 const MICRO_FACILITY_RE = /(宿舍|公寓|家属区|住宅小区|小区|楼栋|\d+号楼|\d+栋|门岗|门卫|停车场|收费亭|收费站|出入口|入口|出口|ATM|自动取款|公厕|厕所|卫生间|快递柜|服务中心|管理处|物业|后勤|保卫处|食堂|校医院)/u
 const BASIC_EDU_RE = /(小学|中学|初中|高中|幼儿园|附中|附小|托儿所)/u
 const RELIGIOUS_EDU_RE = /(神学院|佛学院|道学院|修道院|修院|神哲学院)/u
@@ -87,7 +92,12 @@ export function classifyNarrativeEntity(input: NarrativeEntityClassificationInpu
   })
 
   if (!name) return result('noise', 'excluded', false, false, 'empty_name')
+  if (PLACEHOLDER_NAME_RE.test(name)) return result('noise', 'excluded', false, false, 'placeholder_name')
+  if (AMBIGUOUS_FRAGMENT_NAME_RE.test(name)) return result('noise', 'excluded', false, false, 'ambiguous_fragment_name')
+  if (PARTY_SCHOOL_RE.test(raw)) return result('noise', 'excluded', false, false, 'party_school_excluded')
+  if (HOSPITAL_EXCLUDE_RE.test(raw)) return result('noise', 'excluded', false, false, 'hospital_excluded')
   if (MICRO_FACILITY_RE.test(raw)) return result('micro_facility', 'excluded', false, false, 'micro_facility')
+  if (CAMPUS_INTERNAL_FACILITY_RE.test(raw)) return result('scene_evidence', 'medium', false, false, 'campus_internal_facility')
   if (BASIC_EDU_RE.test(raw)) return result('scene_evidence', 'medium', false, false, 'basic_education')
   if (RELIGIOUS_EDU_RE.test(raw)) return result('scene_evidence', 'medium', false, false, 'religious_education')
   if (isSingleChainBranch(input, raw)) return result('background_ecology', 'medium', false, false, 'single_chain_branch')
