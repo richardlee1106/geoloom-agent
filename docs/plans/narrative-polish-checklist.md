@@ -12,8 +12,8 @@ owner: GeoLoom Narrative Team
 
 ## 1. 当前真实边界
 
-- **DeepSeek Search**：不是默认强依赖；只在 `DEEPSEEK_SEARCH_BASE_URL`、`DEEPSEEK_SEARCH_API_KEY`、`DEEPSEEK_SEARCH_MODEL` 同时存在时接入。当前只补充 `web_sources`，不决定候选、排序、LOD 或主讲链路。
-- **章节文案**：事实和片区来自真实算法，但正文仍由 `factGrounding.ts` 模板生成。模板可作为 fallback，不能作为最终产品文案。
+- **DeepSeek Search**：不是默认强依赖；只在 `DEEPSEEK_SEARCH_BASE_URL`、`DEEPSEEK_SEARCH_API_KEY`、`DEEPSEEK_SEARCH_MODEL` 同时存在时接入。当前同步补充 `web_sources`，不决定候选、排序、LOD 或主讲链路；阶段 4.4 仍需升级为缓存 / 异步补强。
+- **章节文案**：事实、片区和路径来自真实算法；启用 `NARRATIVE_LLM_NARRATION_ENABLED=true` 且 LLM 可用时，由 `llmNarrator.ts` 基于 GraphRAG 上下文生成自然解说。`factGrounding.ts` 模板保留为失败 fallback。
 - **路径顺序**：`pathSampler.ts` 已支持代表性优先、空间邻近转场、同质节点惩罚和 `transition_reason`；阶段 4.2 已开始接入 deterministic 片区关系图谱。
 - **抽象片区**：已从自由 token 抽取收敛为武汉大众认知 profile 白名单 + POI/AOI 真实证据门禁，江汉路步行街、水塔街、徐东商圈等城市认知片区进入回归覆盖。
 - **UI 控件**：左侧透明度调节已删除；尺度滑杆已真实控制地图 zoom；重心策略当前影响地图聚焦，后续应升级为后端 ranking 参数。
@@ -119,6 +119,14 @@ owner: GeoLoom Narrative Team
 - 输出校验失败、LLM 未配置或请求失败时自动回退到 `factGrounding.ts` 模板文案。
 - `debug.llm_narrator` 输出 provider、是否使用、耗时和 fallback 原因。
 
+实测收口（2026-05-03）：
+
+- DeepSeek NewAPI 端点确认为 `https://api.deepsb.com/v1/chat/completions`，模型名为 `deepseek-v4-flash-search-nothinking`。
+- 新增 narrative 专属 `NARRATIVE_LLM_BASE_URL`、`NARRATIVE_LLM_API_KEY`、`NARRATIVE_LLM_MODEL`，避免机器全局 `LLM_*` 聊天模型覆盖 narrator。
+- `DEEPSEEK_SEARCH_TIMEOUT_MS` 调整为 `18000`，武汉样例 viewport 中 3 个区域共返回 9 条 `web_sources`。
+- `NARRATIVE_LLM_NARRATION_TIMEOUT_MS` 调整为 `45000`，武汉样例 viewport 中 `debug.llm_narrator.used=true`，实际 provider 为 `deepseek-v4-flash-search-nothinking @ https://api.deepsb.com/v1`。
+- `.env.example` 与 `.env.v4.example` 已保留空 key 占位，不提交真实 API key。
+
 ## 5. 阶段 4.4：DeepSeek Search 异步事实补强
 
 目标：联网事实补强不阻塞首屏 narrative。
@@ -130,6 +138,12 @@ owner: GeoLoom Narrative Team
 - 官方站点、百科、权威媒体优先。
 - 论坛、营销、软文、低质聚合站降权或过滤。
 - 搜索失败时保留模板文案和结构结果。
+
+当前状态（2026-05-03）：
+
+- 同步 web facts 已跑通，但仍阻塞 narrative 完整响应；后续应拆成首屏结构先返回、事实补强随后刷新。
+- DeepSeek 单次搜索在实测中约 11-16 秒，必须依赖 cache、并发限制和超时降级保证体验。
+- `debug.web_facts.items[].error` 已能暴露 timeout / upstream failure，后续 debug 面板可直接展示。
 
 ## 6. 阶段 4.5：调试面板与用户面板分离
 
@@ -171,9 +185,9 @@ owner: GeoLoom Narrative Team
 
 ## 8. 第一轮推荐开工顺序
 
-1. **抽象片区发现与命名**：先解决城市认知片区缺失。
-2. **叙事关系图谱**：再解决讲解顺序与连贯性。
-3. **Narrator LLM**：结构稳定后再做自然文案。
-4. **DeepSeek 异步缓存**：补来源质量与速度。
+1. **抽象片区发现与命名**：先解决城市认知片区缺失。（已完成第一轮）
+2. **叙事关系图谱**：再解决讲解顺序与连贯性。（已完成第一轮）
+3. **Narrator LLM**：结构稳定后再做自然文案。（已完成第一轮并完成 DeepSeek 实测）
+4. **DeepSeek 异步缓存**：补来源质量与速度。（下一步优先）
 5. **DeepSeek 候选地名补强**：在不改变主链结构的前提下，作为低优先级命名候选进入人工可解释 debug。（已完成 debug-only MVP）
 6. **Debug 面板与 UI polish**：最后集中打磨体验。
