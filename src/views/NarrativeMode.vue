@@ -280,19 +280,11 @@
               </template>
               <span class="cursor" v-if="typing">▏</span>
             </p>
-            <div v-if="!typing && hoveredChapterSource" class="source-popover">
-              <div class="source-popover-head">
-                <span>{{ sourceQualityLabel(hoveredChapterSource.quality) }}</span>
-                <strong>{{ sourceDomain(hoveredChapterSource.url) }}</strong>
-              </div>
-              <div class="source-popover-title">{{ hoveredChapterSource.title }}</div>
-              <p>{{ hoveredChapterSource.snippet || '该来源提供当前章节的网页参考，可点击打开查看原文。' }}</p>
-            </div>
             <div v-if="!typing && activeChapterSources.length" class="source-list">
               <a
                 v-for="(source, i) in activeChapterSources"
                 :key="`source-${source.url}-${i}`"
-                class="source-item"
+                :class="['source-item', { active: hoveredSourceIndex === i }]"
                 :href="source.url"
                 target="_blank"
                 rel="noreferrer"
@@ -301,8 +293,12 @@
                 @mouseleave="hoveredSourceIndex = null"
               >
                 <span class="source-item-title"><sup>{{ i + 1 }}</sup>{{ source.title }}</span>
+                <span class="source-meta">{{ sourceQualityLabel(source.quality) }} · {{ sourceDomain(source.url) }}</span>
                 <span v-if="source.snippet" class="source-summary">{{ source.snippet }}</span>
               </a>
+            </div>
+            <div v-else-if="!typing" class="source-empty">
+              暂无网页来源，当前章节使用本地结构事实与路径关系生成。
             </div>
           </div>
 
@@ -615,10 +611,6 @@ const activeChapterSources = computed<ChapterSourceView[]>(() => {
     seen.add(source.url)
     return true
   }).slice(0, 3)
-})
-const hoveredChapterSource = computed(() => {
-  const index = hoveredSourceIndex.value
-  return typeof index === 'number' ? activeChapterSources.value[index] : null
 })
 const playbackHint = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在生成解说路径，完成后会按你的自动解说设置处理。'
@@ -2355,37 +2347,6 @@ const ICONS = {
   padding-top: 9px;
   border-top: 1px solid rgba(148,163,184,0.16);
 }
-.source-popover {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  background: rgba(15,23,42,0.86);
-  border: 1px solid rgba(147,197,253,0.25);
-}
-.source-popover-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-  font-size: 10.5px;
-  color: #93c5fd;
-}
-.source-popover-head strong {
-  color: var(--txt-mute);
-  font-weight: 500;
-}
-.source-popover-title {
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.45;
-}
-.source-popover p {
-  margin: 5px 0 0;
-  color: var(--txt-mute);
-  font-size: 11px;
-  line-height: 1.55;
-}
 .source-list a {
   color: var(--txt-mute);
   font-size: 11px;
@@ -2399,7 +2360,7 @@ const ICONS = {
   padding: 5px 6px;
   border-radius: 6px;
 }
-.source-item:hover {
+.source-item.active {
   background: rgba(59,130,246,0.10);
 }
 .source-item-title {
@@ -2409,6 +2370,10 @@ const ICONS = {
   text-overflow: ellipsis;
 }
 .source-list a:hover { color: #bfdbfe; }
+.source-meta {
+  color: #93c5fd;
+  font-size: 10px;
+}
 .source-list sup {
   margin-right: 5px;
   color: #93c5fd;
@@ -2421,6 +2386,14 @@ const ICONS = {
   color: var(--txt-faint);
   font-size: 10.5px;
   line-height: 1.45;
+}
+.source-empty {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(148,163,184,0.16);
+  color: var(--txt-faint);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .cursor {
   color: var(--primary);
