@@ -1322,12 +1322,17 @@ async function analyzeCurrentViewport() {
       }
     })
     if (import.meta.env.DEV) {
+      const webFacts = response.debug?.web_facts as { source_count?: number; items?: Array<{ query?: string; error?: string }> } | undefined
       console.info('[Narrative] 后端实时分析结果', {
         runtime: response.debug?.runtime,
         viewport,
         regions: response.regions.map((region) => ({ id: region.id, name: region.display_name })),
         candidates: response.debug?.candidates,
+        webFacts,
       })
+      if (webFacts && !webFacts.source_count && webFacts.items?.some((item) => item.error)) {
+        console.warn('[Narrative] Web fact 搜索未返回引用', webFacts.items)
+      }
     }
     stopAll()
     narrative.value = response

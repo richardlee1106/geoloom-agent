@@ -181,7 +181,7 @@ if (deepSeekSearchBaseUrl && deepSeekSearchApiKey && deepSeekSearchModel) {
     baseUrl: deepSeekSearchBaseUrl,
     apiKey: deepSeekSearchApiKey,
     model: deepSeekSearchModel,
-    timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '15000'),
+    timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '6000'),
   }))
 }
 const jinaBridge = new JinaBridge()

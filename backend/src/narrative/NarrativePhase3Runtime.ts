@@ -52,6 +52,7 @@ interface WebFactDebugItem {
   query: string
   source_count: number
   latency_ms: number
+  error?: string
 }
 
 interface WebNameCandidateDebugItem {
@@ -182,6 +183,11 @@ function normalizeWebIntroSnippet(value: unknown): string {
   if (!normalized || WEB_INTRO_FORBIDDEN_RE.test(normalized)) return ''
   const clipped = normalized.length > 96 ? `${normalized.slice(0, 96)}…` : normalized
   return /[。！？]$/u.test(clipped) ? clipped : `${clipped}。`
+}
+
+function describeWebFactError(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name
+  return String(error || 'unknown_error')
 }
 
 function buildWebIntroSentence(sources: NarrativeWebSource[], regionName: string): string {
@@ -368,7 +374,8 @@ export function buildDeepSeekNarrativeWebFactSearcher(skill: SkillDefinition) {
       requestId: 'narrative-webfact',
       logger: createLogger({ surface: 'narrative-webfact' }),
     })
-    if (!result.ok || !result.data || typeof result.data !== 'object') return []
+    if (!result.ok) throw new Error(result.error?.message || result.error?.code || 'deepseek_search_failed')
+    if (!result.data || typeof result.data !== 'object') return []
     const data = result.data as { results?: Array<{ title?: unknown; content?: unknown; snippet?: unknown; url?: unknown }> }
     return (data.results || [])
       .map((item) => ({
@@ -400,8 +407,12 @@ async function attachWebSources(input: {
     const name = region?.display_name || chapter.region_id
     const query = `${name} 介绍`
     const started = Date.now()
-    const sources = sortWebSourcesByQuality(await input.searchWebFacts?.(query, maxResults) ?? []).slice(0, maxResults)
-    return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
+    try {
+      const sources = sortWebSourcesByQuality(await input.searchWebFacts?.(query, maxResults) ?? []).slice(0, maxResults)
+      return { regionId: chapter.region_id, query, sources, latencyMs: Date.now() - started }
+    } catch (error) {
+      return { regionId: chapter.region_id, query, sources: [], latencyMs: Date.now() - started, error: describeWebFactError(error) }
+    }
   }))
   const sourcesByRegion = new Map<string, NarrativeWebSource[]>()
   for (const item of settled) {
@@ -412,6 +423,7 @@ async function attachWebSources(input: {
       query: item.value.query,
       source_count: item.value.sources.length,
       latency_ms: item.value.latencyMs,
+      error: item.value.error,
     })
   }
   return {
