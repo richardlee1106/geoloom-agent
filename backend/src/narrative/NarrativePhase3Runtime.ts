@@ -204,6 +204,26 @@ function attachIntroToChapterText(text: string, sources: NarrativeWebSource[], r
   return `${text}${intro}`
 }
 
+function mergeWebFactsIntoFinalChapters(input: {
+  chapters: NarrativeChapter[]
+  groundedChapters: NarrativeChapter[]
+  regions: RegionCandidate[]
+}): NarrativeChapter[] {
+  const groundedByRegionId = new Map(input.groundedChapters.map((chapter) => [chapter.region_id, chapter]))
+  const regionNameById = new Map(input.regions.map((region) => [region.id, region.display_name]))
+  return input.chapters.map((chapter) => {
+    const grounded = groundedByRegionId.get(chapter.region_id)
+    const sources = grounded?.web_sources || chapter.web_sources
+    if (!sources?.length) return chapter
+    const regionName = regionNameById.get(chapter.region_id) || chapter.region_id
+    return {
+      ...chapter,
+      text: attachIntroToChapterText(chapter.text, sources, regionName),
+      web_sources: sources,
+    }
+  })
+}
+
 function isWebIntroSourceRelevant(source: NarrativeWebSource, regionName: string): boolean {
   const snippet = normalizeWebIntroSnippet(source.snippet)
   if (!snippet) return false
@@ -642,7 +662,11 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       llmProvider: this.options.llmProvider,
       enabled: mode === 'sync' && resolveNarrativeLlmEnabled(),
     })
-    const chapters = graphNarration.chapters
+    const chapters = mergeWebFactsIntoFinalChapters({
+      chapters: graphNarration.chapters,
+      groundedChapters: chapterBuild.chapters,
+      regions: selectedRegions,
+    })
     const webNameCandidates = input.debug && mode === 'sync'
       ? await probeWebNameCandidates({
         viewport,

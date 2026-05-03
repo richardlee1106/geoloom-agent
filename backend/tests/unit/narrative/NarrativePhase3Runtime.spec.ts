@@ -5,6 +5,7 @@ import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '.
 import { NarrativeWebFactCache } from '../../../src/narrative/NarrativeWebFactCache.js'
 import type { SpatialFeature } from '../../../src/spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../../../src/skills/types.js'
+import type { LLMProvider } from '../../../src/llm/types.js'
 
 function feature(id: string, name: string, lon: number, lat: number, categoryMain = '科教文化服务', categorySub = '高等院校'): SpatialFeature {
   return {
@@ -283,6 +284,74 @@ describe('NarrativePhase3Runtime', () => {
 
     expect(response.narration.chapters[0].text).toContain('参考资料显示，武汉市中心城区综合性公园。')
     expect(response.narration.chapters[0].web_sources?.[0]?.title).toBe('沙湖公园介绍')
+  })
+
+  it('LLM 改写章节后仍会把网页事实后置合并进最终文本', async () => {
+    const llmProvider: LLMProvider = {
+      getStatus: () => ({ ready: true, provider: 'test', model: 'test-model' }),
+      isReady: () => true,
+      complete: async (request) => {
+        const userPayload = JSON.parse(String(request.messages.find((message) => message.role === 'user')?.content || '{}')) as { output_contract?: { region_id_order?: string[] } }
+        const regionId = userPayload.output_contract?.region_id_order?.[0] || 'shahu-park'
+        return {
+          assistantMessage: {
+            role: 'assistant',
+            content: JSON.stringify({
+              chapters: [
+                {
+                  region_id: regionId,
+                  text: '沙湖公园这一段先从湖岸空间讲起，视线落在开放绿地和城市休闲氛围上。',
+                },
+              ],
+            }),
+            toolCalls: [],
+          },
+          toolCalls: [],
+          finishReason: 'stop',
+        }
+      },
+    }
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园介绍',
+          url: 'https://example.com/shahu-intro',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+      llmProvider,
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-after-llm-session',
+      debug: true,
+      enrichment_mode: 'sync',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.debug?.llm_narrator).toMatchObject({ used: true })
+    expect(response.narration.chapters[0].text).toContain('湖岸空间')
+    expect(response.narration.chapters[0].text).toContain('参考资料显示，沙湖公园是武汉市中心城区最大的综合性公园。')
+    expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-intro')
   })
 
   it('不会把跨城区商圈列表型网页摘要追加到当前徐东章节', async () => {
