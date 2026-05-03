@@ -204,6 +204,10 @@ function attachIntroToChapterText(text: string, sources: NarrativeWebSource[], r
   return `${text}${intro}`
 }
 
+function webFactQueryRegionName(regionName: string): string {
+  return String(regionName || '').replace(/[（(](视野内片区|A区|B区|C区|D区|东区|西区|南区|北区|琴园|歌笛湖)[）)]/gu, '').trim() || regionName
+}
+
 function mergeWebFactsIntoFinalChapters(input: {
   chapters: NarrativeChapter[]
   groundedChapters: NarrativeChapter[]
@@ -237,8 +241,9 @@ function isWebIntroSourceRelevant(source: NarrativeWebSource, regionName: string
 function webIntroRegionTokens(regionName: string): string[] {
   const compact = String(regionName || '').replace(/\s+/gu, '').trim()
   if (!compact) return []
-  const stripped = compact.replace(/(步行街|商业街|商圈|街区)$/u, '')
-  return [...new Set([compact, stripped].filter((token) => token.length >= 2))]
+  const baseName = compact.replace(/[（(](视野内片区|A区|B区|C区|D区|东区|西区|南区|北区|琴园|歌笛湖)[）)]/gu, '')
+  const stripped = baseName.replace(/(步行街|商业街|商圈|街区)$/u, '')
+  return [...new Set([compact, baseName, stripped].filter((token) => token.length >= 2))]
 }
 
 function mentionsOtherAbstractRegion(snippet: string, targetTokens: string[]): boolean {
@@ -424,14 +429,15 @@ async function attachWebSources(input: {
 }) {
   const debug: WebFactDebugItem[] = []
   if (input.mode === 'off') return { chapters: input.chapters, debug }
-  const limit = Math.min(Math.max(Number(process.env.NARRATIVE_WEB_FACT_REGION_LIMIT || '3'), 0), input.chapters.length)
+  const configuredLimit = process.env.NARRATIVE_WEB_FACT_REGION_LIMIT
+  const limit = Math.min(Math.max(configuredLimit === undefined ? input.chapters.length : Number(configuredLimit || '0'), 0), input.chapters.length)
   const maxResults = Math.max(1, Math.min(Number(process.env.NARRATIVE_WEB_FACT_RESULT_LIMIT || '3'), 5))
   const pairs = input.chapters.slice(0, limit).map((chapter, index) => ({
     chapter,
     region: input.regions[index],
   }))
   const settled = await Promise.allSettled(pairs.map(async ({ chapter, region }) => {
-    const name = region?.display_name || chapter.region_id
+    const name = webFactQueryRegionName(region?.display_name || chapter.region_id)
     const query = `${name} 介绍`
     const started = Date.now()
     const cached = input.webFactCache.get(query, maxResults)

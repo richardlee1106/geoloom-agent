@@ -249,6 +249,43 @@ describe('buildRegionCandidates', () => {
     expect(candidates.some((candidate) => candidate.display_name === '团结')).toBe(false)
   })
 
+  it('销品茂和欧亚达同级出现时仍上卷为徐东商圈', () => {
+    const candidates = buildRegionCandidates({
+      viewport: {
+        west: 114.32,
+        south: 30.56,
+        east: 114.39,
+        north: 30.615,
+        zoom: 13,
+        center: [114.36, 30.59],
+      },
+      scene: 'commercial_leisure',
+      aois: [
+        {
+          id: 'xpm',
+          name: '销品茂',
+          fclass: 'mall',
+          areaSqm: 90_000,
+          boundary: polygonFromBounds({ west: 114.335, south: 30.585, east: 114.35, north: 30.598 }),
+        },
+        {
+          id: 'oyd',
+          name: '欧亚达家居',
+          fclass: 'mall',
+          areaSqm: 80_000,
+          boundary: polygonFromBounds({ west: 114.35, south: 30.595, east: 114.365, north: 30.608 }),
+        },
+      ],
+      pois: [
+        { ...poi('xp', 114.342, 30.59, '购物服务', 'medium'), display_name: '销品茂购物中心' },
+        { ...poi('oyd', 114.358, 30.602, '购物服务', 'medium'), display_name: '欧亚达家居徐东店' },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('徐东商圈')
+    expect(candidates.map((candidate) => candidate.display_name)).not.toEqual(expect.arrayContaining(['销品茂', '欧亚达家居']))
+  })
+
   it('同一视口只保留一个主导抽象主商圈，避免多个远距商圈一起展示', () => {
     const candidates = buildRegionCandidates({
       viewport: {
@@ -275,6 +312,37 @@ describe('buildRegionCandidates', () => {
       .filter((candidate) => candidate.source === 'abstract_region' && candidate.role === 'primary_region')
       .map((candidate) => candidate.display_name)
     expect(primaryAbstractNames).toEqual(['徐东商圈'])
+  })
+
+  it('湖北大学附近不会把中南中北商圈误投影到校园北侧', () => {
+    const candidates = buildRegionCandidates({
+      viewport: {
+        west: 114.32,
+        south: 30.57,
+        east: 114.39,
+        north: 30.615,
+        zoom: 14,
+        center: [114.355, 30.592],
+      },
+      scene: 'education_culture',
+      aois: [
+        {
+          id: 'hubei-university',
+          name: '湖北大学',
+          fclass: 'university',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.335, south: 30.58, east: 114.36, north: 30.6 }),
+        },
+      ],
+      pois: [
+        { ...poi('hbu-library', 114.345, 30.59, '科教文化服务', 'strong'), display_name: '湖北大学图书馆' },
+        { ...poi('hbu-museum', 114.347, 30.592, '科教文化服务', 'medium'), display_name: '湖北大学校史馆' },
+        { ...poi('dream', 114.352, 30.583, '购物服务', 'medium'), display_name: '武商梦时代购物中心' },
+        { ...poi('mall', 114.353, 30.584, '购物服务', 'medium'), display_name: '中南路商业配套' },
+      ],
+    })
+
+    expect(candidates.map((candidate) => candidate.display_name)).not.toContain('中南中北商圈')
   })
 
   it('徐东视口不会把跨城区 profile 名称误投影成候选片区', () => {
@@ -417,6 +485,28 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].display_name).toBe('江汉路步行街')
     expect(candidates[0].source).toBe('aoi')
     expect(candidates.filter((candidate) => candidate.source === 'abstract_region')).toHaveLength(0)
+  })
+
+  it('沙湖公园裸名会标注为当前视野内片区，避免误导为完整公园', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'natural_ecology',
+      pois: [
+        { ...poi('trail', 114.34, 30.54, '风景名胜', 'medium'), display_name: '沙湖公园步道' },
+        { ...poi('lake', 114.341, 30.541, '风景名胜', 'medium'), display_name: '沙湖公园湖岸' },
+      ],
+      aois: [
+        {
+          id: 'shahu',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 2_000_000,
+          boundary: polygonFromBounds({ west: 114.33, south: 30.53, east: 114.36, north: 30.56 }),
+        },
+      ],
+    })
+
+    expect(candidates[0].display_name).toBe('沙湖公园（视野内片区）')
   })
 
   it('剔除党校、医院 AOI，且不生成住宿服务活力区', () => {

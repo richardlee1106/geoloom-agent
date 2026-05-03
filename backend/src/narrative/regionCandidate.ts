@@ -47,6 +47,7 @@ const ACCESSORY_RE = /(停车场|出入口|入口|出口|门岗|门卫|收费亭
 const SCENIC_EVIDENCE_RE = /(江滩|公园|湖|湿地|绿道|步道|栈道|观景|广场|码头|渡口|堤|滩|桥|亭|台|游客中心)/u
 const COMMERCIAL_AOI_RE = /(商业街|步行街|购物中心|购物广场|商业广场|商场|天地|汉街|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|K11|SKP|mall|plaza)/iu
 const COMMERCIAL_EVIDENCE_RE = /(餐饮|美食|小吃|咖啡|茶|饮品|酒吧|购物|商店|商铺|商场|广场|商业|影院|影城|娱乐|休闲|服饰|珠宝|书店|超市|便利店|汉街|楚河)/u
+const COMMERCIAL_CHILD_RE = /(购物中心|购物广场|商业广场|商场|广场|天地|汉街|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|欧亚达|群星城|K11|SKP|mall|plaza|MALL)/iu
 const HARD_EXCLUDED_POI_RE = /(党校|干部学院|行政学院|社会主义学院|医院|医学院|医学部|医疗|卫生院|诊所|门诊|卫生服务中心|hospital|medical|clinic|healthcare)/iu
 
 export function buildRegionCandidates(input: {
@@ -62,7 +63,7 @@ export function buildRegionCandidates(input: {
     .filter(isCandidateVisibleEnough)
     .sort(compareCandidates)
 
-  return mergeOverlappingCandidates(suppressCompetingPrimaryAbstractRegions(candidates, input.viewport)).slice(0, 24)
+  return suppressChildCommercialCandidates(mergeOverlappingCandidates(suppressCompetingPrimaryAbstractRegions(candidates, input.viewport))).slice(0, 24)
 }
 
 function compareCandidates(left: RegionCandidate, right: RegionCandidate): number {
@@ -76,7 +77,7 @@ function candidateRank(candidate: RegionCandidate): number {
 }
 
 function isCandidateVisibleEnough(candidate: RegionCandidate): boolean {
-  if (candidate.source === 'abstract_region') return candidate.effectivePoiCount >= (isKnownAbstractStreet(candidate.display_name) ? 2 : 3)
+  if (candidate.source === 'abstract_region') return candidate.effectivePoiCount >= (isKnownAbstractStreet(candidate.display_name) || candidate.display_name === '徐东商圈' ? 2 : 3)
   if (candidate.source === 'aoi') return candidate.effectivePoiCount >= 1
   return candidate.effectivePoiCount >= 1 || candidate.pois.length >= 2 || candidate.coverage >= 0.006
 }
@@ -167,7 +168,7 @@ function buildAoiRegionCandidates(input: {
     const [lon, lat] = centerFromBoundary(boundary)
     out.push(materializeCandidate({
       id: `aoi-${aoi.id}`,
-      displayName: aoi.name,
+      displayName: disambiguateAoiDisplayName(aoi, pois),
       role: classification.role,
       boundary,
       coreAnchor: { id: String(aoi.id), lon, lat },
@@ -180,6 +181,14 @@ function buildAoiRegionCandidates(input: {
     }))
   }
   return out
+}
+
+function disambiguateAoiDisplayName(aoi: AoiCandidateRow, pois: NarrativePoi[]): string {
+  const name = aoi.name.trim()
+  if (name !== '沙湖公园') return name
+  const evidenceText = pois.map((poi) => poi.display_name).join(' ')
+  const explicitSection = evidenceText.match(/沙湖公园[（(]?(A区|B区|C区|D区|东区|西区|南区|北区|琴园|歌笛湖)[）)]?/u)?.[1]
+  return explicitSection ? `沙湖公园（${explicitSection}）` : '沙湖公园（视野内片区）'
 }
 
 function clipBoundaryGeometryToViewport(boundary: NarrativeBoundaryGeometry, viewport: ViewportBBox): NarrativeBoundaryGeometry {
@@ -335,11 +344,42 @@ function mergeOverlappingCandidates(candidates: RegionCandidate[]): RegionCandid
   return out
 }
 
+function suppressChildCommercialCandidates(candidates: RegionCandidate[]): RegionCandidate[] {
+  const commercialDistricts = candidates.filter((candidate) =>
+    candidate.source === 'abstract_region'
+    && candidate.role === 'primary_region'
+    && isCommercialDistrict(candidate.display_name)
+    && candidate.effectivePoiCount >= 2)
+  if (commercialDistricts.length === 0) return candidates
+  return candidates.filter((candidate) => {
+    if (commercialDistricts.some((district) => district.id === candidate.id)) return true
+    if (!isCommercialChildCandidate(candidate)) return true
+    return !commercialDistricts.some((district) => isCandidateCoveredByDistrict(candidate, district))
+  })
+}
+
+function isCommercialChildCandidate(candidate: RegionCandidate): boolean {
+  const text = `${candidate.display_name} ${candidate.pois.map((poi) => poi.display_name).join(' ')}`
+  return candidate.source === 'aoi'
+    && (candidate.role === 'primary_region' || candidate.role === 'support_region' || candidate.role === 'landmark_anchor')
+    && COMMERCIAL_CHILD_RE.test(text)
+}
+
+function isCandidateCoveredByDistrict(candidate: RegionCandidate, district: RegionCandidate): boolean {
+  const shared = candidate.pois.filter((poi) => district.pois.some((item) => item.id === poi.id)).length
+  if (shared > 0) return true
+  const center = centerFromBoundary(candidate.boundary)
+  return pointInBoundary(center, district.boundary)
+}
+
 function shouldReplaceOverlappingCandidate(existing: RegionCandidate, candidate: RegionCandidate): boolean {
   if (existing.source === 'abstract_region' && candidate.source === 'abstract_region') {
     return isCommercialDistrict(candidate.display_name)
       && !isCommercialDistrict(existing.display_name)
       && candidate.pois.length >= existing.pois.length
+  }
+  if (existing.source === 'aoi' && candidate.source === 'abstract_region' && isCommercialDistrict(candidate.display_name)) {
+    return isCommercialChildCandidate(existing) && candidate.effectivePoiCount >= 2
   }
   return existing.source === 'aoi'
     && candidate.source === 'abstract_region'

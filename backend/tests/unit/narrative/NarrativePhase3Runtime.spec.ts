@@ -632,6 +632,74 @@ describe('NarrativePhase3Runtime', () => {
     expect(job.response?.enrichment).toMatchObject({ mode: 'async', status: 'completed', phase: 'enriched', source_count: 1 })
     expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-async')
   })
+
+  it('默认会为所有解说章节尝试网页事实补强', async () => {
+    const queries: string[] = []
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+        feature('2', '湖北大学图书馆', 114.345, 30.59, '科教文化服务', '图书馆'),
+        feature('3', '徐东销品茂', 114.358, 30.592, '购物服务', '购物中心'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+        {
+          id: 'hubei-university',
+          name: '湖北大学',
+          fclass: 'university',
+          areaSqm: 1_000_000,
+          boundary: polygonFromBounds({ west: 114.335, south: 30.58, east: 114.36, north: 30.605 }),
+        },
+        {
+          id: 'xudong-mall',
+          name: '徐东销品茂',
+          fclass: 'mall',
+          areaSqm: 90_000,
+          boundary: polygonFromBounds({ west: 114.35, south: 30.585, east: 114.37, north: 30.6 }),
+        },
+      ],
+      searchWebFacts: async (query) => {
+        queries.push(query)
+        return [
+          {
+            title: `${query} 来源`,
+            url: `https://example.com/${queries.length}`,
+            snippet: `${query} 的网页介绍。`,
+          },
+        ]
+      },
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-all-regions-session',
+      debug: true,
+      enrichment_mode: 'sync',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.39,
+        north: 30.61,
+        zoom: 13,
+        center: [114.35, 30.58],
+      },
+    })
+
+    const webFactDebug = response.debug?.web_facts as { items?: Array<{ query: string }> } | undefined
+    const chapterQueries = webFactDebug?.items?.map((item) => item.query) || []
+    expect(chapterQueries).toHaveLength(response.narration.chapters.length)
+    expect(queries).toEqual(expect.arrayContaining(chapterQueries))
+    expect(response.debug?.web_facts).toMatchObject({
+      queried_region_count: response.narration.chapters.length,
+      source_count: response.narration.chapters.length,
+    })
+    expect(response.narration.chapters.every((chapter) => (chapter.web_sources || []).length > 0)).toBe(true)
+  })
 })
 
 async function waitForEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string) {
