@@ -329,6 +329,7 @@ function buildDebugSnapshot(input: {
     path: {
       node_count: input.path.nodes.length,
       alternatives_count: input.path.alternativesCount,
+      relations: input.path.relations,
       nodes: input.path.nodes.map((node, index) => {
         const region = input.selectedRegions[index]
         return {

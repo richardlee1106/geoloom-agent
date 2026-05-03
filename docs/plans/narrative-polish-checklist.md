@@ -14,8 +14,8 @@ owner: GeoLoom Narrative Team
 
 - **DeepSeek Search**：不是默认强依赖；只在 `DEEPSEEK_SEARCH_BASE_URL`、`DEEPSEEK_SEARCH_API_KEY`、`DEEPSEEK_SEARCH_MODEL` 同时存在时接入。当前只补充 `web_sources`，不决定候选、排序、LOD 或主讲链路。
 - **章节文案**：事实和片区来自真实算法，但正文仍由 `factGrounding.ts` 模板生成。模板可作为 fallback，不能作为最终产品文案。
-- **路径顺序**：`pathSampler.ts` 已支持代表性优先、空间邻近转场、同质节点惩罚和 `transition_reason`，但还没有历史、商业、交通、生态等高级关系图谱。
-- **抽象片区**：当前能稳定处理 AOI 主体与 POI 点云候选，但对江汉路步行街、水塔街、徐东商圈等城市认知片区支持不足。
+- **路径顺序**：`pathSampler.ts` 已支持代表性优先、空间邻近转场、同质节点惩罚和 `transition_reason`；阶段 4.2 已开始接入 deterministic 片区关系图谱。
+- **抽象片区**：已从自由 token 抽取收敛为武汉大众认知 profile 白名单 + POI/AOI 真实证据门禁，江汉路步行街、水塔街、徐东商圈等城市认知片区进入回归覆盖。
 - **UI 控件**：左侧透明度调节已删除；尺度滑杆已真实控制地图 zoom；重心策略当前影响地图聚焦，后续应升级为后端 ranking 参数。
 
 ## 2. 阶段 4.1：抽象片区发现与命名
@@ -35,6 +35,7 @@ owner: GeoLoom Narrative Team
 - 已补充 DeepSeek Search 来源质量评分：`web_sources` 增加 `quality` / `quality_score`，并优先展示官方、百科、权威媒体来源。
 - 已补充 DeepSeek Search 候选地名 debug-only 探针：仅在 `debug: true` 时写入 `web_name_candidates`，不改变候选、排序、LOD 或主讲链路。
 - 当前仍未让 DeepSeek Search 决定候选、排序、LOD 或主讲链路；后续如需结构接入，必须另设人工可解释门禁。
+- 第二轮收口已完成：抽象片区命名改为武汉 profile 白名单，不再从任意 POI 名称自由拼接不存在或不大众的商圈名。
 
 验收对象：
 
@@ -84,6 +85,12 @@ owner: GeoLoom Narrative Team
 - `transition_reason` 必须自然解释转场原因。
 - 不能连续堆叠同类型片区造成单调。
 - 同一 viewport 的路径应稳定，但允许在同等候选之间有轻微变化。
+
+第一轮 MVP（2026-05-03）：
+
+- 新增 deterministic `regionRelations.ts`，只使用片区名称、角色、来源、POI 品类、事实和空间距离判定关系。
+- `pathSampler.ts` 在空间邻近基础上加入关系强度小权重，不让关系图谱破坏稳定邻近路径。
+- `debug.path.relations` 输出转场关系类型、强度和证据，用户面仍只展示自然 `transition_reason`。
 
 ## 4. 阶段 4.3：Narrator LLM 自然讲解
 

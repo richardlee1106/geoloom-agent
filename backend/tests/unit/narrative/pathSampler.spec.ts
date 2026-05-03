@@ -14,7 +14,7 @@ const viewport: ViewportBBox = {
   center: [114.4, 30.6],
 }
 
-function candidate(id: string, role: RegionCandidate['role'], lon: number, lat: number, score: number): RegionCandidate {
+function candidate(id: string, role: RegionCandidate['role'], lon: number, lat: number, score: number, categoryMain = '科教文化服务'): RegionCandidate {
   const poi: NarrativePoi = {
     id: `poi-${id}`,
     lon,
@@ -22,7 +22,7 @@ function candidate(id: string, role: RegionCandidate['role'], lon: number, lat: 
     display_name: id,
     tier: 'strong',
     role: 'scene_evidence',
-    category_main: '科教文化服务',
+    category_main: categoryMain,
   }
   const boundary = polygonFromBounds({ west: lon - 0.005, south: lat - 0.005, east: lon + 0.005, north: lat + 0.005 })
   return {
@@ -77,5 +77,21 @@ describe('sampleNarrativePath', () => {
     const result = sampleNarrativePath({ candidates: mixed, viewport, lod: 'meso', seed: 'seed-a' })
 
     expect(result.nodes.map((node) => node.region_id).slice(0, 3)).toEqual(['core', 'campus-east', 'park-edge'])
+  })
+
+  it('uses deterministic region relations for natural transition reasons', () => {
+    const related = [
+      candidate('武汉大学', 'primary_region', 114.34, 30.54, 0.9, '科教文化服务'),
+      candidate('东湖风景区', 'support_region', 114.345, 30.542, 0.82, '风景名胜'),
+    ]
+
+    const result = sampleNarrativePath({ candidates: related, viewport, lod: 'meso', seed: 'seed-a' })
+
+    expect(result.relations[0]).toMatchObject({
+      from_region_id: '武汉大学',
+      to_region_id: '东湖风景区',
+      type: 'functional_complement',
+    })
+    expect(result.nodes[1].transition_reason).toContain('教育文化空间和开放生态空间')
   })
 })

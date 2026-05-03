@@ -144,6 +144,7 @@ describe('NarrativePhase3Runtime', () => {
     })
     expect(response.debug?.lod).toMatchObject({ selected: response.lod })
     expect(response.debug?.path).toMatchObject({ node_count: response.path.nodes.length })
+    expect(response.debug?.path).toMatchObject({ relations: expect.any(Array) })
     expect(response.debug?.facts).toMatchObject({ selected_region_count: response.narration.chapters.length })
   })
 

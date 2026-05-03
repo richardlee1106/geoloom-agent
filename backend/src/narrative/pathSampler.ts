@@ -1,10 +1,20 @@
 import type { LODLevel, NarrativePathNode, PathNarrationRole, ViewportBBox } from './contract.js'
 import { boundsFromBoundary } from './geometry.js'
 import type { RegionCandidate } from './regionCandidate.js'
+import { buildRegionRelation, type RegionRelationType } from './regionRelations.js'
 
 export interface PathSamplerResult {
   nodes: NarrativePathNode[]
   alternativesCount: number
+  relations: PathRelationDebug[]
+}
+
+export interface PathRelationDebug {
+  from_region_id: string
+  to_region_id: string
+  type: RegionRelationType
+  strength: number
+  evidence: string[]
 }
 
 export function sampleNarrativePath(input: {
@@ -25,6 +35,17 @@ export function sampleNarrativePath(input: {
     selected.push(pool.splice(index, 1)[0])
   }
 
+  const relations = selected.slice(1).map((candidate, index) => {
+    const previous = selected[index]
+    const relation = buildRegionRelation(previous, candidate)
+    return {
+      from_region_id: previous.id,
+      to_region_id: candidate.id,
+      type: relation.type,
+      strength: Number(relation.strength.toFixed(3)),
+      evidence: relation.evidence,
+    }
+  })
   const nodes = selected.map((candidate, index): NarrativePathNode => ({
     region_id: candidate.id,
     narration_role: resolveNarrationRole(candidate, index),
@@ -34,6 +55,7 @@ export function sampleNarrativePath(input: {
   return {
     nodes,
     alternativesCount: Math.max(0, valid.length - selected.length),
+    relations,
   }
 }
 
@@ -51,8 +73,7 @@ function resolveNarrationRole(candidate: RegionCandidate, index: number): PathNa
 
 function buildTransitionReason(previous: RegionCandidate | null, current: RegionCandidate): string {
   if (!previous) return '从当前视野中最有代表性的区域开始讲起。'
-  if (previous.role !== current.role) return `从${previous.display_name}顺着相邻空间转到${current.display_name}，切换到另一类空间角色。`
-  return `沿着当前视野的邻近片区继续展开到${current.display_name}。`
+  return buildRegionRelation(previous, current).reason
 }
 
 function pickNearestNextCandidate(selected: RegionCandidate[], pool: RegionCandidate[]): number {
@@ -64,6 +85,7 @@ function pickNearestNextCandidate(selected: RegionCandidate[], pool: RegionCandi
     const score = spatialDistanceScore(previous, candidate)
       + (previous.role === candidate.role ? 0.0002 : 0)
       + (avoidRole && candidate.role === avoidRole ? 0.0012 : 0)
+      - buildRegionRelation(previous, candidate).strength * 0.00008
       - candidate.score * 0.00005
     if (score < bestScore) {
       bestScore = score
