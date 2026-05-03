@@ -21,6 +21,7 @@
       <div class="topbar-actions">
         <button class="action-btn" title="分享"><span v-html="ICONS.share" /><span>分享</span></button>
         <button class="action-btn" title="收藏"><span v-html="ICONS.bookmark" /><span>收藏</span></button>
+        <button v-if="showDeveloperPanel" class="action-btn" title="开发调试" @click="developerPanelOpen = !developerPanelOpen"><span>DEV</span><span>{{ developerPanelOpen ? '隐藏调试' : '显示调试' }}</span></button>
         <button class="action-btn" title="设置"><span v-html="ICONS.settings" /><span>设置</span></button>
       </div>
     </header>
@@ -272,20 +273,35 @@
                   :href="source.url"
                   target="_blank"
                   rel="noreferrer"
-                  :title="source.title"
+                  :title="sourceTooltipText(source)"
+                  @mouseenter="hoveredSourceIndex = i"
+                  @mouseleave="hoveredSourceIndex = null"
                 >{{ i + 1 }}</a>
               </template>
               <span class="cursor" v-if="typing">▏</span>
             </p>
+            <div v-if="!typing && hoveredChapterSource" class="source-popover">
+              <div class="source-popover-head">
+                <span>{{ sourceQualityLabel(hoveredChapterSource.quality) }}</span>
+                <strong>{{ sourceDomain(hoveredChapterSource.url) }}</strong>
+              </div>
+              <div class="source-popover-title">{{ hoveredChapterSource.title }}</div>
+              <p>{{ hoveredChapterSource.snippet || '该来源提供当前章节的网页参考，可点击打开查看原文。' }}</p>
+            </div>
             <div v-if="!typing && activeChapterSources.length" class="source-list">
               <a
                 v-for="(source, i) in activeChapterSources"
                 :key="`source-${source.url}-${i}`"
+                class="source-item"
                 :href="source.url"
                 target="_blank"
                 rel="noreferrer"
+                :title="sourceTooltipText(source)"
+                @mouseenter="hoveredSourceIndex = i"
+                @mouseleave="hoveredSourceIndex = null"
               >
-                <sup>{{ i + 1 }}</sup>{{ source.title }}
+                <span class="source-item-title"><sup>{{ i + 1 }}</sup>{{ source.title }}</span>
+                <span v-if="source.snippet" class="source-summary">{{ source.snippet }}</span>
               </a>
             </div>
           </div>
@@ -336,6 +352,7 @@
               {{ analysisStatus === 'analyzing' ? '分析中，请稍候' : playing ? '暂停解说' : '开始解说' }}
               <span v-html="playing ? ICONS.pause : ICONS.play" />
             </button>
+            <div class="playback-hint">{{ playbackHint }}</div>
           </div>
         </section>
 
@@ -353,6 +370,27 @@
           <div class="ctx-hint">
             <span class="ctx-bullet" />
             已结合当前上下文生成解说，每次生成结果可能不同。
+          </div>
+        </section>
+
+        <section v-if="showDeveloperPanel && developerPanelOpen" class="panel-card dev-panel">
+          <div class="card-head">
+            <span class="card-title">开发调试面板</span>
+            <button class="mini-link" type="button" @click="copyDebugSnapshot">复制快照</button>
+          </div>
+          <ul class="dev-summary-list">
+            <li v-for="item in debugSummaryItems" :key="item.key">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.summary }}</strong>
+            </li>
+          </ul>
+          <details v-for="item in debugDetailItems" :key="`detail-${item.key}`" class="dev-detail">
+            <summary>{{ item.label }}</summary>
+            <pre>{{ item.detail }}</pre>
+          </details>
+          <div class="dev-actions">
+            <button class="ghost-btn" type="button" @click="analyzeCurrentViewport">重放当前视野</button>
+            <button class="ghost-btn" type="button" @click="copyGoldenViewportPayload">复制回放参数</button>
           </div>
         </section>
       </aside>
@@ -448,6 +486,7 @@ import { adaptNarrativeResponse } from './narrative/narrativeResponseAdapter'
 import type {
   NarrativeMode as ChatMode,
   NarrativeResponse,
+  NarrativeChapter,
   NarrativePoi,
   NarrativeRegion,
   NarrativeUiSettings,
@@ -455,6 +494,9 @@ import type {
   PathNarrationRole,
   VisualTier
 } from './narrative/types'
+
+type ChapterSourceView = NonNullable<NarrativeChapter['web_sources']>[number]
+type PlaybackState = 'idle' | 'prepared' | 'auto_started' | 'manual_started' | 'paused' | 'completed'
 
 const INITIAL_VIEWPORT: ViewportBBox = {
   west: 114.278,
@@ -538,8 +580,12 @@ const narrative = ref<NarrativeResponse>(EMPTY_NARRATIVE_RESPONSE)
 const analysisStatus = ref<'preset' | 'analyzing' | 'ready' | 'error'>('preset')
 const analysisError = ref('')
 const enrichmentStatus = ref<'idle' | 'pending' | 'running' | 'completed' | 'failed'>('idle')
+const developerPanelOpen = ref(false)
+const hoveredSourceIndex = ref<number | null>(null)
+const playbackState = ref<PlaybackState>('idle')
 let enrichmentPollToken = 0
 const canNarrate = computed(() => analysisStatus.value === 'ready' && displayPathNodes.value.length > 0)
+const showDeveloperPanel = computed(() => import.meta.env.DEV && Boolean(narrative.value.debug))
 const narrativeSourceLabel = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在分析'
   if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充资料'
@@ -556,12 +602,12 @@ const displayChapters = computed(() => displayModel.value.chapters)
 const displayRegions = computed(() => displayModel.value.regions)
 const displayAllRenderablePois = computed(() => displayModel.value.allRenderablePois)
 const tierStats = computed(() => displayModel.value.tierStats)
-const activeChapterSources = computed(() => {
+const activeChapterSources = computed<ChapterSourceView[]>(() => {
   const chapter = displayChapters.value[activeStepIndex.value]
-  const sources = chapter?.web_sources?.length
-    ? chapter.web_sources
+  const sources: ChapterSourceView[] = chapter?.web_sources?.length
+    ? chapter.web_sources.map((source) => ({ ...source }))
     : chapter?.web_source
-      ? [chapter.web_source]
+      ? [{ title: chapter.web_source.title, url: chapter.web_source.url }]
       : []
   const seen = new Set<string>()
   return sources.filter((source) => {
@@ -569,6 +615,50 @@ const activeChapterSources = computed(() => {
     seen.add(source.url)
     return true
   }).slice(0, 3)
+})
+const hoveredChapterSource = computed(() => {
+  const index = hoveredSourceIndex.value
+  return typeof index === 'number' ? activeChapterSources.value[index] : null
+})
+const playbackHint = computed(() => {
+  if (analysisStatus.value === 'analyzing') return '正在生成解说路径，完成后会按你的自动解说设置处理。'
+  if (!canNarrate.value) return '分析当前视野后，可以播放逐段解说。'
+  if (playing.value) return ui.autoNarrate ? '正在自动播放，章节会按顺序推进。' : '正在播放当前章节，自动推进已关闭。'
+  if (playbackState.value === 'auto_started') return '已按自动解说设置启动，可随时暂停或跳转。'
+  if (playbackState.value === 'paused') return '解说已暂停，点击开始可从当前章节继续。'
+  if (playbackState.value === 'completed') return '本轮解说已结束，可重新播放或选择章节回看。'
+  return ui.autoNarrate ? '分析完成后会自动开始解说。' : '分析完成后会停在第一章，点击开始再播放。'
+})
+const debugSummaryItems = computed(() => {
+  const debug = narrative.value.debug
+  if (!debug) return []
+  return [
+    { key: 'recall', label: '召回', summary: summarizeDebugValue(debug.recall) },
+    { key: 'candidates', label: '候选', summary: summarizeDebugValue(debug.candidates) },
+    { key: 'lod', label: '尺度', summary: summarizeDebugValue(debug.lod) },
+    { key: 'path', label: '路径', summary: summarizeDebugValue(debug.path) },
+    { key: 'facts', label: '事实', summary: summarizeDebugValue(debug.facts) },
+    { key: 'web_facts', label: '网页事实', summary: summarizeDebugValue(debug.web_facts) },
+    { key: 'golden', label: '回放', summary: `${displayPathNodes.value.length} 个章节 / ${displayRegions.value.length} 个片区` }
+  ]
+})
+const debugDetailItems = computed(() => {
+  const debug = narrative.value.debug
+  if (!debug) return []
+  const replayPayload = {
+    viewport: narrative.value.viewport,
+    tone: ui.tonePreset,
+    user_context: narrative.value.user_context
+  }
+  return [
+    { key: 'recall', label: 'Recall', value: debug.recall },
+    { key: 'candidates', label: 'Candidates', value: debug.candidates },
+    { key: 'lod', label: 'LOD', value: debug.lod },
+    { key: 'path', label: 'Path', value: debug.path },
+    { key: 'facts', label: 'Facts', value: debug.facts },
+    { key: 'web_facts', label: 'Web Facts', value: debug.web_facts },
+    { key: 'golden', label: 'Golden 回放参数', value: replayPayload }
+  ].map((item) => ({ key: item.key, label: item.label, detail: formatDebugValue(item.value) }))
 })
 const ui = reactive<NarrativeUiSettings>({ ...defaultUiSettings })
 const mode = ref<ChatMode>('explore')
@@ -648,6 +738,81 @@ function flyToRegionById(regionId: string) {
     zoom: 15.5,
     duration: 900
   })
+}
+
+function sourceQualityLabel(quality?: ChapterSourceView['quality']): string {
+  if (quality === 'official') return '官方来源'
+  if (quality === 'encyclopedia') return '百科资料'
+  if (quality === 'media') return '媒体报道'
+  return '网页来源'
+}
+
+function sourceDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./u, '')
+  } catch {
+    return '来源链接'
+  }
+}
+
+function sourceTooltipText(source: ChapterSourceView): string {
+  return [source.title, source.snippet].filter(Boolean).join('\n')
+}
+
+function summarizeDebugValue(value: unknown): string {
+  if (value === null || value === undefined) return '无数据'
+  if (Array.isArray(value)) return `${value.length} 项`
+  if (typeof value !== 'object') return String(value)
+  const record = value as Record<string, unknown>
+  const parts = Object.entries(record)
+    .filter(([, item]) => typeof item === 'number' || typeof item === 'string' || typeof item === 'boolean')
+    .slice(0, 3)
+    .map(([key, item]) => `${key}: ${String(item)}`)
+  return parts.length ? parts.join(' / ') : `${Object.keys(record).length} 个字段`
+}
+
+function formatDebugValue(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function goldenViewportPayload() {
+  return {
+    viewport: narrative.value.viewport,
+    tone: ui.tonePreset,
+    debug: true,
+    enrichment_mode: 'async',
+    user_context: narrative.value.user_context
+  }
+}
+
+async function copyDebugSnapshot() {
+  await copyTextToClipboard(formatDebugValue({
+    debug: narrative.value.debug,
+    replay: goldenViewportPayload()
+  }))
+}
+
+async function copyGoldenViewportPayload() {
+  await copyTextToClipboard(formatDebugValue(goldenViewportPayload()))
 }
 
 // AI 助手抽屉开关（fab 在 .map-stage 内 / 抽屉跨 center + right）
@@ -808,7 +973,7 @@ function startProgress() {
     const total = totalDurationMs.value
     if (elapsedMs.value >= total) {
       elapsedMs.value = total
-      stopAll()
+      stopAll('completed')
     }
   }, 100)
 }
@@ -820,51 +985,72 @@ function stopProgress() {
   }
 }
 
-function applyStep(index: number, options: { fly?: boolean } = {}) {
+function showFullChapterText(index: number) {
+  stopTyping()
+  const chapter = displayChapters.value[index]
+  typedText.value = chapter?.text ?? ''
+  typing.value = false
+  waveActive.value = chapter?.text ? waveformHeights.length : 0
+}
+
+function applyStep(index: number, options: { fly?: boolean; narrate?: boolean } = {}) {
   if (index < 0 || index >= displayChapters.value.length) return
   activeStepIndex.value = index
-  // 累计上一步的耗时基线
   let acc = 0
   for (let i = 0; i < index; i++) {
     acc += displayChapters.value[i]?.length_ms ?? 8000
   }
   stepStartElapsedMs.value = acc
   elapsedMs.value = acc
+  hoveredSourceIndex.value = null
+  clearAdvanceTimer()
   if (options.fly !== false) flyToActiveRegion()
-  startTyping()
+  if (options.narrate === false) {
+    showFullChapterText(index)
+  } else {
+    startTyping()
+  }
   if (playing.value && ui.autoNarrate) {
     const ms = displayChapters.value[index]?.length_ms ?? 8000
-    clearAdvanceTimer()
     advanceTimer = setTimeout(() => {
       if (index < displayPathNodes.value.length - 1) {
         applyStep(index + 1)
       } else {
-        stopAll()
+        stopAll('completed')
       }
     }, ms)
   }
+}
+
+function startPlayback(state: Extract<PlaybackState, 'auto_started' | 'manual_started'>, index = activeStepIndex.value) {
+  if (!canNarrate.value) return
+  playing.value = true
+  playbackState.value = state
+  applyStep(index)
+  startProgress()
 }
 
 function togglePlay() {
   if (!canNarrate.value) return
   if (playing.value) {
     playing.value = false
+    playbackState.value = 'paused'
     stopTyping()
     typing.value = false
     clearAdvanceTimer()
+    stopProgress()
     return
   }
-  playing.value = true
-  applyStep(activeStepIndex.value)
-  startProgress()
+  startPlayback('manual_started')
 }
 
-function stopAll() {
+function stopAll(nextState: PlaybackState = 'idle') {
   playing.value = false
   stopTyping()
   typing.value = false
   clearAdvanceTimer()
   stopProgress()
+  playbackState.value = nextState
 }
 
 function goToStep(i: number) {
@@ -909,7 +1095,18 @@ function restartNarration() {
   if (!canNarrate.value) return
   stopAll()
   activeStepIndex.value = 0
-  applyStep(0)
+  startPlayback('manual_started', 0)
+}
+
+function prepareNarrationAfterAnalysis() {
+  if (!canNarrate.value) return
+  activeStepIndex.value = 0
+  if (ui.autoNarrate) {
+    startPlayback('auto_started', 0)
+    return
+  }
+  playbackState.value = 'prepared'
+  applyStep(0, { fly: false, narrate: false })
 }
 
 function regionGradient(i: number): string {
@@ -1345,9 +1542,8 @@ async function analyzeCurrentViewport() {
     stopAll()
     narrative.value = response
     analysisStatus.value = 'ready'
-    activeStepIndex.value = 0
     refreshMapLayersAfterNarrativeChange()
-    applyStep(0, { fly: false })
+    prepareNarrationAfterAnalysis()
     if (response.enrichment?.job_id) {
       pollNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken)
     }
@@ -1371,9 +1567,10 @@ async function pollNarrativeEnrichment(jobId: string, token: number) {
       const job = await fetchNarrativeEnrichmentJob(jobId)
       enrichmentStatus.value = job.status === 'pending' ? 'pending' : job.status === 'running' ? 'running' : job.status === 'completed' ? 'completed' : 'failed'
       if (job.status === 'completed' && job.response) {
+        const wasPlaying = playing.value
         narrative.value = job.response
         refreshMapLayersAfterNarrativeChange()
-        applyStep(activeStepIndex.value, { fly: false })
+        applyStep(activeStepIndex.value, { fly: false, narrate: wasPlaying })
         return
       }
       if (job.status === 'failed') return
@@ -2158,11 +2355,55 @@ const ICONS = {
   padding-top: 9px;
   border-top: 1px solid rgba(148,163,184,0.16);
 }
+.source-popover {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(15,23,42,0.86);
+  border: 1px solid rgba(147,197,253,0.25);
+}
+.source-popover-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  color: #93c5fd;
+}
+.source-popover-head strong {
+  color: var(--txt-mute);
+  font-weight: 500;
+}
+.source-popover-title {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.source-popover p {
+  margin: 5px 0 0;
+  color: var(--txt-mute);
+  font-size: 11px;
+  line-height: 1.55;
+}
 .source-list a {
   color: var(--txt-mute);
   font-size: 11px;
   line-height: 1.4;
   text-decoration: none;
+}
+.source-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+.source-item:hover {
+  background: rgba(59,130,246,0.10);
+}
+.source-item-title {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2171,6 +2412,15 @@ const ICONS = {
 .source-list sup {
   margin-right: 5px;
   color: #93c5fd;
+}
+.source-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--txt-faint);
+  font-size: 10.5px;
+  line-height: 1.45;
 }
 .cursor {
   color: var(--primary);
@@ -2253,6 +2503,12 @@ const ICONS = {
   margin-top: 4px;
 }
 .play-btn { margin-top: 12px; }
+.playback-hint {
+  margin-top: 8px;
+  color: var(--txt-mute);
+  font-size: 11px;
+  line-height: 1.45;
+}
 
 /* 上下文 */
 .ctx-list { list-style: none; padding: 0; margin: 0; }
@@ -2284,6 +2540,68 @@ const ICONS = {
   width: 8px; height: 8px;
   background: var(--primary);
   border-radius: 50%;
+}
+.dev-panel {
+  border-color: rgba(59,130,246,0.35);
+}
+.mini-link {
+  border: 0;
+  background: transparent;
+  color: #93c5fd;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mini-link:hover { color: #fff; }
+.dev-summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  display: grid;
+  gap: 6px;
+}
+.dev-summary-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--txt-mute);
+  font-size: 11.5px;
+}
+.dev-summary-list strong {
+  color: #fff;
+  font-weight: 500;
+  text-align: right;
+}
+.dev-detail {
+  margin-top: 6px;
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  background: var(--bg-card);
+}
+.dev-detail summary {
+  padding: 7px 9px;
+  cursor: pointer;
+  color: #bfdbfe;
+  font-size: 11.5px;
+}
+.dev-detail pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 9px;
+  border-top: 1px solid var(--bd);
+  color: var(--txt-mute);
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.dev-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 10px;
 }
 
 /* ============================================================================

@@ -148,6 +148,7 @@ owner: GeoLoom Narrative Team
 - DeepSeek 单次搜索在实测中约 11-16 秒，异步化后首包实测约 1.1 秒；后台完成后武汉样例 viewport 仍可回填 9 条 `web_sources`。
 - `llmNarrator.ts` 已从 all-or-nothing 校验升级为按 `region_id` 对齐的部分采纳：可用章节采用 LLM 文案，异常章节单独 fallback 到模板。
 - `debug.web_facts.items[].error` 已能暴露 timeout / upstream failure，`debug.llm_narrator.partial_fallback_count` 可观察按章 fallback 数。
+- DeepSeek Search 已支持 primary/fallback endpoint：优先使用 `DEEPSEEK_SEARCH_PRIMARY_*`（当前本地配置为 `https://ciyuanshen.top/v1` + `deepseek-chat-search`），失败后回退到 `DEEPSEEK_SEARCH_*` / `NEWAPI_SEARCH_*`。
 
 ## 6. 阶段 4.5：调试面板与用户面板分离
 
@@ -171,6 +172,12 @@ owner: GeoLoom Narrative Team
 - web_facts
 - golden viewport 回放
 
+当前状态（2026-05-03）：
+
+- 已完成第一轮 UI 分离：用户面只保留主题、章节顺序、上下文、播放状态、引用来源等产品信息。
+- 开发调试入口仅在 `import.meta.env.DEV` 且响应包含 `debug` 时展示，集中显示 recall、candidates、lod、path、facts、web_facts 与 golden viewport 回放参数。
+- 新增复制调试快照和复制回放参数能力，便于复现 golden viewport；用户面不直接暴露 `debug`、`seed`、`score`、`weight` 等内部字段。
+
 ## 7. 阶段 4.6：UI 播放与交互 polish
 
 已完成：
@@ -178,11 +185,11 @@ owner: GeoLoom Narrative Team
 - 删除左侧透明度调节。
 - 尺度滑杆真实控制地图 zoom。
 - 重心策略按钮影响当前地图聚焦。
+- 分析完成后的播放启动策略：自动解说开启时自动播放，关闭时停在第一章并展示完整文案，可手动开始。
+- 来源引用 hover 与摘要展示：章节角标和来源列表均可展示来源类型、域名、标题与摘要。
 
 待打磨：
 
-- 分析完成后的播放启动策略。
-- 来源引用 hover 与摘要展示。
 - 片区光晕层级与地图底图融合。
 - 时间线跳转手感。
 - Assistant 打断、暂停、跳转、重规划。
@@ -194,4 +201,4 @@ owner: GeoLoom Narrative Team
 3. **Narrator LLM**：结构稳定后再做自然文案。（已完成第一轮并完成 DeepSeek 实测）
 4. **DeepSeek 异步缓存**：补来源质量与速度。（已完成第一轮：async job + cache + 前端轮询）
 5. **DeepSeek 候选地名补强**：在不改变主链结构的前提下，作为低优先级命名候选进入人工可解释 debug。（已完成 debug-only MVP）
-6. **Debug 面板与 UI polish**：最后集中打磨体验。
+6. **Debug 面板与 UI polish**：Debug 分离和播放 / 引用第一轮已完成，下一步继续光晕融合、时间线手感和 Assistant 控制。

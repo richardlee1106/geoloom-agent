@@ -178,11 +178,23 @@ if (tavilyApiKeys.length > 0) {
 const deepSeekSearchBaseUrl = process.env.DEEPSEEK_SEARCH_BASE_URL || process.env.NEWAPI_SEARCH_BASE_URL
 const deepSeekSearchApiKey = process.env.DEEPSEEK_SEARCH_API_KEY || process.env.NEWAPI_SEARCH_API_KEY
 const deepSeekSearchModel = process.env.DEEPSEEK_SEARCH_MODEL || process.env.NEWAPI_SEARCH_MODEL
-if (deepSeekSearchBaseUrl && deepSeekSearchApiKey && deepSeekSearchModel) {
-  registry.register(createDeepSeekSearchSkill({
+const deepSeekSearchEndpoints = [
+  {
+    label: 'primary',
+    baseUrl: process.env.DEEPSEEK_SEARCH_PRIMARY_BASE_URL,
+    apiKey: process.env.DEEPSEEK_SEARCH_PRIMARY_API_KEY,
+    model: process.env.DEEPSEEK_SEARCH_PRIMARY_MODEL,
+  },
+  {
+    label: 'default',
     baseUrl: deepSeekSearchBaseUrl,
     apiKey: deepSeekSearchApiKey,
     model: deepSeekSearchModel,
+  },
+]
+if (deepSeekSearchEndpoints.some((endpoint) => endpoint.baseUrl && endpoint.apiKey && endpoint.model)) {
+  registry.register(createDeepSeekSearchSkill({
+    endpoints: deepSeekSearchEndpoints,
     timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '18000'),
   }))
 }

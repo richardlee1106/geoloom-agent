@@ -18,11 +18,26 @@ interface DeepSeekSearchData {
   model: string
 }
 
+export interface DeepSeekSearchEndpointOptions {
+  label?: string
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+}
+
+interface DeepSeekSearchEndpoint {
+  label: string
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
 export interface DeepSeekSearchSkillOptions {
   baseUrl?: string
   apiKey?: string
   model?: string
   timeoutMs?: number
+  endpoints?: DeepSeekSearchEndpointOptions[]
 }
 
 const CACHE_TTL_MS = 10 * 60 * 1000
@@ -35,8 +50,8 @@ function normalizeBaseUrl(value: unknown): string {
   return raw.endsWith('/v1') ? raw : `${raw}/v1`
 }
 
-function cacheKey(query: string, model: string): string {
-  return crypto.createHash('md5').update(`${model}||${query}`).digest('hex')
+function cacheKey(query: string, endpoint: DeepSeekSearchEndpoint): string {
+  return crypto.createHash('md5').update(`${endpoint.baseUrl}||${endpoint.model}||${query}`).digest('hex')
 }
 
 function getCached(key: string): DeepSeekSearchData | undefined {
@@ -56,6 +71,51 @@ function setCached(key: string, data: DeepSeekSearchData) {
     }
   }
   queryCache.set(key, { data, ts: Date.now() })
+}
+
+function resolveEndpoint(input: DeepSeekSearchEndpointOptions, label: string): DeepSeekSearchEndpoint | null {
+  const baseUrl = normalizeBaseUrl(input.baseUrl)
+  const apiKey = String(input.apiKey || '').trim()
+  const model = String(input.model || '').trim()
+  if (!baseUrl || !apiKey || !model) return null
+  return {
+    label: input.label || label,
+    baseUrl,
+    apiKey,
+    model,
+  }
+}
+
+function uniqueEndpoints(endpoints: DeepSeekSearchEndpoint[]): DeepSeekSearchEndpoint[] {
+  const seen = new Set<string>()
+  const unique: DeepSeekSearchEndpoint[] = []
+  for (const endpoint of endpoints) {
+    const key = `${endpoint.baseUrl}||${endpoint.apiKey}||${endpoint.model}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(endpoint)
+  }
+  return unique
+}
+
+function resolveSearchEndpoints(options: DeepSeekSearchSkillOptions): DeepSeekSearchEndpoint[] {
+  const configured = options.endpoints?.length
+    ? options.endpoints
+    : [
+      {
+        label: 'primary',
+        baseUrl: process.env.DEEPSEEK_SEARCH_PRIMARY_BASE_URL,
+        apiKey: process.env.DEEPSEEK_SEARCH_PRIMARY_API_KEY,
+        model: process.env.DEEPSEEK_SEARCH_PRIMARY_MODEL,
+      },
+      {
+        label: 'default',
+        baseUrl: options.baseUrl || process.env.DEEPSEEK_SEARCH_BASE_URL || process.env.NEWAPI_SEARCH_BASE_URL,
+        apiKey: options.apiKey || process.env.DEEPSEEK_SEARCH_API_KEY || process.env.NEWAPI_SEARCH_API_KEY,
+        model: options.model || process.env.DEEPSEEK_SEARCH_MODEL || process.env.NEWAPI_SEARCH_MODEL,
+      },
+    ]
+  return uniqueEndpoints(configured.map((endpoint, index) => resolveEndpoint(endpoint, `endpoint_${index + 1}`)).filter((endpoint): endpoint is DeepSeekSearchEndpoint => Boolean(endpoint)))
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
@@ -159,9 +219,7 @@ async function requestDeepSeekSearch(input: {
 }
 
 export function createDeepSeekSearchSkill(options: DeepSeekSearchSkillOptions = {}): SkillDefinition {
-  const baseUrl = normalizeBaseUrl(options.baseUrl || process.env.DEEPSEEK_SEARCH_BASE_URL || process.env.NEWAPI_SEARCH_BASE_URL)
-  const apiKey = String(options.apiKey || process.env.DEEPSEEK_SEARCH_API_KEY || process.env.NEWAPI_SEARCH_API_KEY || '').trim()
-  const model = String(options.model || process.env.DEEPSEEK_SEARCH_MODEL || process.env.NEWAPI_SEARCH_MODEL || '').trim()
+  const endpoints = resolveSearchEndpoints(options)
   const timeoutMs = Number(options.timeoutMs || process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '15000')
 
   return {
@@ -193,14 +251,19 @@ export function createDeepSeekSearchSkill(options: DeepSeekSearchSkillOptions = 
       },
     },
     async getStatus() {
+      const primary = endpoints[0]
       return {
         deepseek_search: {
           name: 'deepseek_search',
-          ready: Boolean(baseUrl && apiKey && model),
-          degraded: !(baseUrl && apiKey && model),
-          mode: 'remote' as const,
-          reason: baseUrl && apiKey && model ? undefined : 'missing_deepseek_search_env',
-          details: { baseUrl: baseUrl || null, model: model || null },
+          ready: endpoints.length > 0,
+          degraded: endpoints.length === 0,
+          mode: endpoints.length > 0 ? 'remote' as const : 'unconfigured' as const,
+          reason: endpoints.length > 0 ? undefined : 'missing_deepseek_search_env',
+          target: primary?.baseUrl || null,
+          details: {
+            primary: primary ? { label: primary.label, baseUrl: primary.baseUrl, model: primary.model } : null,
+            fallbackCount: Math.max(endpoints.length - 1, 0),
+          },
         },
       }
     },
@@ -209,7 +272,7 @@ export function createDeepSeekSearchSkill(options: DeepSeekSearchSkillOptions = 
       if (action !== 'search_web') {
         return { ok: false, error: { code: 'unknown_action', message: `未知 action: ${action}` }, meta: { action, audited: false, latencyMs: Date.now() - start } }
       }
-      if (!baseUrl || !apiKey || !model) {
+      if (endpoints.length === 0) {
         return { ok: false, error: { code: 'missing_deepseek_search_env', message: 'DEEPSEEK_SEARCH_BASE_URL / DEEPSEEK_SEARCH_API_KEY / DEEPSEEK_SEARCH_MODEL 未完整配置' }, meta: { action, audited: false, latencyMs: Date.now() - start } }
       }
       const raw = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
@@ -220,18 +283,23 @@ export function createDeepSeekSearchSkill(options: DeepSeekSearchSkillOptions = 
         return { ok: false, error: { code: 'missing_query', message: '缺少 query 参数' }, meta: { action, audited: false, latencyMs: Date.now() - start } }
       }
       const maxResults = Math.max(1, Math.min(Number(raw.max_results || 5), 10))
-      const key = cacheKey(query, model)
-      const cached = getCached(key)
-      if (cached) {
-        return { ok: true, data: cached, meta: { action, audited: false, fromCache: true, latencyMs: Date.now() - start } }
+      const failures: Array<{ label: string; baseUrl: string; model: string; message: string }> = []
+      for (const endpoint of endpoints) {
+        const key = cacheKey(query, endpoint)
+        const cached = getCached(key)
+        if (cached) {
+          return { ok: true, data: cached, meta: { action, audited: false, fromCache: true, endpointLabel: endpoint.label, endpointBaseUrl: endpoint.baseUrl, endpointModel: endpoint.model, latencyMs: Date.now() - start } }
+        }
+        try {
+          const data = await requestDeepSeekSearch({ baseUrl: endpoint.baseUrl, apiKey: endpoint.apiKey, model: endpoint.model, query, maxResults, timeoutMs })
+          if (data.results.length > 0) setCached(key, data)
+          return { ok: true, data, meta: { action, audited: true, endpointLabel: endpoint.label, endpointBaseUrl: endpoint.baseUrl, endpointModel: endpoint.model, fallbackAttempts: failures.length, latencyMs: Date.now() - start, resultCount: data.results.length } }
+        } catch (error) {
+          failures.push({ label: endpoint.label, baseUrl: endpoint.baseUrl, model: endpoint.model, message: error instanceof Error ? error.message : String(error) })
+        }
       }
-      try {
-        const data = await requestDeepSeekSearch({ baseUrl, apiKey, model, query, maxResults, timeoutMs })
-        if (data.results.length > 0) setCached(key, data)
-        return { ok: true, data, meta: { action, audited: true, latencyMs: Date.now() - start, resultCount: data.results.length } }
-      } catch (error) {
-        return { ok: false, error: { code: 'deepseek_search_failed', message: error instanceof Error ? error.message : String(error) }, meta: { action, audited: false, latencyMs: Date.now() - start } }
-      }
+      const message = failures.map((failure) => `${failure.label}@${failure.baseUrl}: ${failure.message}`).join(' | ')
+      return { ok: false, error: { code: 'deepseek_search_failed', message, details: failures }, meta: { action, audited: false, latencyMs: Date.now() - start, fallbackAttempts: failures.length } }
     },
   }
 }
