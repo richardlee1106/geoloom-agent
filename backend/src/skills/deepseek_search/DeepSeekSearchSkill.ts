@@ -178,11 +178,12 @@ async function requestDeepSeekSearch(input: {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), input.timeoutMs)
   try {
+    const sanitizedApiKey = input.apiKey.replace(/[^\x20-\x7E]/gu, '')
     const response = await fetch(`${input.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${input.apiKey}`,
+        Authorization: `Bearer ${sanitizedApiKey}`,
       },
       body: JSON.stringify({
         model: input.model,

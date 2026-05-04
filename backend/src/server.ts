@@ -191,6 +191,12 @@ const deepSeekSearchEndpoints = [
     apiKey: deepSeekSearchApiKey,
     model: deepSeekSearchModel,
   },
+  {
+    label: 'narrative_llm',
+    baseUrl: process.env.NARRATIVE_LLM_BASE_URL,
+    apiKey: process.env.NARRATIVE_LLM_API_KEY,
+    model: process.env.NARRATIVE_LLM_MODEL,
+  },
 ]
 if (deepSeekSearchEndpoints.some((endpoint) => endpoint.baseUrl && endpoint.apiKey && endpoint.model)) {
   registry.register(createDeepSeekSearchSkill({
