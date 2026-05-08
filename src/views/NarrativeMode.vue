@@ -12,26 +12,46 @@
           v-for="m in modes"
           :key="m.key"
           :class="['mode-btn', { active: mode === m.key }]"
-          @click="mode = m.key"
+          @click="switchMode(m.key)"
         >
           <span class="mode-icon" v-html="m.icon" />
           <span>{{ m.label }}</span>
         </button>
       </nav>
       <div class="topbar-actions">
+        <!--
         <button class="action-btn" title="分享"><span v-html="ICONS.share" /><span>分享</span></button>
         <button class="action-btn" title="收藏"><span v-html="ICONS.bookmark" /><span>收藏</span></button>
+        -->
         <button v-if="showDeveloperPanel" class="action-btn" title="开发调试" @click="developerPanelOpen = !developerPanelOpen"><span>DEV</span><span>{{ developerPanelOpen ? '隐藏调试' : '显示调试' }}</span></button>
+        <!--
         <button class="action-btn" title="设置"><span v-html="ICONS.settings" /><span>设置</span></button>
+        -->
       </div>
     </header>
 
     <!-- 中部主体：左 + 中 + 右 -->
-    <div class="main-grid">
+    <div :class="['main-grid', `mode-${mode}`]">
       <!-- 左面板 -->
-      <aside class="left-panel">
+      <aside v-if="mode === 'explore'" class="left-panel explore-tools-panel">
+        <nav class="explore-tool-nav" aria-label="探索工具导航">
+          <button
+            v-for="tool in exploreToolTabs"
+            :key="tool.key"
+            :class="['explore-tool-tab', { active: activeExploreTool === tool.key }]"
+            type="button"
+            @click="activeExploreTool = tool.key"
+          >
+            <span class="tool-tab-index">{{ tool.index }}</span>
+            <span class="tool-tab-copy">
+              <strong>{{ tool.label }}</strong>
+              <span>{{ tool.hint }}</span>
+            </span>
+          </button>
+        </nav>
+        <div class="explore-tool-shell">
         <!-- 1. 片区筛选 -->
-        <section class="panel-card">
+        <section v-show="activeExploreTool === 'scope'" class="panel-card explore-tool-card">
           <div class="card-head">
             <span class="card-index">1</span>
             <span class="card-title">片区筛选</span>
@@ -47,6 +67,47 @@
               <button class="ghost-btn"><span v-html="ICONS.draw" /><span>绘制 AOI</span></button>
               <button class="ghost-btn"><span v-html="ICONS.upload" /><span>上传文件</span></button>
             </div>
+          </div>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>探索主题</span>
+              <strong>{{ explorationThemeOptions.find((o) => o.key === exploreSettings.theme)?.label }}</strong>
+            </div>
+            <div class="option-grid">
+              <button
+                v-for="o in explorationThemeOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.theme === o.key }]"
+                type="button"
+                @click="exploreSettings.theme = o.key"
+              >
+                <strong>{{ o.label }}</strong>
+                <span>{{ o.hint }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>片区粒度</span>
+              <strong>{{ granularityOptions.find((o) => o.key === exploreSettings.granularity)?.label }}</strong>
+            </div>
+            <div class="option-grid compact">
+              <button
+                v-for="o in granularityOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.granularity === o.key }]"
+                type="button"
+                @click="exploreSettings.granularity = o.key"
+              >{{ o.label }}</button>
+            </div>
+          </div>
+          <div class="explore-param-group">
+            <div class="slider-row">
+              <span class="slider-label">候选数量</span>
+              <span class="slider-value">{{ exploreSettings.candidateCount }}</span>
+            </div>
+            <input class="slider-input" type="range" min="3" max="12" step="1" v-model.number="exploreSettings.candidateCount" />
+            <div class="slider-ticks"><span>精简</span><span>均衡</span><span>展开</span></div>
           </div>
           <div class="region-info">
             <div class="region-info-title">当前片区信息</div>
@@ -68,13 +129,13 @@
             </div>
           </div>
           <div v-if="analysisError" class="analysis-error">{{ analysisError }}</div>
-          <button class="primary-btn" :disabled="analysisStatus === 'analyzing'" @click="analyzeCurrentViewport">
-            {{ analysisStatus === 'analyzing' ? '分析中…' : '分析当前视野' }}
+          <button class="primary-btn" :disabled="analysisStatus === 'analyzing' || !mapStageReady" @click="analyzeCurrentViewport">
+            {{ analysisStatus === 'analyzing' ? '分析中…' : mapStageReady ? '分析当前视野' : '地图加载中…' }}
           </button>
         </section>
 
         <!-- 2. 点剔除与分层 -->
-        <section class="panel-card">
+        <section v-show="activeExploreTool === 'layers'" class="panel-card explore-tool-card">
           <div class="card-head">
             <span class="card-index">2</span>
             <span class="card-title">点剔除与分层</span>
@@ -87,6 +148,36 @@
               <span class="tier-count">{{ tierStats[t.key] || 0 }}</span>
             </li>
           </ul>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>证据严格度</span>
+              <strong>{{ evidenceStrictnessOptions.find((o) => o.key === exploreSettings.evidenceStrictness)?.label }}</strong>
+            </div>
+            <div class="option-grid compact">
+              <button
+                v-for="o in evidenceStrictnessOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.evidenceStrictness === o.key }]"
+                type="button"
+                @click="exploreSettings.evidenceStrictness = o.key"
+              >{{ o.label }}</button>
+            </div>
+          </div>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>多样性强度</span>
+              <strong>{{ diversityOptions.find((o) => o.key === exploreSettings.diversity)?.label }}</strong>
+            </div>
+            <div class="option-grid compact">
+              <button
+                v-for="o in diversityOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.diversity === o.key }]"
+                type="button"
+                @click="exploreSettings.diversity = o.key"
+              >{{ o.label }}</button>
+            </div>
+          </div>
           <div class="slider-row">
             <span class="slider-label">相关性阈值</span>
             <span class="slider-value">{{ ui.relevanceThreshold.toFixed(2) }}</span>
@@ -96,7 +187,7 @@
         </section>
 
         <!-- 4. 尺度与重心 -->
-        <section class="panel-card">
+        <section v-show="activeExploreTool === 'scale'" class="panel-card explore-tool-card">
           <div class="card-head">
             <span class="card-index">4</span>
             <span class="card-title">尺度与重心</span>
@@ -125,115 +216,191 @@
               @click="setCentroidStrategy(o.key)"
             >{{ o.label }}</button>
           </div>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>本地人倾向</span>
+              <strong>{{ localnessOptions.find((o) => o.key === exploreSettings.localness)?.label }}</strong>
+            </div>
+            <div class="option-grid compact">
+              <button
+                v-for="o in localnessOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.localness === o.key }]"
+                type="button"
+                @click="exploreSettings.localness = o.key"
+              >{{ o.label }}</button>
+            </div>
+          </div>
+          <div class="explore-param-group">
+            <div class="param-title-row">
+              <span>网页事实增强</span>
+              <strong>{{ webFactOptions.find((o) => o.key === exploreSettings.webFacts)?.label }}</strong>
+            </div>
+            <div class="option-grid compact">
+              <button
+                v-for="o in webFactOptions"
+                :key="o.key"
+                :class="['option-chip', { active: exploreSettings.webFacts === o.key }]"
+                type="button"
+                @click="exploreSettings.webFacts = o.key"
+              >{{ o.label }}</button>
+            </div>
+          </div>
+          <div class="settings-block">
+            <div class="settings-title">解说设置</div>
+            <div class="settings-row">解说时长</div>
+            <div class="duration-tabs">
+              <button
+                v-for="o in durationPresetOptions"
+                :key="o.key"
+                :class="['duration-tab', { active: ui.durationPreset === o.key }]"
+                @click="ui.durationPreset = o.key"
+              >
+                <strong>{{ o.label }}</strong>
+                <span>{{ o.hint }}</span>
+              </button>
+            </div>
+
+            <div class="settings-row">解说风格</div>
+            <div class="style-row">
+              <select class="select-input" v-model="ui.tonePreset">
+                <option v-for="o in tonePresetOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
+              </select>
+              <button class="ghost-btn" @click="restartNarration"><span v-html="ICONS.dice" /><span>重新播放</span></button>
+            </div>
+          </div>
           <div class="centroid-hint">
             当前重心：{{ activeRegion.display_name }}。调整尺度或重心后，再点击“分析当前视野”刷新叙事。
           </div>
         </section>
+        </div>
       </aside>
 
-      <!-- 中央地图区（2.5D 卫星影像视角） -->
-      <main class="map-stage">
-        <!-- 透视场：rotateX 让底图看起来是航拍倾斜的 -->
-        <div class="map-perspective-deck">
-          <div ref="mapContainerEl" class="map-canvas" :class="`mode-${baseLayerMode}`" />
-        </div>
-        <!-- 远端地平线渐变遮罩，让倾斜后的远端柔和过渡 -->
-        <div class="map-horizon-mask" aria-hidden="true" />
-        <!-- 视图边缘 vignette，加强中心聚焦 -->
-        <div class="map-vignette" aria-hidden="true" />
+      <NarrativeMapStage
+        v-if="mapStageVisible"
+        ref="mapStageRef"
+        :narrative="narrative"
+        :display-regions="displayRegions"
+        :display-all-renderable-pois="displayAllRenderablePois"
+        :relevance-threshold="ui.relevanceThreshold"
+        :viewport-zoom="ui.viewportZoom"
+        :coverage-collapsed="coverageCollapsed"
+        :assistant-open="assistantOpen"
+        :coverage-breakdown="coverageBreakdown"
+        :donut-dash="donutDash"
+        :donut-offsets="donutOffsets"
+        :minimal="mode !== 'explore'"
+        @update:coverage-collapsed="coverageCollapsed = $event"
+        @update:viewport-zoom="ui.viewportZoom = $event"
+        @open-assistant="assistantOpen = true"
+        @ready="mapStageReady = true"
+      />
 
-        <!-- 当前视角覆盖分析（左上叠加，可折叠） -->
-        <div class="coverage-card" :class="{ collapsed: coverageCollapsed }">
-          <div class="coverage-head" @click="coverageCollapsed = !coverageCollapsed">
-            <span>当前视角覆盖分析</span>
-            <div class="coverage-head-actions">
-              <span class="card-help" @click.stop>?</span>
-              <button
-                type="button"
-                class="coverage-toggle"
-                :title="coverageCollapsed ? '展开' : '折叠'"
-                :aria-expanded="!coverageCollapsed"
-                @click.stop="coverageCollapsed = !coverageCollapsed"
-              >
-                <span v-html="coverageCollapsed ? ICONS.chevronDown : ICONS.chevronUp" />
-              </button>
-            </div>
+      <NarrativeMapPlaceholder
+        v-if="!mapStageReady"
+        :assistant-open="assistantOpen"
+        @open-assistant="assistantOpen = true"
+      />
+
+      <section v-if="mode === 'narrate'" :class="['narrate-hud', { active: playing, ready: canNarrate }]">
+        <div class="narrate-command">
+          <div class="hud-copy">
+            <span class="hud-kicker">解说模式</span>
+            <strong>{{ narrativeSourceLabel }}</strong>
+            <span>{{ playbackHint }}</span>
           </div>
-          <div v-show="!coverageCollapsed" class="coverage-body">
-            <svg class="donut" :width="120" :height="120" viewBox="0 0 120 120">
-              <circle cx="60" cy="60" r="46" fill="none" stroke="#1e2742" stroke-width="14" />
-              <circle
-                cx="60" cy="60" r="46" fill="none"
-                stroke="#ef4444" stroke-width="14"
-                :stroke-dasharray="`${donutDash.core} 999`"
-                :stroke-dashoffset="donutOffsets.core"
-                transform="rotate(-90 60 60)"
-              />
-              <circle
-                cx="60" cy="60" r="46" fill="none"
-                stroke="#f59e0b" stroke-width="14"
-                :stroke-dasharray="`${donutDash.surround} 999`"
-                :stroke-dashoffset="donutOffsets.surround"
-                transform="rotate(-90 60 60)"
-              />
-              <circle
-                cx="60" cy="60" r="46" fill="none"
-                stroke="#3b82f6" stroke-width="14"
-                :stroke-dasharray="`${donutDash.others} 999`"
-                :stroke-dashoffset="donutOffsets.others"
-                transform="rotate(-90 60 60)"
-              />
-              <text x="60" y="56" text-anchor="middle" fill="#a3aac9" font-size="11">片区覆盖占比</text>
-              <text x="60" y="78" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">
-                {{ Math.round(coverageBreakdown.core_ratio * 100) }}%
-              </text>
-            </svg>
-            <ul class="coverage-legend">
-              <li><span class="dot core"></span><span>核心片区</span><strong>{{ Math.round(coverageBreakdown.core_ratio * 100) }}%</strong></li>
-              <li><span class="dot strong"></span><span>周边片区</span><strong>{{ Math.round(coverageBreakdown.surrounding_ratio * 100) }}%</strong></li>
-              <li><span class="dot weak"></span><span>其他片区</span><strong>{{ Math.round(coverageBreakdown.others_ratio * 100) }}%</strong></li>
-            </ul>
+          <div class="hud-actions">
+            <button class="primary-btn" :disabled="narratePrimaryDisabled" @click="handleNarratePrimaryAction">
+              {{ narratePrimaryLabel }}
+            </button>
+            <button class="ghost-btn" :disabled="!canNarrate || playbackState === 'step_completed' || playbackState === 'completed'" @click="togglePlay">
+              <span v-html="playing ? ICONS.pause : ICONS.play" />
+              <span>{{ playing ? '暂停' : '播放' }}</span>
+            </button>
           </div>
         </div>
+      </section>
 
-        <!-- 右上地图操作组 -->
-        <div class="map-controls">
-          <button class="map-ctl" title="指南针"><span v-html="ICONS.compass" /></button>
-          <div class="zoom-stack">
-            <button class="map-ctl" @click="zoomIn">+</button>
-            <button class="map-ctl" @click="zoomOut">−</button>
-          </div>
-          <button class="map-ctl active" title="3D">3D</button>
-          <button class="map-ctl" title="跟随"><span v-html="ICONS.locate" /></button>
-          <!-- 图层切换：矢量路网 ↔ 卫星影像（互斥，不叠加） -->
-          <button
-            class="map-ctl layer-toggle"
-            :class="{ active: baseLayerMode === 'satellite' }"
-            :title="baseLayerMode === 'vector' ? '当前：矢量地图，点击切换到卫星影像' : '当前：卫星影像，点击切换到矢量地图'"
-            @click="toggleBaseLayer"
+      <aside v-if="mode === 'narrate'" :class="['narrate-rail', { empty: displayPathNodes.length === 0 }]">
+        <div class="rail-head">
+          <span>解说路径</span>
+          <strong>{{ displayPathNodes.length ? `${activeStepIndex + 1}/${displayPathNodes.length}` : '0/0' }}</strong>
+        </div>
+        <ul v-if="displayPathNodes.length" class="rail-list">
+          <li
+            v-for="(node, i) in displayPathNodes"
+            :key="`narrate-rail-${node.region_id}`"
+            :class="['rail-card', `role-${node.narration_role}`, { active: i === activeStepIndex }]"
+            @click="goToStep(i)"
           >
-            <span v-html="ICONS.layers" />
-            <span class="layer-tag">{{ baseLayerMode === 'vector' ? '矢量' : '影像' }}</span>
-          </button>
+            <span class="rail-index">{{ i + 1 }}</span>
+            <span class="rail-copy">
+              <strong>{{ node.display_name || regionMap[node.region_id]?.display_name || node.region_id }}</strong>
+              <span>{{ pathRoleLabel(node.narration_role) }} · {{ node.chapter_label }}</span>
+            </span>
+            <span class="rail-count">{{ timelineDotsByRegion[node.region_id]?.length || 0 }}</span>
+          </li>
+        </ul>
+        <div v-else class="rail-empty">
+          <strong>等待路线</strong>
+          <span>点击“分析并开始”后展示章节。</span>
         </div>
+      </aside>
 
-        <!-- 比例尺 -->
-        <div class="map-scale">500 m</div>
-
-        <!-- AI 助手触发 fab：仅负责在 canvas 右下角打开抽屉 -->
-        <button
-          v-show="!assistantOpen"
-          class="assistant-fab"
-          type="button"
-          title="AI 助手（Alt+A）"
-          @click="assistantOpen = true"
+      <section v-if="mode === 'narrate' && (canNarrate || typedText || activeChapterSources.length)" class="vertical-narration" @copy.prevent @cut.prevent>
+        <div class="vertical-title">{{ activeRegion.display_name }}</div>
+        <p class="vertical-copy">
+          <span>{{ typedText || '解说已生成，点击播放开始讲述当前视野。' }}</span>
+          <a
+            v-for="(source, i) in activeChapterSources"
+            :key="`vertical-source-${source.url}-${i}`"
+            class="vertical-source-mark"
+            :href="source.url"
+            target="_blank"
+            rel="noreferrer"
+            :title="sourceTooltipText(source)"
+            @mouseenter="hoveredSourceIndex = i"
+            @mouseleave="hoveredSourceIndex = null"
+            @focus="hoveredSourceIndex = i"
+            @blur="hoveredSourceIndex = null"
+          ><sup>{{ i + 1 }}</sup></a>
+          <span v-if="typing" class="vertical-cursor">▏</span>
+        </p>
+        <a
+          v-if="previewedChapterSource"
+          class="vertical-source-preview"
+          :href="previewedChapterSource.url"
+          target="_blank"
+          rel="noreferrer"
+          :title="sourceTooltipText(previewedChapterSource)"
         >
-          <span class="fab-letters">AI</span>
-        </button>
-      </main>
+          <span class="preview-index">{{ previewedChapterSourceIndex + 1 }}</span>
+          <span class="preview-copy">
+            <strong>{{ previewedChapterSource.title }}</strong>
+            <span>{{ sourceQualityLabel(previewedChapterSource.quality) }} · {{ sourceDomain(previewedChapterSource.url) }}</span>
+            <em v-if="previewedChapterSource.snippet">{{ previewedChapterSource.snippet }}</em>
+          </span>
+        </a>
+      </section>
+
+      <section v-if="mode === 'compare'" class="compare-board">
+        <div class="board-kicker">对比模式</div>
+        <h2>多选区空间叙事对比</h2>
+        <p class="board-copy">建议把对比模式做成“绘制多个区域 → 分别生成区域画像 → 横向比较主题、点簇、来源和叙事差异”的工作流。</p>
+        <div class="compare-tools">
+          <button class="ghost-btn" disabled><span v-html="ICONS.draw" /><span>矩形区域</span></button>
+          <button class="ghost-btn" disabled><span v-html="ICONS.draw" /><span>不规则面</span></button>
+          <button class="ghost-btn" disabled><span v-html="ICONS.locate" /><span>圆形范围</span></button>
+        </div>
+        <ul class="compare-ideas">
+          <li>可对比两个商圈的消费点簇强度、业态多样性和 web 来源热度。</li>
+          <li>可对比校园、公园、江滩等区域在不同尺度下的解说重点。</li>
+          <li>可输出“共同点 / 差异点 / 适合讲法 / 推荐导览顺序”。</li>
+        </ul>
+      </section>
 
       <!-- 右面板 -->
-      <aside class="right-panel">
+      <aside v-if="mode === 'explore'" class="right-panel">
         <!-- 3. 智能解说 -->
         <section class="panel-card">
           <div class="card-head">
@@ -298,7 +465,7 @@
               </a>
             </div>
             <div v-else-if="!typing" class="source-empty">
-              暂无网页来源，当前章节使用本地结构事实与路径关系生成。
+              {{ sourceEmptyMessage }}
             </div>
           </div>
 
@@ -321,35 +488,6 @@
             <p class="seq-foot">基于当前真实视野生成</p>
           </div>
 
-          <div class="settings-block">
-            <div class="settings-title">解说设置</div>
-            <div class="settings-row">解说时长</div>
-            <div class="duration-tabs">
-              <button
-                v-for="o in durationPresetOptions"
-                :key="o.key"
-                :class="['duration-tab', { active: ui.durationPreset === o.key }]"
-                @click="ui.durationPreset = o.key"
-              >
-                <strong>{{ o.label }}</strong>
-                <span>{{ o.hint }}</span>
-              </button>
-            </div>
-
-            <div class="settings-row">解说风格</div>
-            <div class="style-row">
-              <select class="select-input" v-model="ui.tonePreset">
-                <option v-for="o in tonePresetOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
-              </select>
-              <button class="ghost-btn" @click="restartNarration"><span v-html="ICONS.dice" /><span>重新播放</span></button>
-            </div>
-
-            <button class="primary-btn play-btn" :disabled="!canNarrate" @click="togglePlay">
-              {{ analysisStatus === 'analyzing' ? '分析中，请稍候' : playing ? '暂停解说' : '开始解说' }}
-              <span v-html="playing ? ICONS.pause : ICONS.play" />
-            </button>
-            <div class="playback-hint">{{ playbackHint }}</div>
-          </div>
         </section>
 
         <!-- 上下文感知 -->
@@ -369,32 +507,21 @@
           </div>
         </section>
 
-        <section v-if="showDeveloperPanel && developerPanelOpen" class="panel-card dev-panel">
-          <div class="card-head">
-            <span class="card-title">开发调试面板</span>
-            <button class="mini-link" type="button" @click="copyDebugSnapshot">复制快照</button>
-          </div>
-          <ul class="dev-summary-list">
-            <li v-for="item in debugSummaryItems" :key="item.key">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.summary }}</strong>
-            </li>
-          </ul>
-          <details v-for="item in debugDetailItems" :key="`detail-${item.key}`" class="dev-detail">
-            <summary>{{ item.label }}</summary>
-            <pre>{{ item.detail }}</pre>
-          </details>
-          <div class="dev-actions">
-            <button class="ghost-btn" type="button" @click="analyzeCurrentViewport">重放当前视野</button>
-            <button class="ghost-btn" type="button" @click="copyGoldenViewportPayload">复制回放参数</button>
-          </div>
-        </section>
+        <NarrativeDevPanel
+          v-if="showDeveloperPanel && developerPanelOpen"
+          :summary-items="debugSummaryItems"
+          :detail-items="debugDetailItems"
+          @copy-snapshot="copyDebugSnapshot"
+          @replay="analyzeCurrentViewport"
+          @copy-golden="copyGoldenViewportPayload"
+        />
       </aside>
 
       <!-- AI 助手抽屉：跨 center + right 两列，高度 = canvas 高，宽度 = canvas + 右面板宽
            §7.4 / §8.4 契约：组件只读 narrative state，副作用通过 emit 回传 -->
       <AssistantDock
         v-if="assistantOpen"
+        :compact="mode !== 'explore'"
         :active-step-index="activeStepIndex"
         :playing="playing"
         :total-steps="displayPathNodes.length"
@@ -406,79 +533,34 @@
         @fly-to-region="flyToRegionById"
       />
 
-      <!-- 底部时间线（仅占中央列宽度，左右面板可延伸到屏幕底部） -->
-      <footer class="bottom-bar">
-      <div class="timeline-wrap">
-        <button class="tl-arrow" @click="goPrev"><span v-html="ICONS.chevronLeft" /></button>
-        <ul ref="timelineEl" class="timeline" @wheel.prevent="onTimelineWheel">
-          <li
-            v-for="(node, i) in displayPathNodes"
-            :key="`tl-${node.region_id}`"
-            :class="['tl-card', { active: i === activeStepIndex }]"
-            @click="goToStep(i)"
-          >
-            <div class="tl-thumb" :style="{ background: regionGradient(i) }">
-              <span
-                v-for="dot in timelineDotsByRegion[node.region_id] ?? []"
-                :key="dot.key"
-                class="tl-dot"
-                :class="`tier-${dot.tier}`"
-                :style="{ left: `${dot.x}%`, top: `${dot.y}%` }"
-              />
-              <span v-if="timelineDotsByRegion[node.region_id]?.length" class="tl-cluster">
-                {{ timelineDotsByRegion[node.region_id].length }}
-              </span>
-              <span class="tl-no">{{ i + 1 }}</span>
-              <span class="tl-tag-mini">{{ node.chapter_label }}</span>
-            </div>
-            <div class="tl-name">{{ i + 1 }} {{ regionMap[node.region_id]?.display_name }}</div>
-            <div class="tl-sub">{{ subtitleForRole(node.narration_role) }}</div>
-          </li>
-        </ul>
-        <button class="tl-arrow" @click="goNext"><span v-html="ICONS.chevronRight" /></button>
-      </div>
-
-      <div class="bottom-progress">
-        <div class="player-controls">
-          <button class="player-btn" @click="rewind"><span v-html="ICONS.rewind" /></button>
-          <button class="player-btn" @click="goPrev"><span v-html="ICONS.skipBack" /></button>
-          <button class="player-btn primary" @click="togglePlay"><span v-html="playing ? ICONS.pause : ICONS.play" /></button>
-          <button class="player-btn" @click="goNext"><span v-html="ICONS.skipForward" /></button>
-          <button class="player-btn" @click="forward"><span v-html="ICONS.forward" /></button>
-        </div>
-        <div class="progress-row">
-          <div class="progress-track" @click="onSeek">
-            <div class="progress-fill" :style="{ width: progressPercent + '%' }" />
-            <div class="progress-knob" :style="{ left: progressPercent + '%' }" />
-          </div>
-          <span class="progress-time">{{ formatTime(elapsedMs) }} / {{ formatTime(totalDurationMs) }}</span>
-          <span class="progress-rate">1.0x</span>
-        </div>
-      </div>
-      </footer>
+      <NarrativeTimelinePlayer
+        v-if="mode === 'explore'"
+        :path-nodes="displayPathNodes"
+        :active-step-index="activeStepIndex"
+        :playing="playing"
+        :progress-percent="progressPercent"
+        :elapsed-ms="elapsedMs"
+        :total-duration-ms="totalDurationMs"
+        :timeline-dots-by-region="timelineDotsByRegion"
+        @previous="goPrev"
+        @next="goNext"
+        @rewind="rewind"
+        @forward="forward"
+        @toggle-play="togglePlay"
+        @go-to-step="goToStep"
+        @seek-ratio="seekByRatio"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
-import OlMap from 'ol/Map'
-import View from 'ol/View'
-import TileLayer from 'ol/layer/Tile'
-import XYZ from 'ol/source/XYZ'
-import VectorLayer from 'ol/layer/Vector'
-import HeatmapLayer from 'ol/layer/Heatmap'
-import VectorSource from 'ol/source/Vector'
-import Feature from 'ol/Feature'
-import Point from 'ol/geom/Point'
-import { fromLonLat, toLonLat, transformExtent } from 'ol/proj'
-import { Style, Fill, Stroke, Circle as CircleStyle, Text } from 'ol/style'
-
-import AssistantDock from './narrative/AssistantDock.vue'
-import { useProjection } from '../composables/map/useProjection'
 import { fetchNarrativeEnrichmentJob, fetchNarrativeResponse } from './narrative/narrativeApi'
 import { adaptNarrativeResponse } from './narrative/narrativeResponseAdapter'
+import NarrativeMapPlaceholder from './narrative/NarrativeMapPlaceholder.vue'
 import type {
   NarrativeMode as ChatMode,
   NarrativeResponse,
@@ -486,13 +568,36 @@ import type {
   NarrativePoi,
   NarrativeRegion,
   NarrativeUiSettings,
-  ViewportBBox,
   PathNarrationRole,
+  ViewportBBox,
   VisualTier
 } from './narrative/types'
 
 type ChapterSourceView = NonNullable<NarrativeChapter['web_sources']>[number]
-type PlaybackState = 'idle' | 'prepared' | 'auto_started' | 'manual_started' | 'paused' | 'completed'
+type PlaybackState = 'idle' | 'prepared' | 'auto_started' | 'manual_started' | 'paused' | 'step_completed' | 'completed'
+type ExploreToolKey = 'scope' | 'layers' | 'scale'
+type ExplorationThemeKey = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
+type GranularityKey = 'auto' | 'district' | 'aoi' | 'poi_cluster'
+type EvidenceStrictnessKey = 'strict' | 'balanced' | 'loose'
+type DiversityKey = 'low' | 'medium' | 'high'
+type LocalnessKey = 'tourist' | 'balanced' | 'local'
+type WebFactModeKey = 'off' | 'light' | 'full'
+type ExploreOption<T extends string> = { key: T; label: string; hint?: string }
+
+interface ExploreSettings {
+  theme: ExplorationThemeKey
+  granularity: GranularityKey
+  evidenceStrictness: EvidenceStrictnessKey
+  candidateCount: number
+  diversity: DiversityKey
+  localness: LocalnessKey
+  webFacts: WebFactModeKey
+}
+
+const AssistantDock = defineAsyncComponent(() => import('./narrative/AssistantDock.vue'))
+const NarrativeDevPanel = defineAsyncComponent(() => import('./narrative/NarrativeDevPanel.vue'))
+const NarrativeMapStage = defineAsyncComponent(() => import('./narrative/NarrativeMapStage.vue'))
+const NarrativeTimelinePlayer = defineAsyncComponent(() => import('./narrative/NarrativeTimelinePlayer.vue'))
 
 const INITIAL_VIEWPORT: ViewportBBox = {
   west: 114.278,
@@ -561,6 +666,55 @@ const centroidStrategyOptions = [
   { key: 'region_first' as const, label: '片区优先' },
   { key: 'poi_first' as const, label: 'POI 优先' }
 ]
+
+const exploreToolTabs: Array<{ key: ExploreToolKey; index: string; label: string; hint: string }> = [
+  { key: 'scope', index: '01', label: '范围', hint: '视野与片区' },
+  { key: 'layers', index: '02', label: '分层', hint: '证据与剔除' },
+  { key: 'scale', index: '03', label: '尺度', hint: '粒度与重心' }
+]
+
+const explorationThemeOptions: Array<ExploreOption<ExplorationThemeKey>> = [
+  { key: 'comprehensive', label: '综合观察', hint: '平衡识别' },
+  { key: 'commerce', label: '商业活力', hint: '商圈消费' },
+  { key: 'nightlife', label: '夜生活', hint: '夜市餐饮' },
+  { key: 'memory', label: '城市记忆', hint: '历史街巷' },
+  { key: 'family', label: '亲子休闲', hint: '公园服务' },
+  { key: 'education', label: '高校科教', hint: '校园文化' },
+  { key: 'commute', label: '通勤生活', hint: '日常便利' },
+  { key: 'tourism', label: '文旅打卡', hint: '地标景点' }
+]
+
+const granularityOptions: Array<ExploreOption<GranularityKey>> = [
+  { key: 'auto', label: '自动' },
+  { key: 'district', label: '商圈/街区' },
+  { key: 'aoi', label: 'AOI' },
+  { key: 'poi_cluster', label: 'POI 簇' }
+]
+
+const evidenceStrictnessOptions: Array<ExploreOption<EvidenceStrictnessKey>> = [
+  { key: 'strict', label: '严格' },
+  { key: 'balanced', label: '均衡' },
+  { key: 'loose', label: '宽松' }
+]
+
+const diversityOptions: Array<ExploreOption<DiversityKey>> = [
+  { key: 'low', label: '聚焦' },
+  { key: 'medium', label: '均衡' },
+  { key: 'high', label: '漫游' }
+]
+
+const localnessOptions: Array<ExploreOption<LocalnessKey>> = [
+  { key: 'tourist', label: '游客友好' },
+  { key: 'balanced', label: '均衡' },
+  { key: 'local', label: '本地生活' }
+]
+
+const webFactOptions: Array<ExploreOption<WebFactModeKey>> = [
+  { key: 'off', label: '关闭' },
+  { key: 'light', label: '轻量' },
+  { key: 'full', label: '完整' }
+]
+
 type CentroidStrategy = NarrativeUiSettings['centroidStrategy']
 
 function centroidStrategyLabel(strategy: CentroidStrategy): string {
@@ -576,9 +730,11 @@ const narrative = ref<NarrativeResponse>(EMPTY_NARRATIVE_RESPONSE)
 const analysisStatus = ref<'preset' | 'analyzing' | 'ready' | 'error'>('preset')
 const analysisError = ref('')
 const enrichmentStatus = ref<'idle' | 'pending' | 'running' | 'completed' | 'failed'>('idle')
+const enrichmentError = ref('')
 const developerPanelOpen = ref(false)
 const hoveredSourceIndex = ref<number | null>(null)
 const playbackState = ref<PlaybackState>('idle')
+const activeExploreTool = ref<ExploreToolKey>('scope')
 let enrichmentPollToken = 0
 const canNarrate = computed(() => analysisStatus.value === 'ready' && displayPathNodes.value.length > 0)
 const showDeveloperPanel = computed(() => import.meta.env.DEV && Boolean(narrative.value.debug))
@@ -591,7 +747,6 @@ const narrativeSourceLabel = computed(() => {
   if (analysisStatus.value === 'error') return '分析失败'
   return '等待分析'
 })
-const { gcj02ToWgs84 } = useProjection()
 const displayModel = computed(() => adaptNarrativeResponse(narrative.value))
 const displayPathNodes = computed(() => displayModel.value.pathNodes)
 const displayChapters = computed(() => displayModel.value.chapters)
@@ -612,14 +767,48 @@ const activeChapterSources = computed<ChapterSourceView[]>(() => {
     return true
   }).slice(0, 3)
 })
+const sourceEmptyMessage = computed(() => {
+  const summary = narrative.value.enrichment
+  const error = enrichmentError.value || summary?.error || ''
+  if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充网页来源，完成后会自动回填当前章节。'
+  if (enrichmentStatus.value === 'failed' || summary?.status === 'failed') {
+    return error ? `网页来源补强失败：${error}` : '网页来源补强失败，请检查搜索接口配置或稍后重试。'
+  }
+  if (summary?.phase === 'enriched' && summary.source_count === 0) return '已完成资料补强，但当前视野没有返回可核验网页来源。'
+  if ((summary?.source_count ?? 0) > 0) return '当前章节暂无网页来源，其他章节可能已有来源。'
+  return '暂无网页来源，当前章节使用本地结构事实与路径关系生成。'
+})
+const previewedChapterSourceIndex = computed(() => {
+  if (!activeChapterSources.value.length) return -1
+  return hoveredSourceIndex.value === null ? 0 : Math.min(hoveredSourceIndex.value, activeChapterSources.value.length - 1)
+})
+const previewedChapterSource = computed(() => {
+  if (previewedChapterSourceIndex.value < 0) return null
+  return activeChapterSources.value[previewedChapterSourceIndex.value] ?? null
+})
 const playbackHint = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在生成解说路径，完成后会按你的自动解说设置处理。'
   if (!canNarrate.value) return '分析当前视野后，可以播放逐段解说。'
-  if (playing.value) return ui.autoNarrate ? '正在自动播放，章节会按顺序推进。' : '正在播放当前章节，自动推进已关闭。'
-  if (playbackState.value === 'auto_started') return '已按自动解说设置启动，可随时暂停或跳转。'
+  if (playbackState.value === 'step_completed') return activeStepIndex.value < displayChapters.value.length - 1 ? '本段已讲完，点击“下一个”继续下一片区。' : '最后一段已讲完，可重新分析当前视野。'
+  if (playing.value) return '正在播放当前片区，播完会停在本段。'
+  if (playbackState.value === 'auto_started') return '已开始当前片区解说，可随时暂停或跳转。'
   if (playbackState.value === 'paused') return '解说已暂停，点击开始可从当前章节继续。'
   if (playbackState.value === 'completed') return '本轮解说已结束，可重新播放或选择章节回看。'
-  return ui.autoNarrate ? '分析完成后会自动开始解说。' : '分析完成后会停在第一章，点击开始再播放。'
+  return '分析完成后会停在第一章，点击开始播放当前片区。'
+})
+const narratePrimaryLabel = computed(() => {
+  if (!mapStageReady.value) return '地图加载中…'
+  if (analysisStatus.value === 'analyzing') return '正在准备…'
+  if (playing.value) return '播放中…'
+  if (playbackState.value === 'step_completed' && activeStepIndex.value < displayChapters.value.length - 1) return '下一个'
+  if (canNarrate.value && !playing.value && playbackState.value !== 'completed') return '开始'
+  return '分析并开始'
+})
+const narratePrimaryDisabled = computed(() => {
+  if (!mapStageReady.value || analysisStatus.value === 'analyzing') return true
+  if (playing.value) return true
+  if (playbackState.value === 'step_completed') return activeStepIndex.value >= displayChapters.value.length - 1
+  return false
 })
 const debugSummaryItems = computed(() => {
   const debug = narrative.value.debug
@@ -653,16 +842,62 @@ const debugDetailItems = computed(() => {
   ].map((item) => ({ key: item.key, label: item.label, detail: formatDebugValue(item.value) }))
 })
 const ui = reactive<NarrativeUiSettings>({ ...defaultUiSettings })
-const mode = ref<ChatMode>('explore')
+const exploreSettings = reactive<ExploreSettings>({
+  theme: 'comprehensive',
+  granularity: 'auto',
+  evidenceStrictness: 'balanced',
+  candidateCount: 6,
+  diversity: 'medium',
+  localness: 'balanced',
+  webFacts: 'light'
+})
+const route = useRoute()
+const router = useRouter()
+const mode = ref<ChatMode>(modeFromRoute(route.params.mode))
 
 // 左上「当前视角覆盖分析」卡片的折叠状态（局部 UI state，不进 NarrativeUiSettings 契约）
 const coverageCollapsed = ref<boolean>(true)
 
+type NarrativeMapStageExpose = {
+  applyViewportZoom: (zoomValue?: number) => void
+  focusByCentroidStrategy: (strategy: CentroidStrategy, region: NarrativeRegion, viewportZoom?: number) => void
+  flyToRegion: (region: NarrativeRegion) => void
+  getCurrentMapViewport: () => ViewportBBox | null
+  refreshMapLayersAfterNarrativeChange: () => void
+}
+
+const mapStageRef = ref<NarrativeMapStageExpose | null>(null)
+const mapStageVisible = ref(false)
+const mapStageReady = ref(false)
+
+onMounted(() => {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      mapStageVisible.value = true
+    })
+  })
+})
+
 const modes: Array<{ key: ChatMode; label: string; icon: string }> = [
-  { key: 'explore', label: '探索模式', icon: ICON_COMPASS() },
   { key: 'narrate', label: '解说模式', icon: ICON_HEADPHONE() },
+  { key: 'explore', label: '探索模式', icon: ICON_COMPASS() },
   { key: 'compare', label: '对比模式', icon: ICON_COMPARE() }
 ]
+
+function modeFromRoute(value: unknown): ChatMode {
+  const raw = Array.isArray(value) ? value[0] : value
+  return raw === 'narrate' || raw === 'compare' || raw === 'explore' ? raw : 'explore'
+}
+
+function switchMode(nextMode: ChatMode) {
+  if (mode.value === nextMode && route.params.mode === nextMode) return
+  mode.value = nextMode
+  void router.push({ name: 'NarrativeMode', params: { mode: nextMode } })
+}
+
+watch(() => route.params.mode, (value) => {
+  mode.value = modeFromRoute(value)
+})
 
 const regionMap = computed(() => displayModel.value.regionMap)
 
@@ -672,35 +907,9 @@ const activeRegion = computed(() => {
   return regionMap.value[node?.region_id ?? displayRegions.value[0]?.id] ?? displayRegions.value[0] ?? narrative.value.regions[0] ?? EMPTY_ACTIVE_REGION
 })
 
-// 时间线 DOM 引用：箭头切换 / 卡片点击 / 解说推进时，自动把激活卡片滚动到容器水平中央；手动滚动只浏览卡片
-const timelineEl = ref<HTMLUListElement | null>(null)
-function scrollTimelineToActive() {
-  scrollTimelineCardToCenter(activeStepIndex.value, 'smooth')
-}
-function scrollTimelineCardToCenter(index: number, behavior: ScrollBehavior) {
-  const container = timelineEl.value
-  if (!container) return
-  const cards = container.querySelectorAll<HTMLElement>('.tl-card')
-  const card = cards[index]
-  if (!card) return
-  const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth)
-  const targetLeft = card.offsetLeft - (container.clientWidth - card.clientWidth) / 2
-  container.scrollTo({ left: Math.min(maxLeft, Math.max(0, targetLeft)), behavior })
-}
-function onTimelineWheel(e: WheelEvent) {
-  const container = timelineEl.value
-  if (!container) return
-  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-  container.scrollBy({ left: delta, behavior: 'auto' })
-}
-watch(activeStepIndex, () => {
-  // DOM 更新（active class 切换）之后再算偏移量
-  nextTick(scrollTimelineToActive)
-})
 watch(() => displayPathNodes.value.length, (length) => {
   if (length === 0) return
   if (activeStepIndex.value >= length) activeStepIndex.value = length - 1
-  nextTick(scrollTimelineToActive)
 })
 
 // ============================================================================
@@ -722,14 +931,9 @@ function onAssistantResume() {
   if (!playing.value) togglePlay()
 }
 function flyToRegionById(regionId: string) {
-  if (!olMap) return
   const r = regionMap.value[regionId]
   if (!r) return
-  olMap.getView().animate({
-    center: fromLonLat([r.core_anchor.lon, r.core_anchor.lat]),
-    zoom: 15.5,
-    duration: 900
-  })
+  mapStageRef.value?.flyToRegion(r)
 }
 
 function sourceQualityLabel(quality?: ChapterSourceView['quality']): string {
@@ -819,7 +1023,25 @@ window.addEventListener('keydown', onAssistantKeydown)
 onBeforeUnmount(() => window.removeEventListener('keydown', onAssistantKeydown))
 
 const totalPoi = computed(() => displayAllRenderablePois.value.length)
-const activeRegionAreaText = computed(() => `${(8.62).toFixed(2)} km²`)
+
+function polygonAreaKm2(coords: Array<[number, number]>): number {
+  if (coords.length < 3) return 0
+  const DEG2RAD = Math.PI / 180
+  const R = 6371
+  let sum = 0
+  for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
+    sum += (coords[j][0] * DEG2RAD - coords[i][0] * DEG2RAD) *
+      (2 + Math.sin(coords[i][1] * DEG2RAD) + Math.sin(coords[j][1] * DEG2RAD))
+  }
+  return Math.abs(sum) * R * R / 2
+}
+
+const activeRegionAreaText = computed(() => {
+  const ring = activeRegion.value?.boundary?.coordinates?.[0]
+  if (!ring || ring.length < 3) return '— km²'
+  const area = polygonAreaKm2(ring as Array<[number, number]>)
+  return area < 1 ? `${(area * 1e6).toFixed(0)} m²` : `${area.toFixed(2)} km²`
+})
 
 const lodLabel = computed(() => {
   if (ui.viewportZoom >= 15) return '近景（深挖）'
@@ -861,6 +1083,19 @@ const tierLegend: Array<{ key: VisualTier; label: string; color: string }> = [
   { key: 'weak', label: '低相关（边缘）', color: '#3b82f6' },
   { key: 'excluded', label: '已剔除', color: '#475569' }
 ]
+
+const PATH_ROLE_LABEL: Record<PathNarrationRole, string> = {
+  core: '核心讲点',
+  related: '关联区域',
+  cultural: '人文线索',
+  landmark: '城市地标',
+  educational: '教育文化',
+  ecological: '生态空间'
+}
+
+function pathRoleLabel(role: PathNarrationRole): string {
+  return PATH_ROLE_LABEL[role] ?? '解说节点'
+}
 
 interface TimelineDot {
   key: string
@@ -923,7 +1158,7 @@ const waveformHeights = Array.from({ length: 32 }, (_, i) =>
 )
 const waveActive = ref(0)
 
-function startTyping() {
+function startTyping(onComplete?: () => void) {
   stopTyping()
   const chapter = displayChapters.value[activeStepIndex.value]
   if (!chapter) return
@@ -935,12 +1170,13 @@ function startTyping() {
     if (idx >= text.length) {
       stopTyping()
       typing.value = false
+      onComplete?.()
       return
     }
     typedText.value += text[idx]
     idx += 1
-    waveActive.value = Math.floor((idx / text.length) * waveformHeights.length)
-  }, 60)
+    waveActive.value = Math.floor((idx / Math.max(text.length, 1)) * waveformHeights.length)
+  }, 120)
 }
 
 function stopTyping() {
@@ -985,6 +1221,27 @@ function showFullChapterText(index: number) {
   waveActive.value = chapter?.text ? waveformHeights.length : 0
 }
 
+function stepEndElapsedMs(index: number) {
+  let acc = 0
+  for (let i = 0; i <= index; i++) {
+    acc += displayChapters.value[i]?.length_ms ?? 8000
+  }
+  return Math.min(acc, totalDurationMs.value)
+}
+
+function finishStepAfterTyping(index: number) {
+  if (index !== activeStepIndex.value) return
+  elapsedMs.value = stepEndElapsedMs(index)
+  if (index >= displayChapters.value.length - 1) {
+    stopAll('completed')
+    return
+  }
+  playing.value = false
+  playbackState.value = 'step_completed'
+  clearAdvanceTimer()
+  stopProgress()
+}
+
 function applyStep(index: number, options: { fly?: boolean; narrate?: boolean } = {}) {
   if (index < 0 || index >= displayChapters.value.length) return
   activeStepIndex.value = index
@@ -1000,18 +1257,14 @@ function applyStep(index: number, options: { fly?: boolean; narrate?: boolean } 
   if (options.narrate === false) {
     showFullChapterText(index)
   } else {
-    startTyping()
+    startTyping(() => finishStepAfterTyping(index))
   }
-  if (playing.value && ui.autoNarrate) {
-    const ms = displayChapters.value[index]?.length_ms ?? 8000
-    advanceTimer = setTimeout(() => {
-      if (index < displayPathNodes.value.length - 1) {
-        applyStep(index + 1)
-      } else {
-        stopAll('completed')
-      }
-    }, ms)
-  }
+}
+
+function clampStepIndex(index: number) {
+  const maxIndex = displayChapters.value.length - 1
+  if (maxIndex < 0) return 0
+  return Math.max(0, Math.min(index, maxIndex))
 }
 
 function startPlayback(state: Extract<PlaybackState, 'auto_started' | 'manual_started'>, index = activeStepIndex.value) {
@@ -1024,6 +1277,7 @@ function startPlayback(state: Extract<PlaybackState, 'auto_started' | 'manual_st
 
 function togglePlay() {
   if (!canNarrate.value) return
+  if (playbackState.value === 'step_completed') return
   if (playing.value) {
     playing.value = false
     playbackState.value = 'paused'
@@ -1034,6 +1288,19 @@ function togglePlay() {
     return
   }
   startPlayback('manual_started')
+}
+
+function handleNarratePrimaryAction() {
+  if (analysisStatus.value === 'analyzing' || !mapStageReady.value) return
+  if (playbackState.value === 'step_completed') {
+    if (activeStepIndex.value < displayChapters.value.length - 1) startPlayback('manual_started', activeStepIndex.value + 1)
+    return
+  }
+  if (canNarrate.value && !playing.value && playbackState.value !== 'completed') {
+    startPlayback('manual_started', activeStepIndex.value)
+    return
+  }
+  void analyzeCurrentViewport()
 }
 
 function stopAll(nextState: PlaybackState = 'idle') {
@@ -1066,12 +1333,8 @@ function forward() {
   elapsedMs.value = Math.min(totalDurationMs.value, elapsedMs.value + 5000)
 }
 
-function onSeek(e: MouseEvent) {
-  const target = e.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+function seekByRatio(ratio: number) {
   elapsedMs.value = ratio * totalDurationMs.value
-  // 找到对应章节
   let acc = 0
   for (let i = 0; i < displayChapters.value.length; i++) {
     acc += displayChapters.value[i].length_ms ?? 8000
@@ -1093,384 +1356,24 @@ function restartNarration() {
 function prepareNarrationAfterAnalysis() {
   if (!canNarrate.value) return
   activeStepIndex.value = 0
-  if (ui.autoNarrate) {
-    startPlayback('auto_started', 0)
-    return
-  }
   playbackState.value = 'prepared'
   applyStep(0, { fly: false, narrate: false })
 }
 
-function regionGradient(i: number): string {
-  const palette = [
-    'linear-gradient(135deg,#ef4444,#b91c1c)',
-    'linear-gradient(135deg,#0ea5e9,#0c4a6e)',
-    'linear-gradient(135deg,#a855f7,#581c87)',
-    'linear-gradient(135deg,#f59e0b,#92400e)',
-    'linear-gradient(135deg,#10b981,#065f46)'
-  ]
-  return palette[i % palette.length]
-}
-
-const ROLE_SUBTITLE: Record<PathNarrationRole, string> = {
-  core: '核心解说点',
-  related: '关联区域',
-  cultural: '历史文化区',
-  landmark: '城市地标',
-  educational: '百年学府',
-  ecological: '自然休闲空间'
-}
-function subtitleForRole(role: PathNarrationRole): string {
-  return ROLE_SUBTITLE[role] ?? ''
-}
-
-function formatTime(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
-
-// ============================================================================
-// OpenLayers 地图：底图 + 片区密度热力雾 + POI Cluster + 片区标签层
-// 设计原则：
-//   1. 每个片区一个独立 HeatmapLayer，gradient 单一色相，多层叠加时
-//      在重叠区出现色相对抗，让用户辨认相邻片区边界（如橙 vs 黄）。
-//   2. POI 走 Cluster source：低 zoom 多点融合成大圆+数量，高 zoom 自然散开。
-//   3. 不再画死循环的椭圆环；`visual_layer.region_glow.color` 仅作为色相来源。
-// ============================================================================
-
-const mapContainerEl = ref<HTMLDivElement | null>(null)
-let olMap: OlMap | null = null
-let baseLayer: TileLayer<XYZ> | null = null
-// 每个片区一个独立 heatmap source / layer：色相对抗
-const regionHeatSources: Record<string, VectorSource> = {}
-const regionHeatLayers: HeatmapLayer[] = []
-// POI 散点层（按 tier 颜色直接渲染，不聚合）
-let poiBaseSource: VectorSource | null = null
-let poiLayer: VectorLayer | null = null
-let labelLayer: VectorLayer | null = null
-let renderedNarrativeSignature = ''
-
-// 片区色相统一来自后端 visual_layer.region_glow.color
-const regionPalette = computed<Record<string, string>>(() =>
-  Object.fromEntries(displayRegions.value.map((r) => [r.id, r.visual_layer.region_glow?.color ?? '#3b82f6']))
-)
-const DEFAULT_REGION_COLOR = '#3b82f6'
-
-// tier → heatmap 权重：核心点贡献最大热值，边缘点几乎不贡献
-const TIER_HEAT_WEIGHT: Record<VisualTier, number> = {
-  core: 1.0,
-  strong: 0.7,
-  medium: 0.4,
-  weak: 0,
-  excluded: 0
-}
-
-// 按当前片区边界把 POI 分配到片区，结果缓存
-const poiRegionCache = new Map<string, string>()
-function pointInRegion(lon: number, lat: number, region: NarrativeRegion): boolean {
-  const ring = region.boundary.coordinates[0] ?? []
-  if (ring.length < 4) return false
-  let inside = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i]
-    const [xj, yj] = ring[j]
-    const intersects = ((yi > lat) !== (yj > lat))
-      && (lon < (xj - xi) * (lat - yi) / ((yj - yi) || Number.EPSILON) + xi)
-    if (intersects) inside = !inside
-  }
-  return inside
-}
-function containingRegionId(lon: number, lat: number): string {
-  for (const r of displayRegions.value) {
-    if (pointInRegion(lon, lat, r)) return r.id
-  }
-  return ''
-}
-function regionIdForPoi(id: string, lon: number, lat: number): string {
-  const cached = poiRegionCache.get(id)
-  if (cached && regionHeatSources[cached] && displayRegions.value.some((region) => region.id === cached && pointInRegion(lon, lat, region))) return cached
-  const rid = containingRegionId(lon, lat)
-  if (rid) poiRegionCache.set(id, rid)
-  return rid
-}
-
-/**
- * 片区色相分配（地理相邻片区色相靠近但不同，在热力雾交叠时能看出边界）：
- * - 昙华林（西南）橙 ↔ 黄鹤楼（与昙华林相邻）黄【用户明确点名的对抗】
- * - 湖北大学（北）红 ↔ 沙湖公园（与 HBU 相邻）青绿
- * - 武汉大学（东南独立）紫
- */
-/**
- * 底图源：矢量路网 vs 卫星影像。两者互斥，不叠加。
- * 通过右上角图层按钮切换。
- */
-const BASE_TILE_URL: Record<'vector' | 'satellite', string> = {
-  vector: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-  satellite: 'https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'
-}
-const baseLayerMode = ref<'vector' | 'satellite'>('satellite')
-
-function toggleBaseLayer() {
-  if (!baseLayer) return
-  baseLayerMode.value = baseLayerMode.value === 'vector' ? 'satellite' : 'vector'
-  baseLayer.setSource(new XYZ({
-    url: BASE_TILE_URL[baseLayerMode.value],
-    crossOrigin: 'anonymous'
-  }))
-}
-
-function styleForTier(tier: VisualTier): Style | null {
-  if (tier === 'excluded') return null
-  const palette: Record<Exclude<VisualTier, 'excluded'>, { fill: string; stroke: string; r: number; alpha: number }> = {
-    core: { fill: '#ef4444', stroke: '#fff', r: 7, alpha: 1 },
-    strong: { fill: '#f97316', stroke: 'rgba(255,255,255,0.85)', r: 5, alpha: 0.95 },
-    medium: { fill: '#eab308', stroke: 'rgba(255,255,255,0.55)', r: 4, alpha: 0.7 },
-    weak: { fill: '#3b82f6', stroke: 'rgba(255,255,255,0.25)', r: 3, alpha: 0.4 }
-  }
-  const cfg = palette[tier]
-  const fillRgba = hexToRgba(cfg.fill, cfg.alpha)
-  return new Style({
-    image: new CircleStyle({
-      radius: cfg.r,
-      fill: new Fill({ color: fillRgba }),
-      stroke: new Stroke({ color: cfg.stroke, width: tier === 'core' ? 2 : 1 })
-    })
-  })
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const m = hex.replace('#', '')
-  const r = parseInt(m.substring(0, 2), 16)
-  const g = parseInt(m.substring(2, 4), 16)
-  const b = parseInt(m.substring(4, 6), 16)
-  return `rgba(${r},${g},${b},${alpha})`
-}
-
-function rebuildPoiLayer() {
-  if (!poiBaseSource) return
-  poiBaseSource.clear()
-  for (const src of Object.values(regionHeatSources)) src.clear()
-
-  const threshold = ui.relevanceThreshold
-  // 阈值映射：高于阈值才显示对应 tier
-  // weak >= 0.0 / medium >= 0.25 / strong >= 0.55 / core 永远显示
-  const tierMin: Record<VisualTier, number> = {
-    excluded: 99,
-    weak: 0,
-    medium: 0.25,
-    strong: 0.55,
-    core: 0
-  }
-  for (const p of displayAllRenderablePois.value) {
-    if (p.tier === 'excluded') continue
-    if (threshold > tierMin[p.tier]) continue
-
-    const rid = regionIdForPoi(p.id, p.lon, p.lat)
-    if (!rid) continue
-    const coord = fromLonLat([p.lon, p.lat])
-
-    // 1. 散点：直接按 tier 颜色渲染
-    const f = new Feature({ geometry: new Point(coord) })
-    const st = styleForTier(p.tier)
-    if (st) {
-      f.setStyle(st)
-      f.set('tier', p.tier)
-      f.set('name', p.display_name)
-      poiBaseSource.addFeature(f)
-    }
-
-    // 2. 片区 heat source：用于密度雾
-    const heatSrc = regionHeatSources[rid]
-    const heatWeight = TIER_HEAT_WEIGHT[p.tier]
-    if (heatSrc && heatWeight > 0) {
-      const hf = new Feature({ geometry: new Point(coord) })
-      hf.set('weight', heatWeight)
-      heatSrc.addFeature(hf)
-    }
-  }
-  for (const region of displayRegions.value) {
-    const heatSrc = regionHeatSources[region.id]
-    if (!heatSrc || heatSrc.getFeatures().length > 0) continue
-    for (const point of region.visual_layer.poi_heat?.points ?? []) {
-      const isWeakFallback = point.tier === 'weak'
-      if (!isWeakFallback && threshold > tierMin[point.tier]) continue
-      const heatWeight = isWeakFallback ? 0.14 : TIER_HEAT_WEIGHT[point.tier]
-      if (heatWeight <= 0) continue
-      const hf = new Feature({ geometry: new Point(fromLonLat([point.lon, point.lat])) })
-      hf.set('weight', heatWeight)
-      heatSrc.addFeature(hf)
-    }
-  }
-}
-
-// 根据当前 zoom 同步密度雾半径：远景大融合，近景小拆解
-function syncHeatmapRadius() {
-  if (!olMap) return
-  const z = olMap.getView().getZoom() ?? 14
-  const radius = Math.max(8, Math.min(34, 60 - z * 3))
-  const blur = Math.max(10, Math.min(38, radius + 6))
-  for (const hl of regionHeatLayers) {
-    hl.setRadius(radius)
-    hl.setBlur(blur)
-  }
-}
-
-function rebuildLabelLayer() {
-  if (!labelLayer) return
-  const src = labelLayer.getSource()!
-  src.clear()
-  for (const region of displayRegions.value) {
-    const f = new Feature({
-      geometry: new Point(fromLonLat([region.core_anchor.lon, region.core_anchor.lat]))
-    })
-    f.setStyle(
-      new Style({
-        text: new Text({
-          text: region.display_name,
-          font: '600 13px "PingFang SC","Microsoft YaHei",sans-serif',
-          fill: new Fill({ color: '#fff' }),
-          stroke: new Stroke({ color: 'rgba(15,18,32,0.95)', width: 4 }),
-          offsetY: -16,
-          padding: [4, 8, 4, 8]
-        })
-      })
-    )
-    src.addFeature(f)
-  }
-}
-
-function clearRegionHeatLayers() {
-  if (!olMap) return
-  for (const layer of regionHeatLayers) olMap.removeLayer(layer)
-  regionHeatLayers.splice(0, regionHeatLayers.length)
-  for (const key of Object.keys(regionHeatSources)) delete regionHeatSources[key]
-}
-
-function rebuildRegionHeatLayers() {
-  if (!olMap || !poiLayer || !labelLayer) return
-  clearRegionHeatLayers()
-  for (const region of displayRegions.value) {
-    const src = new VectorSource()
-    regionHeatSources[region.id] = src
-    const color = regionPalette.value[region.id] ?? DEFAULT_REGION_COLOR
-    const hl = new HeatmapLayer({
-      source: src,
-      weight: (f) => (f.get('weight') as number) ?? 0.2,
-      radius: 18,
-      blur: 22,
-      gradient: [
-        hexToRgba(color, 0),
-        hexToRgba(color, 0.35),
-        hexToRgba(color, 0.65),
-        hexToRgba(color, 0.85),
-        hexToRgba(color, 1.0)
-      ],
-      opacity: 0.6,
-      zIndex: 5
-    })
-    regionHeatLayers.push(hl)
-    olMap.addLayer(hl)
-  }
-  olMap.removeLayer(poiLayer)
-  olMap.removeLayer(labelLayer)
-  olMap.addLayer(poiLayer)
-  olMap.addLayer(labelLayer)
-}
-
 function refreshMapLayersAfterNarrativeChange() {
-  const signature = `${narrative.value.session_id}:${narrative.value.state_version}:${narrative.value.path.seed}:${narrative.value.regions.map((region) => region.id).join('|')}`
-  if (signature !== renderedNarrativeSignature) {
-    renderedNarrativeSignature = signature
-    poiBaseSource?.clear()
-    labelLayer?.getSource()?.clear()
-    for (const src of Object.values(regionHeatSources)) src.clear()
-  }
-  poiRegionCache.clear()
-  rebuildRegionHeatLayers()
-  rebuildPoiLayer()
-  rebuildLabelLayer()
-  syncHeatmapRadius()
+  mapStageRef.value?.refreshMapLayersAfterNarrativeChange()
 }
 
 function flyToActiveRegion() {
-  if (!olMap) return
-  const r = activeRegion.value
-  const view = olMap.getView()
-  view.animate({
-    center: fromLonLat([r.core_anchor.lon, r.core_anchor.lat]),
-    zoom: 15.5,
-    duration: 900
-  })
-}
-
-function zoomIn() {
-  if (!olMap) return
-  const v = olMap.getView()
-  v.animate({ zoom: (v.getZoom() ?? 14) + 1, duration: 240 })
-  requestAnimationFrame(syncViewportZoomFromMap)
-}
-
-function zoomOut() {
-  if (!olMap) return
-  const v = olMap.getView()
-  v.animate({ zoom: (v.getZoom() ?? 14) - 1, duration: 240 })
-  requestAnimationFrame(syncViewportZoomFromMap)
+  mapStageRef.value?.flyToRegion(activeRegion.value)
 }
 
 function applyViewportZoom() {
-  if (!olMap) return
-  const zoom = Math.max(10, Math.min(17, Number(ui.viewportZoom) || INITIAL_VIEWPORT.zoom))
-  ui.viewportZoom = Number(zoom.toFixed(1))
-  olMap.getView().setZoom(zoom)
-}
-
-function syncViewportZoomFromMap() {
-  if (!olMap) return
-  const zoom = olMap.getView().getZoom()
-  if (!Number.isFinite(zoom)) return
-  ui.viewportZoom = Number((zoom ?? INITIAL_VIEWPORT.zoom).toFixed(1))
-}
-
-function regionBoundaryPoints(region: NarrativeRegion): Array<[number, number]> {
-  return (region.boundary.coordinates[0] ?? [])
-    .filter((point): point is [number, number] => Number.isFinite(point[0]) && Number.isFinite(point[1]))
-}
-
-function regionPoiPoints(region: NarrativeRegion): Array<[number, number]> {
-  const pois = region.pois.map((poi): [number, number] => [poi.lon, poi.lat])
-  if (pois.length > 0) return pois
-  return (region.visual_layer.poi_heat?.points ?? []).map((point): [number, number] => [point.lon, point.lat])
-}
-
-function fitLonLatPoints(points: Array<[number, number]>) {
-  if (!olMap || points.length === 0) return false
-  if (points.length === 1) {
-    olMap.getView().animate({ center: fromLonLat(points[0]), zoom: ui.viewportZoom, duration: 420 })
-    return true
-  }
-  const projected = points.map((point) => fromLonLat(point))
-  const xs = projected.map((point) => point[0]).filter(Number.isFinite)
-  const ys = projected.map((point) => point[1]).filter(Number.isFinite)
-  if (xs.length === 0 || ys.length === 0) return false
-  olMap.getView().fit(
-    [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
-    { padding: [90, 90, 90, 90], duration: 480, maxZoom: Math.max(14, ui.viewportZoom) },
-  )
-  return true
+  mapStageRef.value?.applyViewportZoom(ui.viewportZoom)
 }
 
 function focusByCentroidStrategy(strategy: CentroidStrategy = ui.centroidStrategy) {
-  if (!olMap) return
-  const region = activeRegion.value
-  if (strategy === 'poi_first' && fitLonLatPoints(regionPoiPoints(region))) return
-  if (strategy === 'region_first' && fitLonLatPoints(regionBoundaryPoints(region))) return
-  olMap.getView().animate({
-    center: fromLonLat([region.core_anchor.lon, region.core_anchor.lat]),
-    zoom: ui.viewportZoom,
-    duration: 420,
-  })
+  mapStageRef.value?.focusByCentroidStrategy(strategy, activeRegion.value, ui.viewportZoom)
 }
 
 function setCentroidStrategy(strategy: CentroidStrategy) {
@@ -1478,33 +1381,13 @@ function setCentroidStrategy(strategy: CentroidStrategy) {
   focusByCentroidStrategy(strategy)
 }
 
-function getCurrentMapViewport(): ViewportBBox | null {
-  if (!olMap) return null
-  const size = olMap.getSize()
-  if (!size) return null
-  const view = olMap.getView()
-  const extent3857 = view.calculateExtent(size)
-  const [displayWest, displaySouth, displayEast, displayNorth] = transformExtent(extent3857, 'EPSG:3857', 'EPSG:4326')
-  const [west, south] = gcj02ToWgs84(displayWest, displaySouth)
-  const [east, north] = gcj02ToWgs84(displayEast, displayNorth)
-  const displayCenter = toLonLat(view.getCenter() ?? fromLonLat(narrative.value.viewport.center)) as [number, number]
-  const center = gcj02ToWgs84(displayCenter[0], displayCenter[1])
-  return {
-    west,
-    south,
-    east,
-    north,
-    zoom: view.getZoom() ?? narrative.value.viewport.zoom,
-    center
-  }
-}
-
 async function analyzeCurrentViewport() {
-  const viewport = getCurrentMapViewport()
+  const viewport = mapStageRef.value?.getCurrentMapViewport()
   if (!viewport || analysisStatus.value === 'analyzing') return
   enrichmentPollToken += 1
   analysisStatus.value = 'analyzing'
   enrichmentStatus.value = 'idle'
+  enrichmentError.value = ''
   analysisError.value = ''
   try {
     const response = await fetchNarrativeResponse({
@@ -1535,13 +1418,16 @@ async function analyzeCurrentViewport() {
     narrative.value = response
     analysisStatus.value = 'ready'
     refreshMapLayersAfterNarrativeChange()
+    const waitForEnrichmentBeforePlayback = false
     prepareNarrationAfterAnalysis()
+    startPlayback('manual_started', 0)
     if (response.enrichment?.job_id) {
-      pollNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken)
+      pollNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken, { startPlaybackOnComplete: waitForEnrichmentBeforePlayback })
     }
   } catch (error) {
     analysisStatus.value = 'error'
     enrichmentStatus.value = 'idle'
+    enrichmentError.value = ''
     analysisError.value = error instanceof Error ? error.message : '当前视野分析失败'
     if (import.meta.env.DEV) {
       console.warn('[Narrative] 当前视野分析失败', error)
@@ -1549,7 +1435,7 @@ async function analyzeCurrentViewport() {
   }
 }
 
-async function pollNarrativeEnrichment(jobId: string, token: number) {
+async function pollNarrativeEnrichment(jobId: string, token: number, options: { startPlaybackOnComplete?: boolean } = {}) {
   enrichmentStatus.value = 'pending'
   for (let attempt = 0; attempt < 45; attempt += 1) {
     if (token !== enrichmentPollToken) return
@@ -1558,121 +1444,45 @@ async function pollNarrativeEnrichment(jobId: string, token: number) {
     try {
       const job = await fetchNarrativeEnrichmentJob(jobId)
       enrichmentStatus.value = job.status === 'pending' ? 'pending' : job.status === 'running' ? 'running' : job.status === 'completed' ? 'completed' : 'failed'
+      enrichmentError.value = job.summary?.error || job.error || ''
       if (job.status === 'completed' && job.response) {
+        const shouldAutoStart = Boolean(options.startPlaybackOnComplete && ui.autoNarrate)
         const wasPlaying = playing.value
         narrative.value = job.response
+        enrichmentError.value = job.response.enrichment?.error || ''
         refreshMapLayersAfterNarrativeChange()
-        applyStep(activeStepIndex.value, { fly: false, narrate: wasPlaying })
+        if (shouldAutoStart) {
+          stopAll()
+          activeStepIndex.value = 0
+          startPlayback('auto_started', 0)
+          return
+        }
+        const nextStepIndex = clampStepIndex(activeStepIndex.value)
+        if (displayChapters.value.length > 0) applyStep(nextStepIndex, { fly: false, narrate: wasPlaying })
         return
       }
-      if (job.status === 'failed') return
+      if (job.status === 'failed') {
+        if (options.startPlaybackOnComplete && ui.autoNarrate) startPlayback('auto_started', activeStepIndex.value)
+        return
+      }
     } catch (error) {
       enrichmentStatus.value = 'failed'
+      enrichmentError.value = error instanceof Error ? error.message : '资料补强轮询失败'
       if (import.meta.env.DEV) {
         console.warn('[Narrative] 资料补强轮询失败', error)
       }
       return
     }
   }
-  if (token === enrichmentPollToken) enrichmentStatus.value = 'failed'
-}
-
-function initMap() {
-  if (!mapContainerEl.value) return
-  // 单一底图：默认卫星影像，可通过右上角「图层」按钮切到矢量路网。
-  // 不做叠加，保持画面干净。
-  baseLayer = new TileLayer({
-    source: new XYZ({
-      url: BASE_TILE_URL[baseLayerMode.value],
-      crossOrigin: 'anonymous'
-    })
-  })
-
-  // 1. 每个片区独立 heatmap，gradient 用片区色相
-  for (const region of displayRegions.value) {
-    const src = new VectorSource()
-    regionHeatSources[region.id] = src
-    const color = regionPalette.value[region.id] ?? DEFAULT_REGION_COLOR
-    const hl = new HeatmapLayer({
-      source: src,
-      weight: (f) => (f.get('weight') as number) ?? 0.2,
-      radius: 18,
-      blur: 22,
-      gradient: [
-        hexToRgba(color, 0),
-        hexToRgba(color, 0.35),
-        hexToRgba(color, 0.65),
-        hexToRgba(color, 0.85),
-        hexToRgba(color, 1.0)
-      ],
-      opacity: 0.6,
-      zIndex: 5
-    })
-    regionHeatLayers.push(hl)
+  if (token === enrichmentPollToken) {
+    enrichmentStatus.value = 'failed'
+    enrichmentError.value = '资料补强超时，请检查搜索接口或稍后重试。'
   }
-
-  // 2. POI 散点层（按 tier 颜色直接渲染）
-  poiBaseSource = new VectorSource()
-  poiLayer = new VectorLayer({
-    source: poiBaseSource,
-    zIndex: 10
-  })
-
-  labelLayer = new VectorLayer({ source: new VectorSource(), zIndex: 20, declutter: true })
-
-  // LOD 限制（按规范 §0.2 + 用户约束）：
-  // - 最大范围（minZoom 方向）：武汉市行政区划 bbox，视野不能拖出市域之外
-  // - 最小范围（maxZoom 方向）：17 级
-  //
-  // TODO(阶段 3)：接入 docker PostGIS 的 districts 表后，把这个常量换成
-  //   SELECT ST_AsGeoJSON(ST_Envelope(geom)) FROM districts WHERE name='武汉市'
-  //   的真实结果，由后端通过 NarrativeResponse.admin_boundary 字段下发。
-  const WUHAN_CITY_BBOX_4326: [number, number, number, number] = [113.7, 29.9, 115.1, 31.4]
-  const adminExtent3857 = transformExtent(WUHAN_CITY_BBOX_4326, 'EPSG:4326', 'EPSG:3857')
-
-  olMap = new OlMap({
-    target: mapContainerEl.value,
-    layers: [baseLayer, ...regionHeatLayers, poiLayer, labelLayer],
-    controls: [],
-    view: new View({
-      center: fromLonLat(narrative.value.viewport.center),
-      zoom: narrative.value.viewport.zoom,
-      // minZoom 10：武汉市 bbox 大约 1.4° × 1.5°，zoom 10 时能完整看到全市
-      minZoom: 10,
-      maxZoom: 17,
-      extent: adminExtent3857,
-      // 严格限制视野矩形不能拖出武汉市，不仅仅是中心点
-      constrainOnlyCenter: false,
-      showFullExtent: true
-    })
-  })
-
-  rebuildPoiLayer()
-  rebuildLabelLayer()
-  syncHeatmapRadius()
-  syncViewportZoomFromMap()
-
-  // zoom 变化时同步热力雾半径，实现 "密度雾随尺度融合 / 拆解" 的效果
-  olMap.getView().on('change:resolution', () => {
-    syncHeatmapRadius()
-    syncViewportZoomFromMap()
-  })
 }
-
-watch(() => ui.relevanceThreshold, () => {
-  rebuildPoiLayer()
-})
-
-onMounted(() => {
-  initMap()
-})
 
 onBeforeUnmount(() => {
+  enrichmentPollToken += 1
   stopAll()
-  if (olMap) {
-    olMap.setTarget(undefined)
-    olMap = null
-  }
 })
 
 // ============================================================================
@@ -1815,9 +1625,10 @@ const ICONS = {
    左右面板纵向跨满 main-grid（顶到底），底栏只占中央列下方
    ============================================================================ */
 .main-grid {
+  position: relative;
   display: grid;
   grid-template-columns: 300px 1fr 320px;
-  grid-template-rows: 1fr 168px;
+  grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas:
     "left center right"
     "left bottom right";
@@ -1825,10 +1636,23 @@ const ICONS = {
   gap: 12px;
   padding: 12px;
 }
+.main-grid.mode-narrate {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "center";
+}
+.main-grid.mode-compare {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: "center";
+}
 .left-panel { grid-area: left; }
 .right-panel { grid-area: right; }
 .map-stage { grid-area: center; }
-.bottom-bar { grid-area: bottom; }
+.bottom-bar {
+  grid-area: bottom;
+  align-self: end;
+}
 
 .left-panel, .right-panel {
   display: flex; flex-direction: column;
@@ -1837,6 +1661,185 @@ const ICONS = {
 }
 .left-panel::-webkit-scrollbar, .right-panel::-webkit-scrollbar { width: 4px; }
 .left-panel::-webkit-scrollbar-thumb, .right-panel::-webkit-scrollbar-thumb { background: rgba(120,140,200,0.2); border-radius: 2px; }
+
+.explore-tools-panel {
+  gap: 10px;
+  overflow: hidden;
+  padding-right: 0;
+}
+.explore-tool-nav {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(15,23,42,0.92), rgba(15,23,42,0.70)),
+    radial-gradient(circle at 18% 0%, rgba(59,130,246,0.18), transparent 40%);
+  box-shadow: 0 14px 34px rgba(2,6,23,0.26), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.explore-tool-tab {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(148,163,184,0.13);
+  border-radius: 12px;
+  background: rgba(2,6,23,0.22);
+  color: var(--txt-mute);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+.explore-tool-tab:hover {
+  transform: translateX(2px);
+  border-color: rgba(125,211,252,0.34);
+  background: rgba(30,41,59,0.46);
+  color: var(--txt);
+}
+.explore-tool-tab.active {
+  border-color: rgba(59,130,246,0.64);
+  background:
+    linear-gradient(135deg, rgba(37,99,235,0.32), rgba(14,165,233,0.14)),
+    rgba(15,23,42,0.72);
+  color: #f8fafc;
+  box-shadow: 0 12px 28px rgba(37,99,235,0.18), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.tool-tab-index {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 800;
+  font-feature-settings: 'tnum';
+  background: rgba(59,130,246,0.12);
+  border: 1px solid rgba(96,165,250,0.18);
+}
+.explore-tool-tab.active .tool-tab-index {
+  color: #fff;
+  background: linear-gradient(135deg, #38bdf8, #2563eb);
+  box-shadow: 0 10px 22px rgba(37,99,235,0.26);
+}
+.tool-tab-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.tool-tab-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-tab-copy span {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.explore-tool-tab.active .tool-tab-copy span {
+  color: #bfdbfe;
+}
+.explore-tool-shell {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+.explore-tool-shell::-webkit-scrollbar { width: 4px; }
+.explore-tool-shell::-webkit-scrollbar-thumb { background: rgba(120,140,200,0.22); border-radius: 2px; }
+.explore-tool-card {
+  min-height: min-content;
+}
+.explore-param-group {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid rgba(148,163,184,0.13);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(15,23,42,0.62), rgba(2,6,23,0.34)),
+    rgba(15,23,42,0.42);
+}
+.param-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.param-title-row span {
+  color: var(--txt-mute);
+  font-size: 12px;
+}
+.param-title-row strong {
+  overflow: hidden;
+  color: #bfdbfe;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.option-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.option-chip {
+  display: grid;
+  gap: 2px;
+  min-height: 38px;
+  align-content: center;
+  padding: 7px 8px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 10px;
+  background: rgba(2,6,23,0.24);
+  color: var(--txt-mute);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+.option-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125,211,252,0.34);
+  background: rgba(30,41,59,0.44);
+  color: var(--txt);
+}
+.option-chip.active {
+  border-color: rgba(96,165,250,0.62);
+  background:
+    linear-gradient(135deg, rgba(37,99,235,0.34), rgba(14,165,233,0.14)),
+    rgba(15,23,42,0.74);
+  color: #f8fafc;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 22px rgba(37,99,235,0.14);
+}
+.option-chip strong {
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.option-chip span {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.option-chip.active span {
+  color: #bfdbfe;
+}
 
 .panel-card {
   background: var(--bg-panel);
@@ -1915,6 +1918,418 @@ const ICONS = {
   cursor: pointer;
 }
 .ghost-btn:hover { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.4); }
+.ghost-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.narrate-hud {
+  position: absolute;
+  z-index: 30;
+  top: 18px;
+  left: 50%;
+  width: min(760px, calc(100vw - 56px));
+  color: var(--txt);
+  transform: translateX(-50%);
+}
+.narrate-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px 10px 14px;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(15,23,42,0.86), rgba(2,6,23,0.72)),
+    radial-gradient(circle at 8% 50%, rgba(59,130,246,0.24), transparent 28%);
+  border: 1px solid rgba(148,163,184,0.22);
+  box-shadow: 0 16px 44px rgba(2,6,23,0.36), inset 0 1px 0 rgba(255,255,255,0.06);
+  backdrop-filter: blur(18px) saturate(1.12);
+}
+.narrate-hud.ready .narrate-command {
+  border-color: rgba(96,165,250,0.34);
+}
+.narrate-hud.active .narrate-command {
+  box-shadow: 0 16px 48px rgba(37,99,235,0.22), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.hud-copy {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.hud-kicker {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(59,130,246,0.18);
+  border: 1px solid rgba(147,197,253,0.18);
+  font-size: 12px;
+  font-weight: 700;
+}
+.hud-copy strong {
+  color: #f8fafc;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.hud-copy > span:last-child {
+  overflow: hidden;
+  color: #a8b3c7;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hud-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.hud-actions .primary-btn,
+.hud-actions .ghost-btn {
+  width: auto;
+  min-height: 36px;
+  padding: 8px 13px;
+  white-space: nowrap;
+}
+.hud-actions .ghost-btn {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(148,163,184,0.22);
+  color: var(--txt);
+}
+.compare-board {
+  position: absolute;
+  z-index: 30;
+  top: 24px;
+  left: 24px;
+  width: min(420px, calc(100vw - 72px));
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(15,23,42,0.92), rgba(2,6,23,0.88)),
+    rgba(15,23,42,0.86);
+  color: var(--txt);
+  border: 1px solid rgba(148,163,184,0.22);
+  box-shadow: 0 24px 80px rgba(2,6,23,0.48), inset 0 1px 0 rgba(255,255,255,0.05);
+  backdrop-filter: blur(18px) saturate(1.12);
+}
+.compare-board {
+  width: min(460px, calc(100vw - 72px));
+}
+.board-kicker {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(59,130,246,0.18);
+  border: 1px solid rgba(147,197,253,0.18);
+  font-size: 12px;
+  font-weight: 700;
+}
+.compare-board h2 {
+  margin: 12px 0 8px;
+  color: #f8fafc;
+  font-size: 22px;
+  line-height: 1.25;
+}
+.board-copy {
+  margin: 0;
+  color: #a8b3c7;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.compare-tools .ghost-btn {
+  width: auto;
+}
+.compare-tools .ghost-btn {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(148,163,184,0.22);
+  color: var(--txt);
+}
+.narrate-rail {
+  position: absolute;
+  z-index: 28;
+  top: 86px;
+  bottom: 18px;
+  left: 18px;
+  width: min(252px, 26vw);
+  display: flex;
+  flex-direction: column;
+  color: var(--txt);
+  pointer-events: auto;
+}
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148,163,184,0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(15,23,42,0.84), rgba(2,6,23,0.58));
+  box-shadow: 0 14px 36px rgba(2,6,23,0.32), inset 0 1px 0 rgba(255,255,255,0.06);
+  backdrop-filter: blur(14px);
+}
+.rail-head span {
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 700;
+}
+.rail-head strong {
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 800;
+  font-feature-settings: 'tnum';
+}
+.rail-list {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 3px 0 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(147,197,253,0.45) transparent;
+}
+.rail-list::-webkit-scrollbar { width: 4px; }
+.rail-list::-webkit-scrollbar-thumb { background: rgba(147,197,253,0.45); border-radius: 999px; }
+.rail-card {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  min-height: 58px;
+  padding: 8px 9px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(15,23,42,0.66), rgba(15,23,42,0.36));
+  box-shadow: 0 12px 30px rgba(2,6,23,0.28), inset 0 1px 0 rgba(255,255,255,0.04);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.rail-card:hover {
+  transform: translateX(2px);
+  border-color: rgba(125,211,252,0.42);
+  background: linear-gradient(135deg, rgba(30,41,59,0.76), rgba(15,23,42,0.48));
+}
+.rail-card.active {
+  border-color: rgba(56,189,248,0.76);
+  background: linear-gradient(135deg, rgba(14,165,233,0.28), rgba(15,23,42,0.58));
+  box-shadow: 0 14px 36px rgba(14,165,233,0.24), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.rail-index {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #38bdf8, #2563eb);
+  box-shadow: 0 8px 20px rgba(37,99,235,0.28);
+}
+.rail-card.role-core .rail-index { background: linear-gradient(135deg, #fb7185, #dc2626); }
+.rail-card.role-cultural .rail-index { background: linear-gradient(135deg, #c084fc, #7e22ce); }
+.rail-card.role-landmark .rail-index { background: linear-gradient(135deg, #34d399, #059669); }
+.rail-card.role-ecological .rail-index { background: linear-gradient(135deg, #22c55e, #047857); }
+.rail-card.role-related .rail-index { background: linear-gradient(135deg, #facc15, #d97706); }
+.rail-card.role-educational .rail-index { background: linear-gradient(135deg, #60a5fa, #2563eb); }
+.rail-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.rail-copy strong {
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rail-copy span {
+  overflow: hidden;
+  color: #a8b3c7;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rail-count {
+  min-width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #e0f2fe;
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(2,6,23,0.52);
+  border: 1px solid rgba(125,211,252,0.28);
+}
+.rail-empty {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid rgba(148,163,184,0.18);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(15,23,42,0.72), rgba(15,23,42,0.42));
+  backdrop-filter: blur(12px);
+}
+.rail-empty strong { color: #f8fafc; font-size: 13px; }
+.rail-empty span { color: #a8b3c7; font-size: 12px; line-height: 1.5; }
+.vertical-narration {
+  position: absolute;
+  z-index: 29;
+  top: 96px;
+  right: 74px;
+  bottom: 82px;
+  width: min(420px, 36vw);
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(252,211,77,0.5) transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.vertical-narration::-webkit-scrollbar { height: 4px; }
+.vertical-narration::-webkit-scrollbar-thumb { background: rgba(252,211,77,0.5); border-radius: 999px; }
+.vertical-title {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  flex: 0 0 auto;
+  color: #22d3ee;
+  font-family: SimSun, '宋体', serif;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: 0.12em;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+}
+.vertical-copy {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  flex: 0 0 auto;
+  max-height: 100%;
+  min-width: 0;
+  margin: 0;
+  overflow: visible;
+  color: #fff4a3;
+  font-family: SimSun, '宋体', serif;
+  font-size: clamp(18px, 1.62vw, 24px);
+  font-weight: 800;
+  line-height: 1.62;
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.96), 0 0 2px rgba(0,0,0,0.95);
+}
+.vertical-source-mark {
+  pointer-events: auto;
+  color: #67e8f9;
+  font-size: 0.66em;
+  font-weight: 900;
+  text-decoration: none;
+  text-combine-upright: all;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.98), 0 0 2px rgba(0,0,0,0.95);
+}
+.vertical-source-mark:hover {
+  color: #fff;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.98), 0 0 6px rgba(103,232,249,0.86);
+}
+.vertical-cursor {
+  color: #fb7185;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.98);
+}
+.vertical-source-preview {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: min(300px, 30vw);
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(103,232,249,0.34);
+  border-radius: 12px;
+  background: rgba(15,23,42,0.76);
+  box-shadow: 0 12px 30px rgba(2,6,23,0.24);
+  color: #e0f2fe;
+  text-decoration: none;
+  backdrop-filter: blur(8px);
+}
+.preview-index {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(14,165,233,0.24);
+  color: #67e8f9;
+  font-size: 12px;
+  font-weight: 900;
+}
+.preview-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.preview-copy strong {
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.preview-copy span {
+  color: #93c5fd;
+  font-size: 11px;
+}
+.preview-copy em {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.main-grid.mode-narrate :deep(.assistant-fab) {
+  right: 20px;
+  bottom: 20px;
+  z-index: 34;
+}
+.compare-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.compare-ideas {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.compare-ideas li + li {
+  margin-top: 6px;
+}
 
 .region-info {
   background: var(--bg-card);
@@ -1981,6 +2396,7 @@ const ICONS = {
 .slider-value { color: #fff; font-weight: 600; font-feature-settings: 'tnum'; }
 .slider-input {
   -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   height: 4px;
   background: linear-gradient(90deg, var(--primary), rgba(59,130,246,0.2));
@@ -2045,220 +2461,6 @@ const ICONS = {
   background: #3b82f6; color: #fff;
   border-radius: 50%; font-style: italic; font-size: 10px;
   margin-right: 6px;
-}
-
-/* ============================================================================
-   中央地图（2.5D 卫星影像航拍视角）
-   ============================================================================ */
-.map-stage {
-  position: relative;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid var(--bd-strong);
-  background: #0a0e1c;
-  min-height: 0;
-  /* 给透视层一个深度场 */
-  perspective: 2200px;
-  perspective-origin: 50% 60%;
-}
-
-/* 透视场：包住真正的 OL canvas，让 rotateX 不影响兄弟控件层 */
-.map-perspective-deck {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  pointer-events: auto;
-}
-
-/* OL canvas 本体：rotateX 30° 模拟航拍倾斜
-   scale 1.18 补偿倾斜后视觉宽度收缩，避免边缘露背景
-   transform-origin 偏下，让"前景"留在画面下方、"远景"延伸到上方 */
-.map-canvas {
-  position: absolute;
-  inset: 0;
-  transform-origin: 50% 78%;
-  transform: rotateX(30deg) scale(1.18) translateZ(0);
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-:deep(.ol-viewport) { background: #0a0e1c; }
-/* 矢量底图：不加 filter，保持高德矢量原本的亮度和色彩 */
-.map-canvas.mode-vector :deep(.ol-viewport) { filter: none; }
-/* 卫星底图：略压暗 + 加饱和，让 POI/光晕在卫星纹理上更醒目 */
-.map-canvas.mode-satellite :deep(.ol-viewport) {
-  filter: saturate(1.08) contrast(1.06) brightness(0.88);
-}
-
-/* 远端地平线渐变：从顶部深蓝雾化到中段透明，强化"远处"感 */
-.map-horizon-mask {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 3;
-  background:
-    linear-gradient(
-      to bottom,
-      rgba(11, 16, 32, 0.92) 0%,
-      rgba(11, 16, 32, 0.55) 8%,
-      rgba(11, 16, 32, 0.18) 22%,
-      rgba(11, 16, 32, 0) 38%,
-      rgba(11, 16, 32, 0) 100%
-    );
-}
-
-/* 边缘晕影：四角微暗，中心通透，强化视觉焦点 */
-.map-vignette {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 4;
-  background:
-    radial-gradient(
-      120% 90% at 50% 65%,
-      rgba(0, 0, 0, 0) 50%,
-      rgba(0, 0, 0, 0.25) 80%,
-      rgba(0, 0, 0, 0.55) 100%
-    );
-}
-
-.coverage-card {
-  position: absolute; top: 14px; left: 14px;
-  width: 280px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--bd-strong);
-  border-radius: 10px;
-  padding: 12px 14px;
-  z-index: 5;
-  transition: width 0.2s ease, padding 0.2s ease;
-}
-/* 折叠态：仅保留头部，宽度收窄到刚好容下标题，避免遮挡地图 */
-.coverage-card.collapsed {
-  width: 220px;
-  padding: 10px 12px;
-}
-.coverage-head {
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 12.5px; color: var(--txt-mute);
-  margin-bottom: 8px;
-  cursor: pointer;
-  user-select: none;
-}
-.coverage-card.collapsed .coverage-head { margin-bottom: 0; }
-.coverage-head-actions {
-  display: flex; align-items: center; gap: 6px;
-}
-.coverage-toggle {
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: transparent;
-  border: 1px solid var(--bd);
-  border-radius: 5px;
-  color: var(--txt-mute);
-  cursor: pointer;
-  padding: 0;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-.coverage-toggle:hover {
-  color: #fff;
-  border-color: rgba(59,130,246,0.55);
-  background: rgba(59,130,246,0.18);
-}
-.coverage-body {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 10px; align-items: center;
-}
-.coverage-legend { list-style: none; padding: 0; margin: 0; font-size: 12px; }
-.coverage-legend li {
-  display: grid; grid-template-columns: 10px 1fr auto;
-  gap: 8px; padding: 3px 0; align-items: center;
-}
-.coverage-legend .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-}
-.coverage-legend .dot.core { background: #ef4444; }
-.coverage-legend .dot.strong { background: #f97316; }
-.coverage-legend .dot.weak { background: #3b82f6; }
-.coverage-legend strong { color: #fff; font-weight: 600; font-feature-settings: 'tnum'; }
-
-.map-controls {
-  position: absolute; top: 14px; right: 14px;
-  display: flex; flex-direction: column;
-  gap: 6px; z-index: 5;
-}
-.map-ctl {
-  width: 36px; height: 36px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--bd);
-  color: var(--txt);
-  border-radius: 8px; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 600;
-}
-.map-ctl:hover { background: var(--bg-elevated); }
-.map-ctl.active { background: var(--primary); border-color: var(--bd-accent); color: #fff; }
-.zoom-stack {
-  display: flex; flex-direction: column;
-  background: var(--bg-overlay);
-  border: 1px solid var(--bd);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.zoom-stack .map-ctl { border: 0; border-radius: 0; background: transparent; }
-.zoom-stack .map-ctl + .map-ctl { border-top: 1px solid var(--bd); }
-
-/* 图层切换按钮：图标 + 当前模式标签（矢量 / 影像）双层布局 */
-.map-ctl.layer-toggle {
-  flex-direction: column;
-  gap: 1px;
-  padding: 4px 0;
-  height: 42px;
-  font-size: 11px;
-  line-height: 1;
-}
-.map-ctl.layer-toggle :deep(svg) { width: 16px; height: 16px; }
-.map-ctl.layer-toggle .layer-tag {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--txt-soft);
-  letter-spacing: 0.5px;
-}
-.map-ctl.layer-toggle.active .layer-tag { color: #fff; }
-
-.map-scale {
-  position: absolute; bottom: 12px; left: 14px;
-  font-size: 11px; color: var(--txt-mute);
-  padding: 4px 8px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--bd);
-  border-radius: 6px;
-  z-index: 5;
-}
-
-/* AI 助手 fab：固定在 canvas 右下角 */
-.assistant-fab {
-  position: absolute;
-  right: 14px; bottom: 14px;
-  z-index: 20;
-  width: 52px; height: 52px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  border: 1px solid var(--bd-accent);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s ease, transform 0.15s ease;
-}
-.assistant-fab:hover  { background: #2563eb; transform: translateY(-1px); }
-.assistant-fab:active { transform: translateY(0); }
-.fab-letters {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  line-height: 1;
 }
 
 /* ============================================================================
@@ -2381,6 +2583,7 @@ const ICONS = {
 .source-summary {
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   color: var(--txt-faint);
@@ -2514,264 +2717,12 @@ const ICONS = {
   background: var(--primary);
   border-radius: 50%;
 }
-.dev-panel {
-  border-color: rgba(59,130,246,0.35);
-}
-.mini-link {
-  border: 0;
-  background: transparent;
-  color: #93c5fd;
-  font-size: 11px;
-  cursor: pointer;
-}
-.mini-link:hover { color: #fff; }
-.dev-summary-list {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 10px;
-  display: grid;
-  gap: 6px;
-}
-.dev-summary-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 8px;
-  border-radius: 7px;
-  background: var(--bg-card);
-  color: var(--txt-mute);
-  font-size: 11.5px;
-}
-.dev-summary-list strong {
-  color: #fff;
-  font-weight: 500;
-  text-align: right;
-}
-.dev-detail {
-  margin-top: 6px;
-  border: 1px solid var(--bd);
-  border-radius: 7px;
-  background: var(--bg-card);
-}
-.dev-detail summary {
-  padding: 7px 9px;
-  cursor: pointer;
-  color: #bfdbfe;
-  font-size: 11.5px;
-}
-.dev-detail pre {
-  margin: 0;
-  max-height: 220px;
-  overflow: auto;
-  padding: 9px;
-  border-top: 1px solid var(--bd);
-  color: var(--txt-mute);
-  font-size: 10.5px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-.dev-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-/* ============================================================================
-   底部时间线
-   ============================================================================ */
-/* 卡片化：与 map-stage 同样的圆角和边框，视觉保持一致
-   两段：左侧时间线（拉伸）+ 右侧播放器进度条（固定宽度） */
-.bottom-bar {
-  display: grid;
-  grid-template-columns: 1fr 300px;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--bd-strong);
-  border-radius: 12px;
-  background: var(--bg-panel);
-  min-height: 0;
-  min-width: 0;
-}
-
-.timeline-wrap {
-  display: grid;
-  grid-template-columns: 28px 1fr 28px;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.tl-arrow {
-  width: 28px; height: 28px;
-  background: var(--bg-card);
-  border: 1px solid var(--bd);
-  color: var(--txt-mute);
-  border-radius: 50%;
-  cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.tl-arrow:hover { color: #fff; background: rgba(59,130,246,0.15); }
-
-.timeline {
-  --tl-card-width: 132px;
-  --tl-edge-padding: max(8px, calc((100% - var(--tl-card-width)) / 2));
-  list-style: none; padding: 4px var(--tl-edge-padding); margin: 0;
-  display: flex; gap: 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  scroll-behavior: smooth;
-  overscroll-behavior-inline: contain;
-}
-.timeline::-webkit-scrollbar { display: none; }
-
-.tl-card {
-  flex: 0 0 132px;
-  background: var(--bg-card);
-  border: 1px solid var(--bd);
-  border-radius: 10px;
-  padding: 6px;
-  cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease;
-}
-.tl-card:hover { background: var(--bg-elevated); border-color: var(--bd-accent); }
-.tl-card.active {
-  border-color: var(--bd-accent);
-  background: var(--bg-elevated);
-}
-.tl-thumb {
-  position: relative;
-  height: 60px;
-  border-radius: 7px;
-  overflow: hidden;
-}
-.tl-dot {
-  position: absolute;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.86);
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-.tl-dot.tier-core {
-  width: 8px;
-  height: 8px;
-  background: #ef4444;
-}
-.tl-dot.tier-strong { background: #f97316; }
-.tl-dot.tier-medium { background: #eab308; }
-.tl-dot.tier-weak {
-  width: 4px;
-  height: 4px;
-  background: #60a5fa;
-  opacity: 0.72;
-}
-.tl-cluster {
-  position: absolute;
-  right: 7px;
-  bottom: 6px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  background: rgba(15,23,42,0.72);
-  border: 1px solid rgba(255,255,255,0.45);
-}
-.tl-no {
-  position: absolute; top: 5px; left: 6px;
-  width: 18px; height: 18px;
-  background: rgba(0,0,0,0.55);
-  color: #fff; border-radius: 4px;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 600;
-}
-.tl-tag-mini {
-  position: absolute; top: 5px; right: 5px;
-  font-size: 10px; padding: 1px 5px;
-  background: rgba(0,0,0,0.55);
-  color: #fff; border-radius: 4px;
-}
-.tl-name {
-  font-size: 12px; font-weight: 600; color: var(--txt);
-  margin-top: 6px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.tl-sub {
-  font-size: 10.5px; color: var(--txt-mute);
-  margin-top: 1px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* 进度 + 控制 */
-.bottom-progress {
-  display: flex; flex-direction: column;
-  gap: 6px;
-  justify-content: center;
-}
-.player-controls {
-  display: flex; gap: 6px; justify-content: center; align-items: center;
-}
-.player-btn {
-  width: 32px; height: 32px;
-  background: transparent; color: var(--txt-mute);
-  border: 1px solid var(--bd);
-  border-radius: 50%;
-  cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.player-btn:hover { color: #fff; background: rgba(59,130,246,0.15); }
-.player-btn.primary {
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  color: #fff;
-  border-color: rgba(59,130,246,0.6);
-  width: 36px; height: 36px;
-}
-
-.progress-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 10px; align-items: center;
-  font-size: 11px; color: var(--txt-mute);
-}
-.progress-track {
-  position: relative;
-  height: 4px;
-  background: rgba(120,140,200,0.18);
-  border-radius: 2px;
-  cursor: pointer;
-}
-.progress-fill {
-  position: absolute; left: 0; top: 0;
-  height: 100%;
-  background: linear-gradient(90deg, #60a5fa, #3b82f6);
-  border-radius: 2px;
-}
-.progress-knob {
-  position: absolute; top: -4px;
-  width: 12px; height: 12px;
-  background: #fff;
-  border-radius: 50%;
-  transform: translateX(-50%);
-  border: 3px solid var(--primary);
-}
-.progress-time { font-feature-settings: 'tnum'; }
-.progress-rate { color: var(--txt-faint); }
-
-/* 响应式：1280 以下收起左面板宽度，1080 以下右面板缩窄
-   底栏内部 2 段：时间线 1fr + 播放器固定宽度，窄屏时压缩播放器段 */
+/* 响应式：1280 以下收起左面板宽度，1080 以下右面板缩窄 */
 @media (max-width: 1280px) {
   .main-grid { grid-template-columns: 270px 1fr 290px; }
-  .bottom-bar { grid-template-columns: 1fr 280px; }
 }
 @media (max-width: 1080px) {
   .main-grid { grid-template-columns: 240px 1fr 260px; }
   .topbar { grid-template-columns: 240px 1fr 240px; }
-  .bottom-bar { grid-template-columns: 1fr 240px; }
 }
 </style>
