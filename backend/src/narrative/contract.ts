@@ -11,6 +11,39 @@ export type VisualTier = 'core' | 'strong' | 'medium' | 'weak' | 'excluded'
 export type LODLevel = 'micro' | 'meso' | 'macro'
 export type SceneProfile = 'education_culture' | 'heritage_tourism' | 'commercial_leisure' | 'natural_ecology' | 'mixed_urban'
 export type NarrationTone = 'science' | 'tour' | 'humanity'
+export type StoryTag =
+  | 'campus'
+  | 'education'
+  | 'culture'
+  | 'heritage'
+  | 'food'
+  | 'nightlife'
+  | 'commerce'
+  | 'market'
+  | 'ecology'
+  | 'waterfront'
+  | 'transit'
+  | 'community'
+  | 'landmark'
+  | 'leisure'
+  | 'urban_life'
+export type NarrativeRouteStrategy =
+  | 'seeded_spatial_story'
+  | 'micro_detail_walk'
+  | 'meso_mixed_cluster_walk'
+  | 'macro_city_cross_section'
+  | 'campus_ecology_walk'
+  | 'campus_life_loop'
+  | 'commercial_food_walk'
+  | 'night_market_walk'
+  | 'heritage_culture_walk'
+  | 'heritage_commerce_walk'
+  | 'waterfront_ecology_walk'
+  | 'waterfront_leisure_walk'
+  | 'commercial_axis_walk'
+  | 'civic_service_walk'
+  | 'transit_gateway_walk'
+  | 'mixed_discovery_walk'
 
 export interface ViewportBBox {
   west: number
@@ -29,6 +62,11 @@ export interface NarrativePoi {
   tier: VisualTier
   role: NarrativeRoleInternal
   category_main?: string
+  category_sub?: string
+  semantic_score?: number
+  semantic_distance?: number
+  fusion_score?: number
+  story_tags?: StoryTag[]
 }
 
 export type LonLat = [number, number]
@@ -80,6 +118,7 @@ export interface NarrativeRegion {
   visual_layer: NarrativeVisualLayer
   pois: NarrativePoi[]
   narrative_facts: NarrativeFact[]
+  story_tags?: StoryTag[]
 }
 
 export type PathNarrationRole = 'core' | 'related' | 'cultural' | 'landmark' | 'educational' | 'ecological'
@@ -88,6 +127,7 @@ export interface NarrativePathNode {
   region_id: string
   narration_role: PathNarrationRole
   transition_reason: string
+  story_tags?: StoryTag[]
 }
 
 export interface NarrativeChapter {
@@ -96,6 +136,7 @@ export interface NarrativeChapter {
   web_source?: { title: string; url: string }
   web_sources?: NarrativeWebSource[]
   length_ms?: number
+  story_tags?: StoryTag[]
 }
 
 export interface NarrativeWebSource {
@@ -149,11 +190,14 @@ export interface NarrativeResponse {
   candidate_count: number
   poi_density: number
   semantic_diversity: number
+  story_tags?: StoryTag[]
   regions: NarrativeRegion[]
   path: {
     nodes: NarrativePathNode[]
     seed: string
     alternatives_count: number
+    strategy?: NarrativeRouteStrategy
+    story_tags?: StoryTag[]
   }
   narration: {
     chapters: NarrativeChapter[]

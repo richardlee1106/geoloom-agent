@@ -28,6 +28,7 @@ function candidate(id: string, name: string, categoryMain: string): RegionCandid
     tier: 'strong',
     role: 'scene_evidence',
     category_main: categoryMain,
+    story_tags: categoryMain === '风景名胜' ? ['ecology'] : categoryMain === '科教文化服务' ? ['education'] : ['urban_life'],
   }
   return {
     id,
@@ -46,6 +47,7 @@ function candidate(id: string, name: string, categoryMain: string): RegionCandid
         related_entity: { type: 'region', id },
       },
     ],
+    story_tags: poi.story_tags,
     score: 0.9,
     source: 'aoi',
     coverage: 0.7,
@@ -56,10 +58,22 @@ function candidate(id: string, name: string, categoryMain: string): RegionCandid
 
 const path: PathSamplerResult = {
   nodes: [
-    { region_id: 'wuda', narration_role: 'core', transition_reason: '从当前视野中最有代表性的区域开始讲起。' },
-    { region_id: 'east-lake', narration_role: 'ecological', transition_reason: '从武汉大学转到东湖风景区，能看到教育文化空间和开放生态空间之间的衔接。' },
+    { region_id: 'wuda', narration_role: 'core', transition_reason: '从当前视野中最有代表性的区域开始讲起。', story_tags: ['education'] },
+    { region_id: 'east-lake', narration_role: 'ecological', transition_reason: '从武汉大学转到东湖风景区，能看到教育文化空间和开放生态空间之间的衔接。', story_tags: ['ecology'] },
   ],
   alternativesCount: 0,
+  engine: 'seeded_lod_bbox_sampler',
+  strategy: 'campus_ecology_walk',
+  storyTags: ['education', 'ecology'],
+  lodPolicy: {
+    lod: 'meso',
+    max_nodes: 8,
+    top_k: 4,
+    beta: 8,
+    distance_bias: 'balanced',
+    continuity_bias: 'balanced',
+    diversity_bias: 'mixed_cluster',
+  },
   relations: [
     {
       from_region_id: 'wuda',
@@ -67,13 +81,14 @@ const path: PathSamplerResult = {
       type: 'functional_complement',
       strength: 0.82,
       evidence: ['教育文化→生态休闲', '功能互补'],
+      shared_story_tags: [],
     },
   ],
 }
 
 const chapters: NarrativeChapter[] = [
-  { region_id: 'wuda', text: '先看武汉大学。这里有真实地界。' },
-  { region_id: 'east-lake', text: '接着看东湖风景区。这里有生态空间。' },
+  { region_id: 'wuda', text: '先看武汉大学。这里有真实地界。', story_tags: ['education'] },
+  { region_id: 'east-lake', text: '接着看东湖风景区。这里有生态空间。', story_tags: ['ecology'] },
 ]
 
 describe('buildGraphNarration', () => {
@@ -98,6 +113,64 @@ describe('buildGraphNarration', () => {
     expect(result.debug.used).toBe(true)
     expect(result.chapters.map((chapter) => chapter.region_id)).toEqual(['wuda', 'east-lake'])
     expect(result.chapters[1].text).toContain('教育文化氛围与生态休闲空间')
+  })
+
+  it('passes LOD and route strategy controls into the LLM prompt', async () => {
+    const provider = createProvider(JSON.stringify({
+      chapters: [
+        { region_id: 'wuda', text: '先看武汉大学，这一段先建立大范围观察框架，把校园文化放进城市功能拼图里理解。' },
+        { region_id: 'east-lake', text: '接着看东湖风景区，它补上开放生态空间，让这条横截面从校园延伸到水岸和绿地。' },
+      ],
+    }))
+    const macroPath: PathSamplerResult = {
+      ...path,
+      strategy: 'macro_city_cross_section',
+      storyTags: ['education', 'ecology', 'commerce', 'culture', 'urban_life'],
+      lodPolicy: {
+        lod: 'macro',
+        max_nodes: 10,
+        top_k: 5,
+        beta: 6.5,
+        distance_bias: 'loose',
+        continuity_bias: 'loose',
+        diversity_bias: 'cross_section',
+      },
+      relations: [
+        {
+          ...path.relations[0],
+          type: 'campus_ecology_edge',
+        },
+      ],
+    }
+
+    await buildGraphNarration({
+      chapters,
+      regions: [candidate('wuda', '武汉大学', '科教文化服务'), candidate('east-lake', '东湖风景区', '风景名胜')],
+      path: macroPath,
+      scene: 'education_culture',
+      tone: 'tour',
+      userContext: { time_label: '下午', weather_label: '晴', preference_label: '游览', history_label: '首次进入' },
+      llmProvider: provider,
+    })
+
+    const request = vi.mocked(provider.complete).mock.calls[0][0]
+    const systemPrompt = request.messages.find((message) => message.role === 'system')?.content || ''
+    const userPrompt = request.messages.find((message) => message.role === 'user')?.content || '{}'
+    const payload = JSON.parse(userPrompt) as {
+      narration_control: Record<string, unknown>
+      geograph: Array<{ chapter_control: Record<string, unknown> }>
+    }
+
+    expect(systemPrompt).toContain('route_strategy')
+    expect(payload.narration_control).toMatchObject({
+      lod: 'macro',
+      route_strategy: 'macro_city_cross_section',
+      route_strategy_label: '城市横截面导览',
+    })
+    expect(payload.narration_control.lod_instruction).toContain('城市横截面')
+    expect(payload.narration_control.strategy_instruction).toContain('城市横截面')
+    expect(payload.geograph[0].chapter_control.lod_focus).toContain('大范围')
+    expect(payload.geograph[1].chapter_control.route_focus).toContain('城市功能')
   })
 
   it('falls back when LLM changes the chapter contract', async () => {
@@ -136,7 +209,9 @@ describe('buildGraphNarration', () => {
     })
 
     expect(result.debug).toMatchObject({ used: true, fallback_reason: 'partial_invalid_llm_output', partial_fallback_count: 1 })
-    expect(result.chapters[0].text).toContain('教育文化底色')
-    expect(result.chapters[1].text).toBe(chapters[1].text)
+    expect(result.chapters[0].text).toContain('武汉大学')
+    expect(result.chapters[1].text).toContain('东湖风景区')
+    expect(result.chapters[0].story_tags).toEqual(['education'])
+    expect(result.debug.used).toBe(true)
   })
 })

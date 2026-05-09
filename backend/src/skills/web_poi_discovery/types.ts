@@ -183,8 +183,8 @@ export interface WebPoiDiscoveryConfig {
   llmBaseUrl: string
   llmApiKey: string
   llmModel: string
-  /** Jina bridge（用于向量召回/rerank） */
-  jinaApiKey?: string
+  /** Embedding bridge（用于向量召回/rerank） */
+  embedApiKey?: string
   qualitySiteConfigPath: string
   maxSearchRounds: number
   maxResults: number

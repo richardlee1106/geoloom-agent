@@ -1,7 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest'
 
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
-import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
+import { buildCompositeNarrativeWebFactSearcher, buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
 import { NarrativeWebFactCache } from '../../../src/narrative/NarrativeWebFactCache.js'
 import type { SpatialFeature } from '../../../src/spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../../../src/skills/types.js'
@@ -20,14 +20,25 @@ function feature(id: string, name: string, lon: number, lat: number, categoryMai
   }
 }
 
+function shahuParkFeatures(): SpatialFeature[] {
+  return [
+    feature('shahu-1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+    feature('shahu-2', '沙湖公园琴园', 114.341, 30.561, '风景名胜', '公园广场'),
+    feature('shahu-3', '沙湖公园歌笛湖', 114.342, 30.562, '风景名胜', '公园广场'),
+  ]
+}
+
 describe('NarrativePhase3Runtime', () => {
   it('builds region candidates, LOD, path and grounded narration without LLM structure decisions', async () => {
     const runtime = new NarrativePhase3Runtime({
       fetchSpatialFeatures: async () => [
         feature('1', '武汉大学', 114.34, 30.54),
         feature('2', '武汉大学图书馆', 114.341, 30.541, '科教文化服务', '图书馆'),
-        feature('3', '东湖风景区', 114.37, 30.56, '风景名胜', '风景名胜'),
-        feature('4', '学生宿舍', 114.342, 30.542, '科教文化服务', '宿舍'),
+        feature('3', '武汉大学博物馆', 114.342, 30.542, '科教文化服务', '博物馆'),
+        feature('4', '东湖风景区', 114.37, 30.56, '风景名胜', '风景名胜'),
+        feature('5', '东湖绿道', 114.371, 30.561, '风景名胜', '绿道'),
+        feature('6', '东湖风景区游客中心', 114.372, 30.562, '风景名胜', '游客中心'),
+        feature('7', '学生宿舍', 114.343, 30.543, '科教文化服务', '宿舍'),
       ],
       fetchAoiCandidates: async () => [
         {
@@ -89,6 +100,10 @@ describe('NarrativePhase3Runtime', () => {
 
     expect(response.session_id).toBe('session-1')
     expect(response.regions.length).toBeGreaterThanOrEqual(2)
+    expect(response.story_tags?.length).toBeGreaterThan(0)
+    expect(response.path.strategy).toBeTruthy()
+    expect(response.path.story_tags).toEqual(response.story_tags)
+    expect(response.regions.some((region) => region.story_tags?.length)).toBe(true)
     expect(response.path.nodes.length).toBeGreaterThanOrEqual(2)
     expect(response.regions.some((region) => region.role === 'primary_region')).toBe(true)
     const riverfront = response.regions.find((region) => region.display_name === '武昌江滩公园')
@@ -101,14 +116,13 @@ describe('NarrativePhase3Runtime', () => {
       return !region || !chapter.text.includes(`${region.display_name}。${region.display_name}`)
     })).toBe(true)
     expect(response.narration.chapters.every((chapter) => !/宿舍|广告|优惠|POI|样本|节点|权重|score|tier/.test(chapter.text))).toBe(true)
+    expect(response.narration.chapters.some((chapter) => chapter.story_tags?.length)).toBe(true)
     expect(response.debug).toBeUndefined()
   })
 
   it('returns a structured debug snapshot only when requested', async () => {
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -134,9 +148,9 @@ describe('NarrativePhase3Runtime', () => {
     })
 
     expect(response.debug?.recall).toMatchObject({
-      features_count: 1,
-      poi_count: 1,
-      renderable_poi_count: 1,
+      features_count: 3,
+      poi_count: 3,
+      renderable_poi_count: 3,
       aoi_count: 1,
     })
     expect(response.debug?.candidates).toMatchObject({
@@ -145,17 +159,174 @@ describe('NarrativePhase3Runtime', () => {
       fallback_used: false,
     })
     expect(response.debug?.lod).toMatchObject({ selected: response.lod })
-    expect(response.debug?.path).toMatchObject({ node_count: response.path.nodes.length })
+    expect(response.debug?.path).toMatchObject({
+      node_count: response.path.nodes.length,
+      engine: 'seeded_lod_bbox_sampler',
+      strategy: response.path.strategy,
+      story_tags: response.path.story_tags,
+    })
     expect(response.debug?.path).toMatchObject({ relations: expect.any(Array) })
+    expect(response.debug?.story_tags).toMatchObject({
+      path: response.path.story_tags,
+      counts: expect.any(Object),
+    })
     expect(response.debug?.facts).toMatchObject({ selected_region_count: response.narration.chapters.length })
+    expect(response.debug?.performance).toMatchObject({
+      timings_ms: expect.objectContaining({
+        poi_query: expect.any(Number),
+        aoi_query: expect.any(Number),
+        total: expect.any(Number),
+      }),
+      limits: expect.objectContaining({
+        poi_limit: expect.any(Number),
+        candidate_limit: 24,
+      }),
+    })
+  })
+
+  it('uses exploration theme preference to change final deterministic narration focus', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+    })
+    const common = {
+      viewport: { west: 114.31, south: 30.53, east: 114.37, north: 30.59, zoom: 14, center: [114.34, 30.56] as [number, number] },
+      enrichment_mode: 'off' as const,
+    }
+    const commerce = await runtime.build({
+      ...common,
+      session_id: 'theme-commerce',
+      tone: 'tour',
+      user_context: { time_label: '下午', weather_label: '晴', preference_label: '优先观察商业活力、消费锚点、商圈层级与餐饮休闲支撑', history_label: '测试' },
+    })
+    const education = await runtime.build({
+      ...common,
+      session_id: 'theme-education',
+      tone: 'humanity',
+      user_context: { time_label: '下午', weather_label: '晴', preference_label: '优先观察高校科教、校园文化、周边生活与知识社区', history_label: '测试' },
+    })
+    const commerceText = commerce.narration.chapters.map((chapter) => chapter.text).join('\n')
+    const educationText = education.narration.chapters.map((chapter) => chapter.text).join('\n')
+
+    expect(commerceText).toContain('商业活力')
+    expect(commerceText).toContain('消费锚点')
+    expect(educationText).toContain('高校科教')
+    expect(educationText).toContain('校园')
+    expect(commerceText).not.toEqual(educationText)
+  })
+
+  it('passes SLA budget, dynamic limit and 512-d query vector into POI recall', async () => {
+    const requestInputs: Record<string, unknown>[] = []
+    const queryVector = Array.from({ length: 512 }, (_, index) => index / 512)
+    const runtime = new NarrativePhase3Runtime({
+      embedNarrativeQuery: async () => queryVector,
+      fetchSpatialFeatures: async (input) => {
+        requestInputs.push(input as Record<string, unknown>)
+        return [
+          {
+            ...feature('1', '山海关路李记鸡冠饺', 114.302, 30.602, '餐饮服务', '小吃'),
+            properties: {
+              ...feature('1', '山海关路李记鸡冠饺', 114.302, 30.602, '餐饮服务', '小吃').properties,
+              semantic_score: 0.91,
+              semantic_distance: 0.18,
+              fusion_score: 0.87,
+            },
+          },
+          feature('2', '山海关路毛氏汽水包', 114.304, 30.604, '餐饮服务', '小吃'),
+        ]
+      },
+      fetchAoiCandidates: async () => [],
+    })
+
+    const response = await runtime.build({
+      session_id: 'semantic-session',
+      debug: true,
+      enrichment_mode: 'off',
+      viewport: {
+        west: 114.29,
+        south: 30.59,
+        east: 114.32,
+        north: 30.615,
+        zoom: 16,
+        center: [114.305, 30.603],
+      },
+    })
+
+    const requestInput = requestInputs[0]
+    expect(requestInput).toMatchObject({
+      timeoutMs: expect.any(Number),
+      limit: expect.any(Number),
+      semanticWeight: expect.any(Number),
+      semanticCandidateLimit: expect.any(Number),
+    })
+    expect(requestInput?.semanticQueryVector).toHaveLength(512)
+    expect(Number(requestInput?.limit)).toBeLessThanOrEqual(5000)
+    expect(response.debug?.performance).toMatchObject({
+      semantic_recall: expect.objectContaining({
+        enabled: true,
+        used_query_vector: true,
+        vector_dim: 512,
+        top_score: 0.91,
+      }),
+    })
+  })
+
+  it('falls back to hard spatial recall when query embedding is not 512 dimensions', async () => {
+    const requestInputs: Record<string, unknown>[] = []
+    const runtime = new NarrativePhase3Runtime({
+      embedNarrativeQuery: async () => [0.1, 0.2],
+      fetchSpatialFeatures: async (input) => {
+        requestInputs.push(input as Record<string, unknown>)
+        return [feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场')]
+      },
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'bad-semantic-session',
+      debug: true,
+      enrichment_mode: 'off',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(requestInputs[0]?.semanticQueryVector).toBeUndefined()
+    expect(response.debug?.performance).toMatchObject({
+      semantic_recall: expect.objectContaining({
+        enabled: true,
+        used_query_vector: false,
+        vector_dim: 2,
+      }),
+    })
+    expect((response.debug?.performance as { warnings?: string[] }).warnings?.some((item) => item.includes('vector_dim_2'))).toBe(true)
   })
 
   it('attaches optional web fact sources to narration chapters', async () => {
     const queries: string[] = []
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -246,11 +417,75 @@ describe('NarrativePhase3Runtime', () => {
     })
   })
 
+  it('falls back to Tavily web facts when DeepSeek search fails', async () => {
+    const calls: string[] = []
+    const deepSeek: SkillDefinition = {
+      name: 'deepseek_search',
+      description: 'test',
+      capabilities: ['search_web'],
+      actions: {
+        search_web: {
+          name: 'search_web',
+          description: 'test',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+        },
+      },
+      async execute(action) {
+        calls.push(`deepseek:${action}`)
+        return {
+          ok: false,
+          error: { code: 'deepseek_search_failed', message: 'model_not_found' },
+          meta: { action, audited: false },
+        }
+      },
+    }
+    const tavily: SkillDefinition = {
+      name: 'tavily_search',
+      description: 'test',
+      capabilities: ['search_web'],
+      actions: {
+        search_web: {
+          name: 'search_web',
+          description: 'test',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+        },
+      },
+      async execute(action, payload) {
+        calls.push(`tavily:${action}`)
+        expect(payload).toMatchObject({ query: '沙湖公园 介绍', max_results: 2, search_depth: 'basic' })
+        return {
+          ok: true,
+          data: {
+            results: [
+              {
+                title: '沙湖公园介绍',
+                url: 'https://example.com/shahu-tavily',
+                content: '沙湖公园是武汉市中心城区综合性公园。',
+              },
+            ],
+          },
+          meta: { action, audited: false },
+        }
+      },
+    }
+
+    const searcher = buildCompositeNarrativeWebFactSearcher({ deepSeek, tavily })
+    const sources = await searcher?.('沙湖公园 介绍', 2)
+
+    expect(calls).toEqual(['deepseek:search_web', 'tavily:search_web'])
+    expect(sources).toHaveLength(1)
+    expect(sources?.[0]).toMatchObject({
+      title: '沙湖公园介绍',
+      url: 'https://example.com/shahu-tavily',
+      snippet: '沙湖公园是武汉市中心城区综合性公园。',
+    })
+  })
+
   it('标题命中当前片区时也会把网页摘要注入章节文本并保留引用', async () => {
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -312,9 +547,7 @@ describe('NarrativePhase3Runtime', () => {
       },
     }
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -428,9 +661,7 @@ describe('NarrativePhase3Runtime', () => {
 
   it('sorts optional web fact sources by quality before attaching', async () => {
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -474,9 +705,7 @@ describe('NarrativePhase3Runtime', () => {
   it('keeps web name candidates debug-only without changing structural regions', async () => {
     let queryCount = 0
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -528,9 +757,7 @@ describe('NarrativePhase3Runtime', () => {
     let queryCount = 0
     const webFactCache = new NarrativeWebFactCache()
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -582,9 +809,7 @@ describe('NarrativePhase3Runtime', () => {
   it('returns an async initial narrative immediately and stores enriched job response later', async () => {
     let queryCount = 0
     const runtime = new NarrativePhase3Runtime({
-      fetchSpatialFeatures: async () => [
-        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
-      ],
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
       fetchAoiCandidates: async () => [
         {
           id: 'shahu-park',
@@ -629,8 +854,125 @@ describe('NarrativePhase3Runtime', () => {
 
     expect(queryCount).toBe(1)
     expect(job.status).toBe('completed')
+    expect(job.response?.session_id).toBe(initial.session_id)
     expect(job.response?.enrichment).toMatchObject({ mode: 'async', status: 'completed', phase: 'enriched', source_count: 1 })
     expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-async')
+  })
+
+  it('未配置网页事实搜索器时异步补强会显式失败', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+    })
+
+    const initial = await runtime.build({
+      session_id: 'webfact-missing-searcher-session',
+      debug: true,
+      enrichment_mode: 'async',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+    const jobId = initial.enrichment?.job_id
+
+    expect(jobId).toBeTruthy()
+    expect(initial.enrichment).toMatchObject({ mode: 'async', status: 'pending', phase: 'initial' })
+
+    const job = await waitForEnrichmentJob(runtime, jobId!)
+
+    expect(job.status).toBe('failed')
+    expect(job.summary).toMatchObject({
+      mode: 'async',
+      status: 'failed',
+      phase: 'enriched',
+      source_count: 0,
+    })
+    expect(job.summary.error).toContain('web_fact_searcher_unavailable')
+    expect(job.response).toBeUndefined()
+  })
+
+  it('不会因为非布尔 debug 输入暴露调试快照', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'debug-string-session',
+      debug: 'true' as unknown as boolean,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.debug).toBeUndefined()
+  })
+
+  it('不会把广告型网页摘要注入最终章节文本', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园团购优惠',
+          url: 'https://example.com/shahu-ad',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-ad-session',
+      debug: true,
+      enrichment_mode: 'sync',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-ad')
+    expect(response.narration.chapters[0].text).not.toContain('参考资料显示')
   })
 
   it('默认会为所有解说章节尝试网页事实补强', async () => {

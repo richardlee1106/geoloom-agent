@@ -5,10 +5,6 @@ import { fileURLToPath, URL } from 'node:url'
 const childProcessShimPath = fileURLToPath(
   new URL('./src/shims/child-process-browser.ts', import.meta.url)
 )
-const earcutEsmPath = fileURLToPath(
-  new URL('./node_modules/earcut/src/earcut.js', import.meta.url)
-)
-
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyTarget = env.VITE_DEV_API_BASE || (mode === 'v4'
@@ -17,42 +13,80 @@ export default defineConfig(({ mode }) => {
       ? 'http://127.0.0.1:3300'
       : 'http://127.0.0.1:3200')
   const streamProxyTimeoutMs = 10 * 60 * 1000
+  const warmupClientFiles = [
+    './src/main.ts',
+    './src/App.vue',
+    './src/router/index.ts',
+    './src/MainLayout.vue',
+    './src/views/NarrativeShell.vue',
+    ...(env.VITE_DEV_WARMUP_NARRATIVE === '1'
+      ? [
+          './src/views/NarrativeMode.vue',
+          './src/views/narrative/NarrativeMapStage.vue'
+        ]
+      : [])
+  ]
 
   return {
     plugins: [
       vue()
     ],
+    optimizeDeps: {
+      include: [
+        'vue',
+        'vue-router',
+        'element-plus/es/components/loading/index',
+        'element-plus/es/components/notification/index',
+        'ol/Map',
+        'ol/View',
+        'ol/proj',
+        'ol/layer/Tile',
+        'ol/layer/Heatmap',
+        'ol/source/XYZ',
+        'ol/source/Vector',
+        'ol/layer/Vector',
+        'ol/interaction/Draw',
+        'ol/Feature',
+        'ol/geom/Point',
+        'ol/geom/Circle',
+        'ol/geom/Polygon',
+        'ol/Overlay',
+        'ol/style',
+        'ol/Observable'
+      ]
+    },
     resolve: {
       alias: {
         'child_process': childProcessShimPath,
-        'node:child_process': childProcessShimPath,
-        'earcut': earcutEsmPath
+        'node:child_process': childProcessShimPath
       }
-    },
-    optimizeDeps: {
-      exclude: ['three', '@deck.gl/core', '@deck.gl/layers', '@deck.gl/aggregation-layers'],
-      include: [
-        'vue', 'vue-router', 'axios', 'd3', 'd3-cloud', 'marked', 'earcut',
-        'ol', 'element-plus', '@element-plus/icons-vue',
-        '@turf/boolean-point-in-polygon', '@turf/centroid', '@turf/helpers',
-        'geotiff', 'rbush', 'html2canvas'
-      ]
     },
     build: {
       chunkSizeWarningLimit: 1000,
+      modulePreload: {
+        resolveDependencies(_url, deps) {
+          return deps.filter((dep) => {
+            return ![
+              'vendor-raster',
+              'vendor-capture',
+              'vendor-d3',
+              'vendor-marked'
+            ].some((name) => dep.includes(name))
+          })
+        }
+      },
       rollupOptions: {
         output: {
           manualChunks(id) {
             const normalizedId = id.replace(/\\/g, '/')
+            if (normalizedId.includes('vite/preload-helper')) return 'preload-helper'
             if (!normalizedId.includes('node_modules')) {
-              if (normalizedId.includes('/src/views/NarrativeMode.vue')) return 'route-narrative'
               return
             }
 
             if (normalizedId.includes('/@vue/') || normalizedId.includes('/vue/')) return 'vendor-vue'
             if (normalizedId.includes('vue-router')) return 'vendor-vue-router'
             if (normalizedId.includes('/ol/')) return 'vendor-ol'
-            if (normalizedId.includes('@deck.gl') || normalizedId.includes('@luma.gl')) return 'vendor-deckgl'
             if (normalizedId.includes('element-plus')) return 'vendor-element-plus'
             if (normalizedId.includes('@element-plus/icons-vue')) return 'vendor-element-icons'
             if (normalizedId.includes('/d3') || normalizedId.includes('d3-cloud')) return 'vendor-d3'
@@ -70,6 +104,9 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: '127.0.0.1',
+      warmup: {
+        clientFiles: warmupClientFiles
+      },
       // 从 3000 改到 5173（vite 官方默认）：3000 在 Windows 经常被
       // 客户端进程（如哔哩哔哩、IM 客户端）作为 ephemeral client port
       // 出站到本地代理临时占用，导致 strictPort 启动失败。

@@ -33,6 +33,7 @@ export async function fetchNarrativeAoiCandidates(
   viewport: ViewportBBox,
   query: (sql: string, params?: unknown[], timeoutMs?: number) => Promise<QueryResultLike>,
   limit = 200,
+  timeoutMs = 1000,
 ): Promise<AoiCandidateRow[]> {
   const sql = `
     WITH viewport AS (
@@ -71,7 +72,7 @@ export async function fetchNarrativeAoiCandidates(
       COALESCE(area_sqm, 0) DESC
     LIMIT $5
   `
-  const result = await query(sql, [viewport.west, viewport.south, viewport.east, viewport.north, limit], 8000)
+  const result = await query(sql, [viewport.west, viewport.south, viewport.east, viewport.north, limit], timeoutMs)
   return result.rows
     .map((row): AoiCandidateRow | null => {
       const west = Number(row.west)

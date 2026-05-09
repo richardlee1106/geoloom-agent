@@ -1,18 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 
-import MainLayout from '../MainLayout.vue'
-
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'Home',
-    component: MainLayout
+    component: () => import('../MainLayout.vue')
   },
   {
-    path: '/narrative',
+    path: '/narrative/:mode?',
     name: 'NarrativeMode',
-    component: () => import('../views/NarrativeMode.vue')
+    component: () => import('../views/NarrativeShell.vue')
   }
 ]
 

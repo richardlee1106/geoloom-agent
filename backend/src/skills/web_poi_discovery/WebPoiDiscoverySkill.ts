@@ -27,8 +27,8 @@ import { TavilyExtractClient } from './tavilyExtractClient.js'
 import { MentionExtractor } from './mentionExtractor.js'
 import { MentionNormalizer, type NormalizedMentionGroup } from './mentionNormalizer.js'
 import { ShortlistMatcher, type DbQueryFn } from './shortlistMatcher.js'
-import type { EmbedRerankBridge } from '../../integration/jinaBridge.js'
-import { JinaBridge, LocalFallbackBridge } from '../../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../../integration/embedBridge.js'
+import { EmbedBridge, LocalFallbackBridge } from '../../integration/embedBridge.js'
 import {
   createTavilyHttpError,
   normalizeTavilyApiKeys,
@@ -51,8 +51,8 @@ interface WebPoiDiscoveryOptions {
   llmBaseUrl?: string
   llmApiKey?: string
   llmModel?: string
-  /** Jina 配置（用于 shortlist 向量召回/rerank） */
-  jinaApiKey?: string
+  /** Embedding API 配置（用于 shortlist 向量召回/rerank） */
+  embedApiKey?: string
   maxSearchRounds?: number
   maxResults?: number
 }
@@ -364,13 +364,13 @@ export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): Ski
 
   const normalizer = new MentionNormalizer()
 
-  const jinaBridge: EmbedRerankBridge = options.jinaApiKey || process.env.JINA_API_KEY
-    ? new JinaBridge({ apiKey: options.jinaApiKey || process.env.JINA_API_KEY })
+  const localEmbedBridge: EmbedRerankBridge = options.embedApiKey || process.env.EMBED_API_KEY
+    ? new EmbedBridge({ apiKey: options.embedApiKey || process.env.EMBED_API_KEY })
     : new LocalFallbackBridge()
 
   const shortlistMatcher = new ShortlistMatcher({
     query: options.query,
-    bridge: jinaBridge,
+    bridge: localEmbedBridge,
   })
 
   return {
@@ -426,7 +426,7 @@ export function createWebPoiDiscoverySkill(options: WebPoiDiscoveryOptions): Ski
           degraded: !(options.llmBaseUrl || process.env.LLM_BASE_URL),
           mode: 'remote' as const,
         },
-        jina: await jinaBridge.getStatus(),
+        embed: await localEmbedBridge.getStatus(),
       } satisfies Record<string, DependencyStatus>
     },
 

@@ -6,7 +6,7 @@
  *
  * 缓存机制：将预计算的 embedding 保存到 JSON 文件，避免每次启动都调用 API。
  */
-import type { EmbedRerankBridge } from '../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../integration/embedBridge.js'
 import type { QueryResultLike } from '../integration/postgisPool.js'
 import { resolveResourceUrl } from '../utils/resolveResourceUrl.js'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -314,7 +314,7 @@ export class CategoryEmbeddingIndex {
       // 构造 embedding 文本
       const labels = uniqueRows.map(r => buildEmbeddingLabel(r.category_main, r.category_sub))
 
-      // 批量 embed（Jina 单次最多 2048 条，这里通常 <100 条）
+      // 批量 embed（这里通常 <100 条）
       const embedResult = await bridge.embed(labels)
 
       if (!embedResult.embeddings || embedResult.embeddings.length !== uniqueRows.length) {

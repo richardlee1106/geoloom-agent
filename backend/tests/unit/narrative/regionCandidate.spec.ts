@@ -39,7 +39,11 @@ describe('buildRegionCandidates', () => {
     const candidates = buildRegionCandidates({
       viewport,
       scene: 'education_culture',
-      pois: [poi('1', 114.34, 30.54)],
+      pois: [
+        poi('1', 114.34, 30.54),
+        poi('2', 114.341, 30.541),
+        poi('3', 114.342, 30.542),
+      ],
       aois: [
         {
           id: 'wuda',
@@ -86,6 +90,8 @@ describe('buildRegionCandidates', () => {
       scene: 'education_culture',
       pois: [
         poi('library', 114.34, 30.54, '科教文化服务', 'strong'),
+        poi('museum', 114.341, 30.541, '科教文化服务', 'medium'),
+        poi('hall', 114.342, 30.542, '科教文化服务', 'medium'),
         poi('metro', 114.341, 30.541, '交通设施服务', 'weak'),
       ],
       aois: [
@@ -102,7 +108,7 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].pois.map((item) => item.id)).toEqual(expect.arrayContaining(['library', 'metro']))
     expect(candidates[0].visual_layer.poi_heat?.points).toHaveLength(candidates[0].effectivePoiCount)
     expect(candidates[0].visual_layer.poi_heat?.points.some((point) => point.tier === 'weak')).toBe(false)
-    expect(candidates[0].effectivePoiCount).toBe(1)
+    expect(candidates[0].effectivePoiCount).toBe(3)
   })
 
   it('AOI 内校内设施只保留已进入召回的真实支撑点', () => {
@@ -168,6 +174,29 @@ describe('buildRegionCandidates', () => {
     expect(candidates).toHaveLength(0)
   })
 
+  it('住宅楼盘名包含公园时不会混入正式解说主链', () => {
+    const candidates = buildRegionCandidates({
+      viewport,
+      scene: 'natural_ecology',
+      pois: [
+        { ...poi('a', 114.34, 30.54, '商务住宅', 'medium'), display_name: '公园家南门' },
+        { ...poi('b', 114.341, 30.541, '商务住宅', 'medium'), display_name: '公园家物业中心' },
+        { ...poi('c', 114.342, 30.542, '商务住宅', 'medium'), display_name: '公园家地下停车场' },
+      ],
+      aois: [
+        {
+          id: 'park-home',
+          name: '公园家',
+          fclass: 'residential',
+          areaSqm: 80_000,
+          boundary: polygonFromBounds({ west: 114.33, south: 30.53, east: 114.35, north: 30.55 }),
+        },
+      ],
+    })
+
+    expect(candidates.some((candidate) => candidate.display_name === '公园家')).toBe(false)
+  })
+
   it('商业 AOI 内餐饮购物 POI 会恢复为片区证据', () => {
     const candidates = buildRegionCandidates({
       viewport,
@@ -175,6 +204,7 @@ describe('buildRegionCandidates', () => {
       pois: [
         { ...poi('food', 114.34, 30.54, '餐饮服务', 'weak'), display_name: '楚河汉街美食店' },
         { ...poi('shop', 114.341, 30.541, '购物服务', 'weak'), display_name: '楚河汉街服饰店' },
+        { ...poi('book', 114.342, 30.542, '购物服务', 'weak'), display_name: '楚河汉街书店' },
         { ...poi('coffee', 114.342, 30.542, '餐饮服务', 'excluded'), display_name: '汉街咖啡' },
       ],
       aois: [
@@ -191,7 +221,7 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].display_name).toBe('楚河汉街')
     expect(candidates[0].pois.every((item) => item.tier === 'medium')).toBe(true)
     expect(candidates[0].visual_layer.poi_heat?.points).toHaveLength(candidates[0].effectivePoiCount)
-    expect(candidates[0].effectivePoiCount).toBe(2)
+    expect(candidates[0].effectivePoiCount).toBe(3)
   })
 
   it('从 POI 名称中发现步行街抽象片区', () => {
@@ -210,6 +240,105 @@ describe('buildRegionCandidates', () => {
     expect(candidates[0].source).toBe('abstract_region')
     expect(candidates[0].role).toBe('primary_region')
     expect(candidates[0].effectivePoiCount).toBe(3)
+  })
+
+  it('补充本地人熟悉的过早街、夜市和生活商圈', () => {
+    const localCases: Array<{ name: string; viewport: ViewportBBox; pois: NarrativePoi[] }> = [
+      {
+        name: '广埠屯商圈',
+        viewport: { west: 114.34, south: 30.515, east: 114.375, north: 30.54, zoom: 15, center: [114.357, 30.528] },
+        pois: [
+          { ...poi('gbt-computer', 114.35, 30.525, '购物服务', 'medium'), display_name: '广埠屯电脑城' },
+          { ...poi('gbt-info', 114.352, 30.526, '购物服务', 'medium'), display_name: '广埠屯资讯广场' },
+          { ...poi('gbt-cyber', 114.354, 30.527, '购物服务', 'medium'), display_name: '赛博数码商铺' },
+        ],
+      },
+      {
+        name: '虎泉夜市',
+        viewport: { west: 114.35, south: 30.49, east: 114.39, north: 30.525, zoom: 15, center: [114.37, 30.51] },
+        pois: [
+          { ...poi('hq-food', 114.37, 30.512, '餐饮服务', 'medium'), display_name: '虎泉夜市小吃' },
+          { ...poi('hq-street', 114.372, 30.513, '餐饮服务', 'medium'), display_name: '虎泉街餐饮' },
+          { ...poi('hq-shop', 114.374, 30.514, '购物服务', 'medium'), display_name: '虎泉夜市商铺' },
+        ],
+      },
+      {
+        name: '红钢城',
+        viewport: { west: 114.38, south: 30.62, east: 114.43, north: 30.66, zoom: 14, center: [114.405, 30.64] },
+        pois: [
+          { ...poi('hgc-food', 114.405, 30.64, '餐饮服务', 'medium'), display_name: '红钢城餐饮' },
+          { ...poi('hgc-mall', 114.41, 30.642, '购物服务', 'medium'), display_name: '武商众圆广场购物' },
+          { ...poi('hgc-shop', 114.407, 30.641, '购物服务', 'medium'), display_name: '红钢城商铺' },
+        ],
+      },
+      {
+        name: '粮道街',
+        viewport: { west: 114.285, south: 30.535, east: 114.315, north: 30.56, zoom: 16, center: [114.3, 30.547] },
+        pois: [
+          { ...poi('ldj-zhao', 114.298, 30.545, '餐饮服务', 'medium'), display_name: '粮道街赵师傅红油热干面' },
+          { ...poi('ldj-food', 114.3, 30.546, '餐饮服务', 'medium'), display_name: '粮道街油饼包烧卖' },
+          { ...poi('ldj-shop', 114.302, 30.547, '餐饮服务', 'medium'), display_name: '粮道街过早小吃' },
+        ],
+      },
+      {
+        name: '大成路夜市',
+        viewport: { west: 114.285, south: 30.525, east: 114.31, north: 30.55, zoom: 16, center: [114.297, 30.537] },
+        pois: [
+          { ...poi('dcl-night', 114.296, 30.536, '餐饮服务', 'medium'), display_name: '大成路夜市牛杂' },
+          { ...poi('dcl-qiu', 114.298, 30.538, '餐饮服务', 'medium'), display_name: '大成路小秋水饺' },
+          { ...poi('dcl-snack', 114.3, 30.539, '餐饮服务', 'medium'), display_name: '大成路夜市小吃' },
+        ],
+      },
+      {
+        name: '台北路',
+        viewport: { west: 114.255, south: 30.585, east: 114.29, north: 30.615, zoom: 15, center: [114.272, 30.6] },
+        pois: [
+          { ...poi('tbl-food', 114.272, 30.598, '餐饮服务', 'medium'), display_name: '台北路美食餐饮' },
+          { ...poi('tbl-cafe', 114.274, 30.6, '餐饮服务', 'medium'), display_name: '台北一路咖啡' },
+          { ...poi('tbl-shop', 114.276, 30.602, '购物服务', 'medium'), display_name: '台北路商铺' },
+        ],
+      },
+      {
+        name: '山海关路',
+        viewport: { west: 114.29, south: 30.59, east: 114.32, north: 30.615, zoom: 16, center: [114.305, 30.603] },
+        pois: [
+          { ...poi('shg-ji', 114.302, 30.602, '餐饮服务', 'medium'), display_name: '山海关路李记鸡冠饺' },
+          { ...poi('shg-qi', 114.304, 30.604, '餐饮服务', 'medium'), display_name: '山海关路毛氏汽水包' },
+          { ...poi('shg-snack', 114.306, 30.606, '餐饮服务', 'medium'), display_name: '山海关路过早小吃' },
+        ],
+      },
+      {
+        name: '胜利街',
+        viewport: { west: 114.285, south: 30.58, east: 114.32, north: 30.61, zoom: 16, center: [114.302, 30.595] },
+        pois: [
+          { ...poi('slj-ms', 114.3, 30.594, '餐饮服务', 'medium'), display_name: '胜利街三镇民生甜食馆' },
+          { ...poi('slj-noodle', 114.302, 30.596, '餐饮服务', 'medium'), display_name: '胜利街热干面' },
+          { ...poi('slj-shop', 114.304, 30.598, '餐饮服务', 'medium'), display_name: '胜利街餐饮商铺' },
+        ],
+      },
+      {
+        name: '保成路夜市',
+        viewport: { west: 114.275, south: 30.57, east: 114.3, north: 30.595, zoom: 16, center: [114.287, 30.583] },
+        pois: [
+          { ...poi('bcl-food', 114.286, 30.582, '餐饮服务', 'medium'), display_name: '保成路夜市小吃' },
+          { ...poi('bcl-shop', 114.288, 30.584, '购物服务', 'medium'), display_name: '保成路夜市服饰' },
+          { ...poi('bcl-night', 114.29, 30.586, '餐饮服务', 'medium'), display_name: '保成路夜市餐饮' },
+        ],
+      },
+    ]
+
+    for (const localCase of localCases) {
+      const candidates = buildRegionCandidates({
+        viewport: localCase.viewport,
+        scene: 'commercial_leisure',
+        aois: [],
+        pois: localCase.pois,
+      })
+      const candidate = candidates.find((item) => item.display_name === localCase.name)
+      expect(candidates.map((item) => item.display_name)).toContain(localCase.name)
+      expect(candidate?.source).toBe('abstract_region')
+      expect(candidate?.effectivePoiCount).toBeGreaterThanOrEqual(localCase.pois.length)
+    }
   })
 
   it('非预设商圈和居民区商业点不会被自由命名成抽象商圈', () => {
@@ -364,10 +493,14 @@ describe('buildRegionCandidates', () => {
         { ...poi('tiandi-1', 114.352, 30.59, '餐饮服务', 'medium'), display_name: '武汉天地餐饮' },
         { ...poi('tiandi-2', 114.353, 30.591, '购物服务', 'medium'), display_name: '壹方购物中心商铺' },
         { ...poi('tiandi-3', 114.354, 30.592, '购物服务', 'medium'), display_name: '芦沟桥路购物' },
+        { ...poi('hgc-1', 114.355, 30.593, '餐饮服务', 'medium'), display_name: '红钢城餐饮' },
+        { ...poi('hq-1', 114.356, 30.594, '餐饮服务', 'medium'), display_name: '虎泉夜市小吃' },
+        { ...poi('ldj-1', 114.357, 30.595, '餐饮服务', 'medium'), display_name: '粮道街赵师傅热干面' },
+        { ...poi('bcl-1', 114.358, 30.596, '餐饮服务', 'medium'), display_name: '保成路夜市小吃' },
       ],
     })
 
-    expect(candidates.map((candidate) => candidate.display_name).join(' ')).not.toMatch(/菱角湖|吉庆街|昙华林|汉正街|武汉天地/)
+    expect(candidates.map((candidate) => candidate.display_name).join(' ')).not.toMatch(/菱角湖|吉庆街|昙华林|汉正街|武汉天地|红钢城|虎泉夜市|粮道街|保成路夜市/)
   })
 
 

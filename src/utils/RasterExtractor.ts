@@ -1,5 +1,3 @@
-import * as GeoTIFF from 'geotiff'
-
 type BoundingBox = [number, number, number, number]
 
 type RasterBand = ArrayLike<number>
@@ -19,6 +17,8 @@ interface GeoTiffLike {
   getImage: () => Promise<GeoTiffImageLike>
 }
 
+type GeoTiffModule = typeof import('geotiff')
+
 type PointLike = {
   lon: number
   lat: number
@@ -31,6 +31,19 @@ type FeatureLike = {
   } | null
   properties?: Record<string, unknown> | null
   [key: string]: unknown
+}
+
+let geoTiffModulePromise: Promise<GeoTiffModule> | null = null
+
+function loadGeoTiffModule(): Promise<GeoTiffModule> {
+  if (!geoTiffModulePromise) {
+    geoTiffModulePromise = import('geotiff').catch((error: unknown) => {
+      geoTiffModulePromise = null
+      throw error
+    })
+  }
+
+  return geoTiffModulePromise
 }
 
 class RasterExtractor {
@@ -69,6 +82,7 @@ class RasterExtractor {
       }
 
       const arrayBuffer = await response.arrayBuffer()
+      const GeoTIFF = await loadGeoTiffModule()
       const tiff = await GeoTIFF.fromArrayBuffer(arrayBuffer)
       const image = await tiff.getImage()
       this.tiff = tiff as unknown as GeoTiffLike

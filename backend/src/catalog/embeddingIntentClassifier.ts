@@ -11,7 +11,7 @@
  * - needsWebSearch：正例/反例原型 → sigmoid 映射
  */
 
-import type { EmbedRerankBridge } from '../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../integration/embedBridge.js'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

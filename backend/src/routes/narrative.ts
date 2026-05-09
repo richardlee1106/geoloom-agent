@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 
 import type { NarrativeBuilder, NarrativeRequest } from '../narrative/contract.js'
+import type { NarrativeTtsProvider, NarrativeTtsRequest } from '../narrative/NarrativeTtsService.js'
 
 function isNarrativeContractError(error: unknown): error is Error & { code: string; statusCode: number } {
   return error instanceof Error
@@ -12,6 +13,7 @@ export async function registerNarrativeRoutes(
   app: FastifyInstance,
   deps: {
     narrative?: NarrativeBuilder
+    tts?: NarrativeTtsProvider
   },
 ) {
   app.post('/', async (request, reply) => {
@@ -44,6 +46,39 @@ export async function registerNarrativeRoutes(
         error: {
           code: 'narrative_failed',
           message: error instanceof Error ? error.message : 'Narrative request failed',
+        },
+      })
+    }
+  })
+
+  app.get('/tts/health', async () => {
+    return deps.tts?.health() ?? { enabled: false, ready: false }
+  })
+
+  app.post('/tts', async (request, reply) => {
+    if (!deps.tts) {
+      return reply.status(503).send({
+        success: false,
+        error: {
+          code: 'narrative_tts_unavailable',
+          message: 'Narrative TTS is unavailable',
+        },
+      })
+    }
+
+    try {
+      const result = await deps.tts.synthesize((request.body || {}) as NarrativeTtsRequest)
+      reply.header('cache-control', 'public, max-age=31536000, immutable')
+      reply.header('x-narrative-tts-cache-key', result.cacheKey)
+      reply.header('x-narrative-tts-cached', result.cached ? '1' : '0')
+      return reply.type(result.contentType).send(result.audio)
+    } catch (error) {
+      app.log.error(error)
+      return reply.status(500).send({
+        success: false,
+        error: {
+          code: 'narrative_tts_failed',
+          message: error instanceof Error ? error.message : 'Narrative TTS request failed',
         },
       })
     }

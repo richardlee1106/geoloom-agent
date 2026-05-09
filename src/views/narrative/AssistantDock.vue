@@ -2,7 +2,7 @@
   <!-- 抽屉：由父级控制显示（v-if 位于父级 .main-grid 内、占右面板位置）
        fab 独立于本组件，由 NarrativeMode.vue 直接渲染在 .map-stage 右下角
        不使用 Transition：点击 fab 后立即展开，避免动画前摇与界面抖动 -->
-  <aside class="assistant-dock" role="dialog" aria-label="AI 助手">
+  <aside :class="['assistant-dock', { compact }]" role="dialog" aria-label="AI 助手">
       <!-- Header -->
       <header class="dock-head">
         <div class="dock-title">
@@ -27,7 +27,7 @@
           <span v-html="contextOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT" />
           <span>当前上下文</span>
           <span class="dock-context-tag">
-            {{ activeStepIndex + 1 }} / {{ totalSteps }}
+            {{ totalSteps ? activeStepIndex + 1 : 0 }} / {{ totalSteps }}
           </span>
         </button>
         <div v-show="contextOpen" class="dock-context-body">
@@ -149,6 +149,7 @@ interface ChatMessage {
 }
 
 const props = defineProps<{
+  compact?: boolean
   activeStepIndex: number
   playing: boolean
   totalSteps: number
@@ -390,6 +391,44 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
   overflow: hidden;
   min-height: 0;
   min-width: 0;
+}
+
+.assistant-dock.compact {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: min(380px, calc(100% - 36px));
+  height: min(520px, calc(100% - 36px));
+  z-index: 40;
+  border-color: rgba(96, 165, 250, 0.34);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.9)),
+    radial-gradient(circle at 85% 0%, rgba(59, 130, 246, 0.22), transparent 36%);
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(18px);
+}
+
+.assistant-dock.compact .dock-head {
+  padding: 12px 14px;
+}
+
+.assistant-dock.compact .dock-context-head {
+  padding: 9px 14px;
+}
+
+.assistant-dock.compact .dock-context-body {
+  padding: 4px 14px 10px;
+}
+
+.assistant-dock.compact .dock-chat {
+  padding: 12px 14px;
+}
+
+.assistant-dock.compact .dock-input {
+  padding: 10px 14px 12px;
 }
 
 /* ============================================================================

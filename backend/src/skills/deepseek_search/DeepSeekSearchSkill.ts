@@ -136,17 +136,18 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-function normalizeResults(value: unknown, maxResults: number): DeepSeekSearchResult[] {
+function normalizeResults(value: unknown, maxResults: number, fallbackContent = ''): DeepSeekSearchResult[] {
   if (!Array.isArray(value)) return []
   const results: DeepSeekSearchResult[] = []
   const seen = new Set<string>()
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const raw = item as Record<string, unknown>
-    const url = String(raw.url || raw.link || raw.source_url || '').trim()
+    const citation = raw.url_citation && typeof raw.url_citation === 'object' ? raw.url_citation as Record<string, unknown> : {}
+    const url = String(raw.url || raw.link || raw.href || raw.source_url || raw.reference_url || citation.url || '').trim()
     if (!/^https?:\/\//iu.test(url) || seen.has(url)) continue
-    const title = String(raw.title || raw.name || url).trim().slice(0, 160)
-    const content = String(raw.content || raw.snippet || raw.summary || raw.text || '').trim().slice(0, 600)
+    const title = String(raw.title || raw.name || raw.site_name || citation.title || url).trim().slice(0, 160)
+    const content = String(raw.content || raw.snippet || raw.summary || raw.text || raw.description || citation.content || citation.snippet || fallbackContent).trim().slice(0, 600)
     if (!title && !content) continue
     const score = Number(raw.score ?? raw.relevance ?? 0.8)
     seen.add(url)
@@ -154,6 +155,80 @@ function normalizeResults(value: unknown, maxResults: number): DeepSeekSearchRes
     if (results.length >= maxResults) break
   }
   return results
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function collectResultArrays(value: unknown): unknown[] {
+  const raw = asRecord(value)
+  if (!raw) return []
+  const out: unknown[] = []
+  for (const key of ['results', 'sources', 'citations', 'items', 'references', 'search_results', 'web_results']) {
+    if (Array.isArray(raw[key])) out.push(raw[key])
+  }
+  const data = asRecord(raw.data)
+  if (data) out.push(...collectResultArrays(data))
+  const message = asRecord(raw.message)
+  if (message) out.push(...collectResultArrays(message))
+  return out
+}
+
+function extractLinkedResultsFromText(text: string, maxResults: number, fallbackContent = ''): DeepSeekSearchResult[] {
+  const results: DeepSeekSearchResult[] = []
+  const seen = new Set<string>()
+  const markdownLinkRe = /\[([^\]]{1,160})\]\((https?:\/\/[^)\s]+)\)/giu
+  for (const match of text.matchAll(markdownLinkRe)) {
+    const title = String(match[1] || '').trim()
+    const url = String(match[2] || '').trim()
+    if (!title || seen.has(url)) continue
+    seen.add(url)
+    results.push({ title, url, content: fallbackContent.slice(0, 600), score: 0.55 })
+    if (results.length >= maxResults) return results
+  }
+  const urlRe = /https?:\/\/[^\s"'）)\]}]+/giu
+  for (const match of text.matchAll(urlRe)) {
+    const url = String(match[0] || '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    results.push({ title: url, url, content: fallbackContent.slice(0, 600), score: 0.45 })
+    if (results.length >= maxResults) return results
+  }
+  return results
+}
+
+function normalizeResultsFromResponse(json: unknown, parsed: Record<string, unknown> | null, answer: string, maxResults: number): DeepSeekSearchResult[] {
+  const seen = new Set<string>()
+  const out: DeepSeekSearchResult[] = []
+  const arrays = [
+    ...collectResultArrays(parsed),
+    ...collectResultArrays(json),
+  ]
+  const root = asRecord(json)
+  const choices = Array.isArray(root?.choices) ? root.choices : []
+  for (const choice of choices) {
+    const message = asRecord(asRecord(choice)?.message)
+    if (Array.isArray(message?.annotations)) arrays.push(message.annotations)
+    if (Array.isArray(message?.citations)) arrays.push(message.citations)
+    if (Array.isArray(message?.references)) arrays.push(message.references)
+  }
+  for (const array of arrays) {
+    for (const result of normalizeResults(array, maxResults, answer)) {
+      if (seen.has(result.url)) continue
+      seen.add(result.url)
+      out.push(result)
+      if (out.length >= maxResults) return out
+    }
+  }
+  if (out.length === 0 && typeof asRecord(parsed)?.answer === 'string') {
+    for (const result of extractLinkedResultsFromText(String(asRecord(parsed)?.answer || ''), maxResults, answer)) {
+      if (seen.has(result.url)) continue
+      seen.add(result.url)
+      out.push(result)
+    }
+  }
+  return out.slice(0, maxResults)
 }
 
 function buildSearchPrompt(query: string, maxResults: number): string {
@@ -202,14 +277,15 @@ async function requestDeepSeekSearch(input: {
       const text = await response.text().catch(() => '')
       throw new Error(`DeepSeek search request failed with HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ''}`)
     }
-    const json = await response.json() as {
-      choices?: Array<{ message?: { content?: string } }>
-    }
-    const content = String(json.choices?.[0]?.message?.content || '')
+    const json = await response.json() as Record<string, unknown>
+    const choices = Array.isArray(json.choices) ? json.choices : []
+    const firstMessage = asRecord(asRecord(choices[0])?.message)
+    const content = String(firstMessage?.content || '')
     const parsed = extractJsonObject(content)
-    const results = normalizeResults(parsed?.results, input.maxResults)
+    const answer = String(parsed?.answer || content || '').trim()
+    const results = normalizeResultsFromResponse(json, parsed, answer, input.maxResults)
     return {
-      answer: String(parsed?.answer || '').trim(),
+      answer,
       results,
       provider: 'deepseek_search',
       model: input.model,

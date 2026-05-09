@@ -9,7 +9,7 @@ import { GeoLoomAgent } from './agent/GeoLoomAgent.js'
 import { RemoteFirstFaissIndex } from './integration/faissIndex.js'
 import { RemoteFirstOSMBridge } from './integration/osmBridge.js'
 import { PostgisPool } from './integration/postgisPool.js'
-import { JinaBridge } from './integration/jinaBridge.js'
+import { EmbedBridge } from './integration/embedBridge.js'
 import { RemoteFirstPythonBridge } from './integration/pythonBridge.js'
 import { resolveTavilyApiKeys } from './integration/tavilyApiKeys.js'
 import { LongTermMemory } from './memory/LongTermMemory.js'
@@ -38,8 +38,9 @@ import { PoiEmbeddingCache } from './catalog/poiEmbeddingCache.js'
 import { EmbeddingIntentClassifier } from './catalog/embeddingIntentClassifier.js'
 import { fetchSpatialFeaturesFromDatabase } from './spatial/fetchSpatialFeatures.js'
 import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
-import { buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
+import { buildCompositeNarrativeWebFactSearcher, NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
 import { fetchNarrativeAoiCandidates } from './narrative/aoiRepository.js'
+import { NarrativeTtsService } from './narrative/NarrativeTtsService.js'
 
 const port = Number(process.env.PORT || '3210')
 const host = process.env.HOST || '127.0.0.1'
@@ -67,6 +68,10 @@ function describeStartupError(err: unknown): string {
     return err.toString() || '(unknown error)'
   }
   return String(err) || '(unknown error)'
+}
+
+function envFlagEnabled(value: unknown): boolean {
+  return /^(1|true|yes|on)$/iu.test(String(value || '').trim())
 }
 
 const catalog = createPostgisCatalog()
@@ -192,10 +197,10 @@ const deepSeekSearchEndpoints = [
     model: deepSeekSearchModel,
   },
   {
-    label: 'narrative_llm',
-    baseUrl: process.env.NARRATIVE_LLM_BASE_URL,
-    apiKey: process.env.NARRATIVE_LLM_API_KEY,
-    model: process.env.NARRATIVE_LLM_MODEL,
+    label: 'fallback',
+    baseUrl: process.env.DEEPSEEK_SEARCH_FALLBACK_BASE_URL,
+    apiKey: process.env.DEEPSEEK_SEARCH_FALLBACK_API_KEY,
+    model: process.env.DEEPSEEK_SEARCH_FALLBACK_MODEL,
   },
 ]
 if (deepSeekSearchEndpoints.some((endpoint) => endpoint.baseUrl && endpoint.apiKey && endpoint.model)) {
@@ -204,9 +209,9 @@ if (deepSeekSearchEndpoints.some((endpoint) => endpoint.baseUrl && endpoint.apiK
     timeoutMs: Number(process.env.DEEPSEEK_SEARCH_TIMEOUT_MS || process.env.NEWAPI_SEARCH_TIMEOUT_MS || '18000'),
   }))
 }
-const jinaBridge = new JinaBridge()
+const embedBridge = new EmbedBridge()
 registry.register(createEntityAlignmentSkill({
-  bridge: jinaBridge,
+  bridge: embedBridge,
   query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
 }))
 
@@ -228,7 +233,7 @@ if (tavilyApiKeys.length > 0) {
 const categoryIndex = new CategoryEmbeddingIndex()
 categoryIndex.build(
   (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
-  jinaBridge,
+  embedBridge,
 ).catch((err) => {
   console.warn(`[CategoryEmbeddingIndex] 索引构建失败: ${describeStartupError(err)}`)
 })
@@ -265,12 +270,12 @@ categoryIndex.build(
 
 // POI Embedding 缓存 + 语义重排序
 const poiEmbeddingCache = new PoiEmbeddingCache({
-  bridge: jinaBridge,
+  bridge: embedBridge,
   query: (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
 })
 
 // Embedding-First 意图分类器：替代 LLM 意图识别
-const intentClassifier = new EmbeddingIntentClassifier(jinaBridge)
+const intentClassifier = new EmbeddingIntentClassifier(embedBridge)
 intentClassifier.build().catch((err) => {
   console.warn(`[EmbeddingIntentClassifier] 构建失败: ${err instanceof Error ? err.message : String(err)}`)
 })
@@ -281,14 +286,17 @@ const defaultChat = new GeoLoomAgent({
   memory,
   sessionManager,
   categoryIndex,
-  bridge: jinaBridge,
+  bridge: embedBridge,
   poiEmbeddingCache,
   intentClassifier,
 })
 const chat = new SurfaceChatRuntime({
   defaultRuntime: defaultChat,
 })
-const narrativeWebFactSkill = registry.get('deepseek_search')
+const narrativeWebFactSearcher = buildCompositeNarrativeWebFactSearcher({
+  deepSeek: registry.get('deepseek_search') ?? undefined,
+  tavily: envFlagEnabled(process.env.NARRATIVE_WEB_FACT_TAVILY_FALLBACK) ? registry.get('tavily_search') ?? undefined : undefined,
+})
 const narrativeDedicatedLlmProvider = new OpenAICompatibleProvider({
   baseUrl: process.env.NARRATIVE_LLM_BASE_URL,
   apiKey: process.env.NARRATIVE_LLM_API_KEY,
@@ -310,11 +318,14 @@ const narrative = new NarrativePhase3Runtime({
     console.warn(`[Narrative] AOI 候选查询失败，降级为 POI 聚合: ${describeStartupError(err)}`)
     return []
   }),
-  searchWebFacts: narrativeWebFactSkill
-    ? buildDeepSeekNarrativeWebFactSearcher(narrativeWebFactSkill)
-    : undefined,
+  searchWebFacts: narrativeWebFactSearcher,
   llmProvider: narrativeLlmProvider,
+  embedNarrativeQuery: async (query) => {
+    const result = await embedBridge.embed([query])
+    return result.embeddings[0] ?? null
+  },
 })
+const narrativeTts = new NarrativeTtsService()
 
 const app = createApp({
   registry,
@@ -326,6 +337,7 @@ const app = createApp({
     (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   ),
   narrative,
+  narrativeTts,
   chat,
 })
 

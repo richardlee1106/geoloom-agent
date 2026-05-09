@@ -36,3 +36,24 @@ export async function fetchNarrativeEnrichmentJob(jobId: string): Promise<Narrat
 
   return await response.json() as NarrativeEnrichmentJob
 }
+
+export interface SynthesizeNarrativeSpeechOptions {
+  text: string
+  voice?: string
+  speed?: number
+}
+
+export async function synthesizeNarrativeSpeech(options: SynthesizeNarrativeSpeechOptions): Promise<Blob> {
+  const response = await fetch(`${SPATIAL_API_BASE_URL}/api/narrative/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options)
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`narrative tts request failed (${response.status})${text ? `: ${text}` : ''}`)
+  }
+
+  return await response.blob()
+}

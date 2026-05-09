@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { NarrativeResponse, ViewportBBox } from '../../../src/narrative/contract.js'
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
 import { NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
+import { evaluateNarrativeViewport, summarizeNarrativeViewportEvaluations, type NarrativeViewportExpectation } from '../../../src/narrative/viewportEvaluation.js'
 import type { AoiCandidateRow } from '../../../src/narrative/regionCandidate.js'
 import type { SpatialFeature, SpatialFetchRequest } from '../../../src/spatial/fetchSpatialFeatures.js'
 
@@ -252,7 +253,7 @@ describe('Narrative phase 3 golden viewport acceptance', () => {
     expectCommonPhase3Invariants(response)
     expect(response.lod).toBe('meso')
     expect(regionNames).toContain('湖北大学')
-    expect(regionNames).toContain('沙湖公园')
+    expect(regionNames.some((name) => name.startsWith('沙湖公园'))).toBe(true)
     expect(response.path.nodes.length).toBeGreaterThanOrEqual(3)
     expect(response.narration.chapters.some((chapter) => (chapter.web_sources?.length || 0) > 0)).toBe(true)
     expect(debug.web_facts?.source_count).toBeGreaterThan(0)
@@ -314,5 +315,99 @@ describe('Narrative phase 3 golden viewport acceptance', () => {
     expect(debug.candidates?.fallback_used).toBe(true)
     expect(debug.recall?.features_count).toBe(0)
     expect(debug.recall?.aoi_count).toBe(0)
+  })
+
+  it('通过批量 viewport 评测矩阵验收 LOD、关系与策略', async () => {
+    const scenarios: Array<{
+      name: string
+      world: GoldenWorld
+      viewport: ViewportBBox
+      withWebFacts?: boolean
+      expectation: NarrativeViewportExpectation
+    }> = [
+      {
+        name: 'micro-campus-detail',
+        world: microWorld(),
+        viewport: viewport('micro'),
+        expectation: {
+          lod: 'micro',
+          expectedRegionNames: ['武汉大学'],
+          minPathNodes: 1,
+          maxPathNodes: 5,
+          allowedStrategies: ['micro_detail_walk', 'campus_life_loop', 'heritage_culture_walk'],
+          requiredStoryTags: ['campus'],
+          minStoryTagCount: 2,
+        },
+      },
+      {
+        name: 'meso-campus-park-commerce',
+        world: mesoWorld(),
+        viewport: viewport('meso'),
+        withWebFacts: true,
+        expectation: {
+          lod: 'meso',
+          expectedRegionNames: ['湖北大学', '沙湖公园'],
+          minPathNodes: 3,
+          maxPathNodes: 8,
+          allowedStrategies: ['campus_ecology_walk', 'waterfront_leisure_walk', 'meso_mixed_cluster_walk'],
+          requiredStoryTags: ['ecology'],
+          requiredRelationTypes: ['campus_ecology_edge'],
+          minRelationTypeCount: 1,
+          minWebSourceCount: 1,
+        },
+      },
+      {
+        name: 'macro-city-cross-section',
+        world: macroWorld(),
+        viewport: viewport('macro'),
+        expectation: {
+          lod: 'macro',
+          expectedRegionNames: ['武汉大学', '东湖风景区', '楚河汉街'],
+          minCandidateCount: 6,
+          minPathNodes: 6,
+          maxPathNodes: 10,
+          allowedStrategies: ['macro_city_cross_section', 'campus_ecology_walk'],
+          minStoryTagCount: 5,
+          minRelationTypeCount: 1,
+          minSemanticDiversity: 1.2,
+        },
+      },
+      {
+        name: 'abstract-local-districts',
+        world: abstractRegionWorld(),
+        viewport: viewport('abstract'),
+        expectation: {
+          expectedRegionNames: ['江汉路步行街', '徐东商圈', '水塔街'],
+          minPathNodes: 3,
+          allowedStrategies: ['commercial_food_walk', 'night_market_walk', 'commercial_axis_walk', 'macro_city_cross_section'],
+          requiredStoryTags: ['commerce'],
+          minStoryTagCount: 3,
+        },
+      },
+      {
+        name: 'dense-noise-filter',
+        world: denseNoiseWorld(),
+        viewport: viewport('dense'),
+        expectation: {
+          expectedRegionNames: ['湖北大学'],
+          forbiddenRegionPattern: /宿舍|服务中心|广告/u,
+          minPathNodes: 1,
+          maxPathNodes: 5,
+          allowedStrategies: ['micro_detail_walk', 'campus_life_loop', 'campus_ecology_walk', 'heritage_culture_walk'],
+        },
+      },
+    ]
+    const evaluations = []
+
+    for (const scenario of scenarios) {
+      const runtime = runtimeFromWorld(scenario.world, { withWebFacts: scenario.withWebFacts })
+      const response = await runtime.build({ session_id: `batch-${scenario.name}`, viewport: scenario.viewport, debug: true })
+      expectCommonPhase3Invariants(response)
+      evaluations.push(evaluateNarrativeViewport(scenario.name, response, scenario.expectation))
+    }
+
+    const summary = summarizeNarrativeViewportEvaluations(evaluations)
+    expect(summary.failures).toEqual([])
+    expect(summary).toMatchObject({ total: scenarios.length, passed: scenarios.length, failed: 0 })
   })
 })

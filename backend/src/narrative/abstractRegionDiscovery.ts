@@ -113,6 +113,24 @@ const WUHAN_ABSTRACT_REGION_PROFILES: WuhanAbstractRegionProfile[] = [
     role: 'primary_region',
   },
   {
+    name: '广埠屯商圈',
+    evidence: /(广埠屯|武汉电脑城|电脑城|资讯广场|赛博数码|珞喻路)/iu,
+    coreEvidence: /(广埠屯|武汉电脑城|电脑城|资讯广场|赛博数码)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.34, south: 30.515, east: 114.375, north: 30.54 },
+    minimumEvidenceCount: 3,
+    role: 'primary_region',
+  },
+  {
+    name: '虎泉夜市',
+    evidence: /(虎泉|虎泉夜市|虎泉街|卓刀泉|伏泉路)/iu,
+    coreEvidence: /(虎泉|虎泉夜市|虎泉街)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.35, south: 30.49, east: 114.39, north: 30.525 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
     name: '王家湾商圈',
     evidence: /(王家湾|摩尔城|汉商21世纪|汉阳人信汇|龙阳大道)/iu,
     coreEvidence: /(王家湾|摩尔城|汉商21世纪|汉阳人信汇)/iu,
@@ -149,6 +167,15 @@ const WUHAN_ABSTRACT_REGION_PROFILES: WuhanAbstractRegionProfile[] = [
     role: 'primary_region',
   },
   {
+    name: '红钢城',
+    evidence: /(红钢城|红钢城大街|青山商场|武商众圆广场|众圆广场|和平大道青山)/iu,
+    coreEvidence: /(红钢城|红钢城大街|青山商场|众圆广场)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.38, south: 30.62, east: 114.43, north: 30.66 },
+    minimumEvidenceCount: 2,
+    role: 'primary_region',
+  },
+  {
     name: '汉正街',
     evidence: /(汉正街|汉正街市场|多福路|第一大道|品牌服饰批发广场)/iu,
     coreEvidence: /(汉正街|汉正街市场|多福路|品牌服饰批发广场)/iu,
@@ -167,11 +194,38 @@ const WUHAN_ABSTRACT_REGION_PROFILES: WuhanAbstractRegionProfile[] = [
     role: 'primary_region',
   },
   {
+    name: '粮道街',
+    evidence: /(粮道街|粮道街美食|赵师傅|武汉中学|胭脂路)/iu,
+    coreEvidence: /(粮道街|赵师傅)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.285, south: 30.535, east: 114.315, north: 30.56 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
+    name: '大成路夜市',
+    evidence: /(大成路|大成路夜市|小秋水饺|首义园|复兴路)/iu,
+    coreEvidence: /(大成路|大成路夜市)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.285, south: 30.525, east: 114.31, north: 30.55 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
     name: '万松园',
     evidence: /(万松园|雪松路|万松园美食街)/iu,
     coreEvidence: /(万松园|雪松路)/iu,
     minimumCoreEvidenceCount: 1,
     bounds: { west: 114.25, south: 30.58, east: 114.285, north: 30.605 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
+    name: '台北路',
+    evidence: /(台北路|台北一路|台北二路|台北三路|台北路美食)/iu,
+    coreEvidence: /(台北路|台北一路|台北二路|台北三路)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.255, south: 30.585, east: 114.29, north: 30.615 },
     minimumEvidenceCount: 2,
     role: 'support_region',
   },
@@ -185,11 +239,38 @@ const WUHAN_ABSTRACT_REGION_PROFILES: WuhanAbstractRegionProfile[] = [
     role: 'support_region',
   },
   {
+    name: '山海关路',
+    evidence: /(山海关路|李记鸡冠饺|毛氏汽水包)/iu,
+    coreEvidence: /(山海关路)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.29, south: 30.59, east: 114.32, north: 30.615 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
+    name: '胜利街',
+    evidence: /(胜利街|民生甜食馆|三镇民生甜食馆)/iu,
+    coreEvidence: /(胜利街|民生甜食馆|三镇民生甜食馆)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.285, south: 30.58, east: 114.32, north: 30.61 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
+    name: '保成路夜市',
+    evidence: /(保成路|保成路夜市|循礼门夜市|循礼门)/iu,
+    coreEvidence: /(保成路|保成路夜市)/iu,
+    minimumCoreEvidenceCount: 1,
+    bounds: { west: 114.275, south: 30.57, east: 114.3, north: 30.595 },
+    minimumEvidenceCount: 2,
+    role: 'support_region',
+  },
+  {
     name: '黎黄陂路',
     evidence: /(黎黄陂路|洞庭街|鄱阳街|青岛路)/iu,
     coreEvidence: /(黎黄陂路)/iu,
     minimumCoreEvidenceCount: 1,
-    bounds: { west: 114.295, south: 30.585, east: 114.32, north: 30.61 },
+    bounds: { west: 114.292, south: 30.584, east: 114.309, north: 30.599 },
     minimumEvidenceCount: 2,
     role: 'support_region',
   },
@@ -228,7 +309,7 @@ export function discoverAbstractRegionCandidates(input: {
     if (pois.length < minimumEvidenceCount) continue
     if (!hasRequiredProfileCoreEvidence(token, pois)) continue
     if (hasOverlappingRepresentativeAoiName(token, input.aois)) continue
-    const abstractPois = pois.map((poi) => retierPoiWithinAbstractRegion(poi))
+    const abstractPois = constrainAbstractRegionPois(token, pois).map((poi) => retierPoiWithinAbstractRegion(poi))
     const evidencePois = abstractPois.filter(isCandidateEvidencePoi)
     if (evidencePois.length < minimumEvidenceCount) continue
     const displayName = displayNameForAbstractRegion(token)
@@ -397,6 +478,21 @@ function intersectBoundaryBounds(left: NarrativeBoundaryGeometry, right: Narrati
   }
   const clipped = clipBoundsToViewport(intersection, viewport)
   return clipped ? polygonFromBounds(clipped) : null
+}
+
+function constrainAbstractRegionPois(token: string, pois: NarrativePoi[]): NarrativePoi[] {
+  const profile = WUHAN_PROFILE_BY_NAME.get(token)
+  if (!profile?.coreEvidence || !ROAD_CORRIDOR_RE.test(token)) return pois
+  const corePois = pois.filter((poi) => profile.coreEvidence!.test(`${poi.display_name} ${poi.category_main || ''}`))
+  if (corePois.length === 0) return pois
+  const coreLon = corePois.reduce((sum, poi) => sum + poi.lon, 0) / corePois.length
+  const coreLat = corePois.reduce((sum, poi) => sum + poi.lat, 0) / corePois.length
+  return pois.filter((poi) => {
+    if (corePois.some((corePoi) => corePoi.id === poi.id)) return true
+    const lonDistance = Math.abs(poi.lon - coreLon)
+    const latDistance = Math.abs(poi.lat - coreLat)
+    return lonDistance <= 0.008 && latDistance <= 0.006
+  })
 }
 
 function retierPoiWithinAbstractRegion(poi: NarrativePoi): NarrativePoi {

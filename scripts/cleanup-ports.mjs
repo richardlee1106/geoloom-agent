@@ -15,92 +15,80 @@ if (ports.length === 0) {
   process.exit(1)
 }
 
-function extractPort(address) {
-  const match = /:(\d+)$/.exec(address.trim())
-  return match ? Number.parseInt(match[1], 10) : null
-}
+// ── Windows：单次 netstat 扫描全部端口 ──
 
-function listWindowsListeningPids(port) {
+function scanWindowsAllPorts(targetPorts) {
+  const portSet = new Set(targetPorts)
   const output = execFileSync('netstat', ['-ano', '-p', 'tcp'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   })
-
-  const pids = new Set()
-
+  const map = new Map()
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim()
     if (!line) continue
-
     const parts = line.split(/\s+/)
     if (parts.length < 5) continue
-
-    const protocol = parts[0]?.toUpperCase()
-    const localAddress = parts[1] || ''
-    const state = parts[3]?.toUpperCase()
+    if (parts[0]?.toUpperCase() !== 'TCP' || parts[3]?.toUpperCase() !== 'LISTENING') continue
+    const match = /:(\d+)$/.exec(parts[1] || '')
+    const port = match ? Number.parseInt(match[1], 10) : null
     const pid = Number.parseInt(parts[4] || '', 10)
-
-    if (protocol !== 'TCP' || state !== 'LISTENING') continue
-    if (extractPort(localAddress) !== port) continue
-    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue
-
-    pids.add(pid)
+    if (port !== null && portSet.has(port) && Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+      if (!map.has(port)) map.set(port, new Set())
+      map.get(port).add(pid)
+    }
   }
-
-  return [...pids]
+  return map
 }
 
-function listUnixListeningPids(port) {
-  try {
-    const output = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
+// ── Unix：逐端口 lsof ──
 
-    return Array.from(
-      new Set(
-        output
-          .split(/\r?\n/)
-          .map((value) => Number.parseInt(value.trim(), 10))
-          .filter((value) => Number.isInteger(value) && value > 0 && value !== process.pid),
-      ),
-    )
-  } catch {
-    return []
+function scanUnixAllPorts(targetPorts) {
+  const map = new Map()
+  for (const port of targetPorts) {
+    try {
+      const output = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      const pids = new Set(
+        output.split(/\r?\n/)
+          .map((v) => Number.parseInt(v.trim(), 10))
+          .filter((v) => Number.isInteger(v) && v > 0 && v !== process.pid),
+      )
+      if (pids.size > 0) map.set(port, pids)
+    } catch { /* 端口空闲 */ }
   }
+  return map
 }
 
-function listListeningPids(port) {
-  return process.platform === 'win32'
-    ? listWindowsListeningPids(port)
-    : listUnixListeningPids(port)
-}
+// ── 主逻辑 ──
 
-function killPid(pid) {
-  if (process.platform === 'win32') {
-    execFileSync('taskkill', ['/F', '/PID', String(pid)], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    })
-    return
-  }
-
-  process.kill(pid, 'SIGKILL')
-}
+const portMap = process.platform === 'win32'
+  ? scanWindowsAllPorts(ports)
+  : scanUnixAllPorts(ports)
 
 const killedPids = new Set()
 let cleanedCount = 0
 
 for (const port of ports) {
-  const pids = listListeningPids(port).filter((pid) => !killedPids.has(pid))
+  const pids = (portMap.get(port) || new Set())
+  const toKill = [...pids].filter((pid) => !killedPids.has(pid))
 
-  if (pids.length === 0) {
+  if (toKill.length === 0) {
     console.log(`[cleanup-ports] 端口 ${port} 空闲`)
     continue
   }
 
-  for (const pid of pids) {
+  for (const pid of toKill) {
     try {
-      killPid(pid)
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/F', '/PID', String(pid)], {
+          stdio: ['ignore', 'ignore', 'ignore'],
+        })
+      } else {
+        process.kill(pid, 'SIGKILL')
+      }
       killedPids.add(pid)
       cleanedCount += 1
       console.log(`[cleanup-ports] 端口 ${port} 已终止 PID ${pid}`)
@@ -113,14 +101,19 @@ for (const port of ports) {
 }
 
 if (cleanedCount > 0) {
-  await delay(300)
-}
-
-const blockedPorts = ports.filter((port) => listListeningPids(port).length > 0)
-
-if (blockedPorts.length > 0) {
-  console.error(`[cleanup-ports] 端口仍被占用: ${blockedPorts.join(', ')}`)
-  process.exit(1)
+  await delay(200)
+  // 二次验证：再扫一次
+  const recheckMap = process.platform === 'win32'
+    ? scanWindowsAllPorts(ports)
+    : scanUnixAllPorts(ports)
+  const blockedPorts = ports.filter((port) => {
+    const pids = recheckMap.get(port)
+    return pids && [...pids].some((pid) => !killedPids.has(pid))
+  })
+  if (blockedPorts.length > 0) {
+    console.error(`[cleanup-ports] 端口仍被占用: ${blockedPorts.join(', ')}`)
+    process.exit(1)
+  }
 }
 
 console.log(`[cleanup-ports] 已确认端口可用: ${ports.join(', ')}`)

@@ -6,6 +6,10 @@ export interface SpatialFetchRequest {
   geometry?: unknown
   regions?: unknown
   limit?: unknown
+  timeoutMs?: unknown
+  semanticQueryVector?: unknown
+  semanticWeight?: unknown
+  semanticCandidateLimit?: unknown
 }
 
 export interface SpatialFeature {
@@ -85,6 +89,35 @@ function resolveLimit(value: unknown): number {
   return Math.max(1, Math.min(Math.trunc(numeric), 500000))
 }
 
+function resolveTimeoutMs(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 120000
+  return Math.max(200, Math.min(Math.trunc(numeric), 120000))
+}
+
+function resolveSemanticWeight(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 0.42
+  return Math.max(0, Math.min(numeric, 1))
+}
+
+function resolveSemanticCandidateLimit(resultLimit: number, value: unknown): number {
+  const numeric = Number(value)
+  const fallback = Math.max(resultLimit * 3, 2000)
+  const selected = Number.isFinite(numeric) ? numeric : fallback
+  return Math.max(resultLimit, Math.min(Math.trunc(selected), 80000))
+}
+
+function normalizeSemanticVector(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length !== 512) return null
+  const vector = value.map((item) => Number(item))
+  return vector.every(Number.isFinite) ? vector : null
+}
+
+function vectorLiteral(vector: number[]): string {
+  return `[${vector.map((item) => Number(item.toFixed(8))).join(',')}]`
+}
+
 function buildCategoryClause(params: unknown[], categories: string[]) {
   if (categories.length === 0) return ''
 
@@ -132,6 +165,9 @@ function toFeature(row: Record<string, unknown>): SpatialFeature | null {
   const latitude = Number(row.latitude)
   const geomLongitude = Number(row.geom_longitude)
   const geomLatitude = Number(row.geom_latitude)
+  const semanticDistance = Number(row.semantic_distance)
+  const semanticScore = Number(row.semantic_score)
+  const fusionScore = Number(row.fusion_score)
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
     return null
   }
@@ -170,6 +206,9 @@ function toFeature(row: Record<string, unknown>): SpatialFeature | null {
       geomCoordSys: 'wgs84',
       coordSys,
       _coordSys: coordSys,
+      semantic_distance: Number.isFinite(semanticDistance) ? semanticDistance : null,
+      semantic_score: Number.isFinite(semanticScore) ? semanticScore : null,
+      fusion_score: Number.isFinite(fusionScore) ? fusionScore : null,
     },
   }
 }
@@ -177,6 +216,22 @@ function toFeature(row: Record<string, unknown>): SpatialFeature | null {
 export async function fetchSpatialFeaturesFromDatabase(
   input: SpatialFetchRequest,
   query: (sql: string, params?: unknown[], timeoutMs?: number) => Promise<QueryResultLike>,
+): Promise<SpatialFeature[]> {
+  const semanticVector = normalizeSemanticVector(input.semanticQueryVector)
+  const semanticWeight = resolveSemanticWeight(input.semanticWeight)
+  try {
+    return await fetchSpatialFeaturesWithSemanticFallback(input, query, semanticVector, semanticWeight)
+  } catch (error) {
+    if (!semanticVector) throw error
+    return fetchSpatialFeaturesWithSemanticFallback({ ...input, semanticQueryVector: undefined }, query, null, semanticWeight)
+  }
+}
+
+async function fetchSpatialFeaturesWithSemanticFallback(
+  input: SpatialFetchRequest,
+  query: (sql: string, params?: unknown[], timeoutMs?: number) => Promise<QueryResultLike>,
+  semanticVector: number[] | null,
+  semanticWeight: number,
 ): Promise<SpatialFeature[]> {
   const params: unknown[] = []
   const spatialClause = buildSpatialClause(params, input)
@@ -186,7 +241,83 @@ export async function fetchSpatialFeaturesFromDatabase(
 
   const categories = normalizeCategories(input.categories)
   const categoryClause = buildCategoryClause(params, categories)
-  const limitIndex = params.push(resolveLimit(input.limit))
+  const resultLimit = resolveLimit(input.limit)
+  if (semanticVector) {
+    const semanticParamIndex = params.push(vectorLiteral(semanticVector))
+    const candidateLimitIndex = params.push(resolveSemanticCandidateLimit(resultLimit, input.semanticCandidateLimit))
+    const limitIndex = params.push(resultLimit)
+    const semanticDistanceExpression = `(embedding <=> $${semanticParamIndex}::vector(512))`
+    const semanticScoreExpression = `GREATEST(0, 1 - (semantic_distance / 2.0))`
+    const fusionScoreExpression = `(${semanticScoreExpression} * ${semanticWeight.toFixed(3)} + category_relevance * ${(1 - semanticWeight).toFixed(3)})`
+    const sql = `
+      WITH spatial_candidates AS (
+        SELECT
+          id,
+          name,
+          category_main,
+          category_sub,
+          brand_category,
+          longitude,
+          latitude,
+          ST_X(geom) AS geom_longitude,
+          ST_Y(geom) AS geom_latitude,
+          embedding,
+          CASE
+            WHEN category_main IN ('餐饮服务', '购物服务', '风景名胜', '科教文化服务', '体育休闲服务', '生活服务') THEN 1.0
+            ELSE 0.55
+          END AS category_relevance
+        FROM public.pois
+        WHERE longitude IS NOT NULL
+          AND latitude IS NOT NULL
+          ${spatialClause}
+          ${categoryClause}
+        ORDER BY id ASC
+        LIMIT $${candidateLimitIndex}
+      ),
+      semantic_scores AS (
+        SELECT
+          id,
+          name,
+          category_main,
+          category_sub,
+          brand_category,
+          longitude,
+          latitude,
+          geom_longitude,
+          geom_latitude,
+          ${semanticDistanceExpression} AS semantic_distance,
+          category_relevance
+        FROM spatial_candidates
+      )
+      SELECT
+        id,
+        name,
+        category_main,
+        category_sub,
+        brand_category,
+        longitude,
+        latitude,
+        geom_longitude,
+        geom_latitude,
+        semantic_distance,
+        ${semanticScoreExpression} AS semantic_score,
+        ${fusionScoreExpression} AS fusion_score
+      FROM semantic_scores
+      ORDER BY
+        CASE WHEN semantic_distance IS NULL THEN 1 ELSE 0 END ASC,
+        fusion_score DESC NULLS LAST,
+        semantic_distance ASC NULLS LAST,
+        id ASC
+      LIMIT $${limitIndex}
+    `
+
+    const result = await query(sql, params, resolveTimeoutMs(input.timeoutMs))
+    return (result.rows as Record<string, unknown>[])
+      .map((row) => toFeature(row))
+      .filter((feature): feature is SpatialFeature => Boolean(feature))
+  }
+
+  const limitIndex = params.push(resultLimit)
 
   const sql = `
     SELECT
@@ -198,7 +329,10 @@ export async function fetchSpatialFeaturesFromDatabase(
       longitude,
       latitude,
       ST_X(geom) AS geom_longitude,
-      ST_Y(geom) AS geom_latitude
+      ST_Y(geom) AS geom_latitude,
+      NULL::double precision AS semantic_distance,
+      NULL::double precision AS semantic_score,
+      NULL::double precision AS fusion_score
     FROM public.pois
     WHERE longitude IS NOT NULL
       AND latitude IS NOT NULL
@@ -208,7 +342,7 @@ export async function fetchSpatialFeaturesFromDatabase(
     LIMIT $${limitIndex}
   `
 
-  const result = await query(sql, params, 120000)
+  const result = await query(sql, params, resolveTimeoutMs(input.timeoutMs))
   return (result.rows as Record<string, unknown>[])
     .map((row) => toFeature(row))
     .filter((feature): feature is SpatialFeature => Boolean(feature))

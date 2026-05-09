@@ -1,7 +1,7 @@
 /**
- * Jina 在线 API 推理网关
- * Embedding: https://api.jina.ai/v1/embeddings (jina-embeddings-v5-text-small)
- * Reranker:  https://api.jina.ai/v1/rerank    (jina-reranker-v3)
+ * Embedding + Reranker 推理网关
+ * Embedding: OpenAI-compatible API (text-embedding-3-small, 512-dim)
+ * Reranker:  远程 rerank API，不可用时降级到本地 Jaccard
  * API 不可用时自动降级到 LocalFallbackBridge（bigram Jaccard）
  */
 
@@ -58,9 +58,10 @@ function jaccardSim(a: Set<string>, b: Set<string>): number {
   return inter / (a.size + b.size - inter)
 }
 
-/** 本地简易 embedding（1024 维对齐模型输出） */
+/** 本地简易 embedding（512 维对齐模型输出） */
 function localEmbed(text: string): number[] {
-  const vec = new Float32Array(1024)
+  const DIM = 512
+  const vec = new Float32Array(DIM)
   const g = text.replace(/\s+/g, '').toLowerCase()
   for (let i = 0; i < g.length - 1; i++) {
     const bigram = g.slice(i, i + 2)
@@ -68,15 +69,15 @@ function localEmbed(text: string): number[] {
     for (let j = 0; j < bigram.length; j++) {
       h = ((h << 5) - h + bigram.charCodeAt(j)) | 0
     }
-    const bucket = Math.abs(h) % 1024
+    const bucket = Math.abs(h) % DIM
     vec[bucket] += 1
   }
   // L2 归一化
   let norm = 0
-  for (let i = 0; i < 1024; i++) norm += vec[i] ** 2
+  for (let i = 0; i < DIM; i++) norm += vec[i] ** 2
   norm = Math.sqrt(norm)
   if (norm > 0) {
-    for (let i = 0; i < 1024; i++) vec[i] /= norm
+    for (let i = 0; i < DIM; i++) vec[i] /= norm
   }
   return Array.from(vec)
 }
@@ -89,7 +90,7 @@ export class LocalFallbackBridge implements EmbedRerankBridge {
   async embed(texts: string[]): Promise<EmbedResult> {
     return {
       embeddings: texts.map(localEmbed),
-      dim: 1024,
+      dim: 512,
       count: texts.length,
     }
   }
@@ -109,7 +110,7 @@ export class LocalFallbackBridge implements EmbedRerankBridge {
 
   async getStatus(): Promise<DependencyStatus> {
     return createDependencyStatus({
-      name: 'jina_api',
+      name: 'embed_api',
       ready: true,
       mode: 'fallback',
       degraded: true,
@@ -118,10 +119,10 @@ export class LocalFallbackBridge implements EmbedRerankBridge {
   }
 }
 
-// ── Jina 在线 API 实现 ──
+// ── 在线 Embedding API 实现 ──
 
-export interface JinaBridgeOptions {
-  /** Jina API 密钥 */
+export interface EmbedBridgeOptions {
+  /** API 密钥 */
   apiKey?: string
   /** Embedding API 基础 URL */
   embedBaseUrl?: string
@@ -135,7 +136,7 @@ export interface JinaBridgeOptions {
   fallback?: EmbedRerankBridge
 }
 
-export class JinaBridge implements EmbedRerankBridge {
+export class EmbedBridge implements EmbedRerankBridge {
   private readonly apiKey: string
   private readonly embedBaseUrl: string
   private readonly rerankBaseUrl: string
@@ -144,44 +145,44 @@ export class JinaBridge implements EmbedRerankBridge {
   private readonly fallback: EmbedRerankBridge
   private lastStatus: DependencyStatus
 
-  constructor(options: JinaBridgeOptions = {}) {
+  constructor(options: EmbedBridgeOptions = {}) {
     this.apiKey = String(
       options.apiKey
-      || process.env.JINA_API_KEY
+      || process.env.EMBED_API_KEY
       || '',
     )
     this.embedBaseUrl = String(
       options.embedBaseUrl
-      || process.env.JINA_EMBED_URL
-      || 'https://api.jina.ai/v1',
+      || process.env.EMBED_BASE_URL
+      || 'https://www.hohy6.com/v1',
     )
     this.rerankBaseUrl = String(
       options.rerankBaseUrl
-      || process.env.JINA_RERANK_URL
+      || process.env.RERANK_URL
       || 'https://api.jina.ai/v1',
     )
     this.embeddingModel = String(
       options.embeddingModel
-      || process.env.JINA_EMBEDDING_MODEL
-      || 'jina-embeddings-v5-text-small',
+      || process.env.EMBEDDING_MODEL
+      || 'text-embedding-3-small',
     )
     this.rerankerModel = String(
       options.rerankerModel
-      || process.env.JINA_RERANKER_MODEL
+      || process.env.RERANKER_MODEL
       || 'jina-reranker-v3',
     )
     this.fallback = options.fallback || new LocalFallbackBridge()
     this.lastStatus = createDependencyStatus({
-      name: 'jina_api',
+      name: 'embed_api',
       ready: false,
       mode: 'remote',
       degraded: true,
       reason: 'awaiting_health_check',
       target: this.embedBaseUrl,
     })
-    console.log(`[JinaBridge] Embedding: ${this.embedBaseUrl}/embeddings (${this.embeddingModel})`)
-    console.log(`[JinaBridge] Reranker:  ${this.rerankBaseUrl}/rerank (${this.rerankerModel})`)
-    console.log(`[JinaBridge] API Key:   ${this.apiKey ? '已配置' : '⚠️ 未配置，将降级到本地回退'}`)
+    console.log(`[EmbedBridge] Embedding: ${this.embedBaseUrl}/embeddings (${this.embeddingModel})`)
+    console.log(`[EmbedBridge] Reranker:  ${this.rerankBaseUrl}/rerank (${this.rerankerModel})`)
+    console.log(`[EmbedBridge] API Key:   ${this.apiKey ? '已配置' : '⚠️ 未配置，将降级到本地回退'}`)
   }
 
   /** 健康探测：用 embed 单条文本测试 API 可达性 */
@@ -197,6 +198,7 @@ export class JinaBridge implements EmbedRerankBridge {
         body: JSON.stringify({
           model: this.embeddingModel,
           input: ['health_check'],
+          dimensions: 512,
         }),
         signal: AbortSignal.timeout(10000),
       })
@@ -209,7 +211,7 @@ export class JinaBridge implements EmbedRerankBridge {
   async embed(texts: string[]): Promise<EmbedResult> {
     const start = Date.now()
     try {
-      if (!this.apiKey) throw new Error('JINA_API_KEY 未配置')
+      if (!this.apiKey) throw new Error('EMBED_API_KEY 未配置')
 
       const res = await fetch(`${this.embedBaseUrl}/embeddings`, {
         method: 'POST',
@@ -220,7 +222,6 @@ export class JinaBridge implements EmbedRerankBridge {
         body: JSON.stringify({
           model: this.embeddingModel,
           input: texts,
-          // jina-embeddings-v5-text-small 输出 512 维
           dimensions: 512,
         }),
         signal: AbortSignal.timeout(30000),
@@ -239,7 +240,7 @@ export class JinaBridge implements EmbedRerankBridge {
       const dim = embeddings[0]?.length ?? 0
 
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'remote',
         degraded: false,
@@ -254,9 +255,9 @@ export class JinaBridge implements EmbedRerankBridge {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      console.warn(`[JinaBridge] embed 失败: ${msg}，降级到本地回退`)
+      console.warn(`[EmbedBridge] embed 失败: ${msg}，降级到本地回退`)
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'fallback',
         degraded: true,
@@ -271,9 +272,9 @@ export class JinaBridge implements EmbedRerankBridge {
   async rerank(pairs: Array<{ query: string; document: string }>): Promise<RerankResult> {
     const start = Date.now()
     try {
-      if (!this.apiKey) throw new Error('JINA_API_KEY 未配置')
+      if (!this.apiKey) throw new Error('EMBED_API_KEY 未配置')
 
-      // Jina rerank API：按 query 分组调用
+      // rerank API：按 query 分组调用
       const queryGroups = new Map<string, Array<{ document: string; originalIndex: number }>>()
       for (let i = 0; i < pairs.length; i++) {
         const { query, document } = pairs[i]
@@ -312,7 +313,7 @@ export class JinaBridge implements EmbedRerankBridge {
           results: Array<{ index: number; relevance_score: number }>
         }
 
-        // Jina 返回的 index 是 documents 数组的 0-based 索引
+        // API 返回的 index 是 documents 数组的 0-based 索引
         for (const r of data.results) {
           if (r.index >= 0 && r.index < items.length) {
             scores.push({
@@ -326,7 +327,7 @@ export class JinaBridge implements EmbedRerankBridge {
       scores.sort((a, b) => b.score - a.score)
 
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'remote',
         degraded: false,
@@ -339,9 +340,9 @@ export class JinaBridge implements EmbedRerankBridge {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      console.warn(`[JinaBridge] rerank 失败: ${msg}，降级到本地回退`)
+      console.warn(`[EmbedBridge] rerank 失败: ${msg}，降级到本地回退`)
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'fallback',
         degraded: true,
@@ -357,7 +358,7 @@ export class JinaBridge implements EmbedRerankBridge {
     const healthy = await this.checkHealth()
     if (healthy) {
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'remote',
         degraded: false,
@@ -365,7 +366,7 @@ export class JinaBridge implements EmbedRerankBridge {
       })
     } else {
       this.lastStatus = createDependencyStatus({
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         mode: 'fallback',
         degraded: true,

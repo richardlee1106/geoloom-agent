@@ -176,6 +176,7 @@ import { ElSwitch } from 'element-plus/es/components/switch/index';
 import OlMap from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
+import HeatmapLayer from 'ol/layer/Heatmap';
 import XYZ from 'ol/source/XYZ';
 import VectorSource from 'ol/source/Vector';
 import { Vector as VectorLayer } from 'ol/layer';
@@ -193,7 +194,6 @@ import { useRegions, REGION_COLORS, MAX_REGIONS } from '../composables/useRegion
 import { nicheLabel } from '../utils/aiBoundaryMeta';
 import { useProjection } from '../composables/map/useProjection';
 import { usePopupAnchor } from '../composables/map/usePopupAnchor';
-import { useDeckBridge } from '../composables/map/useDeckBridge';
 import { useEvidenceLayer } from '../composables/map/useEvidenceLayer';
 import { isPoiInteractionLayer } from '../utils/mapLayerIdentity';
 import { resolvePopupAnchorCoordinate } from '../utils/popupFeatureAnchor';
@@ -455,6 +455,25 @@ const highlightPreviewLayer = new VectorLayer({
 });
 highlightPreviewLayer.set('__poiInteraction', true);
 
+const heatmapSource = new VectorSource();
+const heatmapLayer = new HeatmapLayer({
+  source: heatmapSource,
+  blur: 24,
+  radius: 28,
+  weight: (feature) => Number(feature.get('weight') ?? 1),
+  gradient: [
+    'rgba(255,255,178,0)',
+    'rgba(255,255,178,0.58)',
+    'rgba(254,217,118,0.7)',
+    'rgba(254,178,76,0.78)',
+    'rgba(253,141,60,0.86)',
+    'rgba(240,59,32,0.92)',
+    'rgba(189,0,38,0.96)'
+  ],
+  visible: false,
+  zIndex: 40
+});
+
 // 4.
 const locateLayerSource = new VectorSource();
 const locateLayer = new VectorLayer({
@@ -631,23 +650,6 @@ function syncUserLocationOverlay(location) {
 }
 
 let html2canvasModulePromise = null;
-let currentLocatedPoi = null;
-const {
-  highlightData,
-  heatmapData,
-  ensureDeckInitialized,
-  markDeckLayersDirty,
-  scheduleDeckSync,
-  pickDeckObject,
-  clearDeckData,
-  destroyDeckBridge
-} = useDeckBridge({
-  mapRef: map,
-  mapContainerRef: mapContainer,
-  heatmapEnabledRef: heatmapEnabled,
-  getCurrentLocatedPoi: () => currentLocatedPoi,
-  onAfterSync: schedulePopupPosition
-});
 
 // OpenLayers 相关说明
 let olPoiFeatures = [];
@@ -697,7 +699,7 @@ onMounted(() => {
   // OpenLayers 相关说明
   map.value = new OlMap({
     target: mapContainer.value,
-    layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, highlightPreviewLayer, aiEvidenceLayer, userLocationAccuracyLayer, locateLayer, userLocationLayer],
+    layers: [baseLayer, heatmapLayer, polygonLayer, centerLayer, hoverLayer, highlightPreviewLayer, aiEvidenceLayer, userLocationAccuracyLayer, locateLayer, userLocationLayer],
     controls: [],
     view: new View({
       center: fromLonLat([114.33, 30.58]),
@@ -785,7 +787,7 @@ function debounce(func, wait) {
 
 /**
  *
- * deck.gl 相关说明
+ * OpenLayers 相关说明
  */
 function onMapClick(evt) {
   const pixel = map.value.getEventPixel(evt.originalEvent);
@@ -843,14 +845,6 @@ function onMapClick(evt) {
     );
   }
 
-  // deck.gl 相关说明
-  if (!boundaryLabel && !foundRaw && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
-    const picked = pickDeckObject(pixel, 10);
-    if (picked?.raw) {
-      foundRaw = picked.raw;
-    }
-  }
-  
   if (boundaryLabel) {
     showBoundaryPopup(
       boundaryLabel,
@@ -878,7 +872,7 @@ function onMapClick(evt) {
 
 /**
  *
- * deck.gl 相关说明
+ * OpenLayers 相关说明
  */
 function onPointerMove(evt) {
   if (evt.dragging) return;
@@ -900,14 +894,6 @@ function onPointerMove(evt) {
     })
   });
   
-  // deck.gl 相关说明
-  if (!hitRaw && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
-    const picked = pickDeckObject(pixel, 8);
-    if (picked?.raw) {
-      hitRaw = picked.raw;
-    }
-  }
-  
   if (hitRaw) {
     map.value.getTargetElement().style.cursor = 'pointer';
     emitHover(hitRaw);
@@ -920,7 +906,6 @@ function onPointerMove(evt) {
 onBeforeUnmount(() => {
   cleanupPopupAnchor();
   setBoundaryInteractionMode(false);
-  destroyDeckBridge();
   clearBaseLayerStatusWatchers();
   if (mapResizeObserver) {
     mapResizeObserver.disconnect();
@@ -986,15 +971,6 @@ function flyTo(target, options = {}) {
   let [lon, lat] = lonLat;
   [lon, lat] = toMapLonLat(lon, lat, resolveFeatureCoordSys(target));
   const center = fromLonLat([lon, lat]);
-
-  const isPoiFeature = Array.isArray(target?.geometry?.coordinates);
-  if (showMarker && isPoiFeature) {
-    currentLocatedPoi = target;
-  } else {
-    currentLocatedPoi = null;
-  }
-  markDeckLayersDirty();
-  scheduleDeckSync({ forceLayerRefresh: true });
 
   hoverLayerSource.clear();
   locateLayerSource.clear();
@@ -1507,11 +1483,12 @@ function removeRegionFromMap(regionId) {
  */
 function clearHighlights() {
   highlightPreviewSource.clear();
-  clearDeckData();
+  heatmapSource.clear();
+  map.value?.renderSync?.();
 }
 
 /**
- * deck.gl 相关说明
+ * OpenLayers 相关说明
  * @param {Array} features - 要素列表
  * @param {Object} options - 可选参数
  */
@@ -1523,7 +1500,7 @@ function showHighlights(features, options = {}) {
 
   highlightPreviewSource.clear();
 
-  const deckData = features
+  const heatmapItems = features
     .map((raw) => {
       const displayLonLat = resolveDisplayLonLat(raw);
       if (!displayLonLat) return null;
@@ -1544,23 +1521,25 @@ function showHighlights(features, options = {}) {
     })
     .filter(Boolean);
 
-  highlightData.value = [];
-  heatmapData.value = deckData.filter((item) => !item.raw?.properties?._isAnchor);
-
-  if (heatmapEnabled.value) {
-    ensureDeckInitialized().then((instance) => {
-      if (!instance) return;
-      markDeckLayersDirty();
-      scheduleDeckSync({ forceLayerRefresh: true });
+  heatmapSource.clear();
+  heatmapItems
+    .filter((item) => !item.raw?.properties?._isAnchor)
+    .forEach((item) => {
+      const heatmapFeature = new Feature({
+        geometry: new Point(fromLonLat([item.lon, item.lat]))
+      });
+      heatmapFeature.set('__raw', item.raw);
+      heatmapFeature.set('weight', 1);
+      heatmapSource.addFeature(heatmapFeature);
     });
-  }
+  heatmapLayer.setVisible(heatmapEnabled.value);
 
   map.value?.renderSync?.();
 
   if (options.fitView && map.value) {
 
     let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
-    deckData.forEach(d => {
+    heatmapItems.forEach(d => {
       minLon = Math.min(minLon, d.lon);
       maxLon = Math.max(maxLon, d.lon);
       minLat = Math.min(minLat, d.lat);
@@ -1588,16 +1567,8 @@ function showHighlights(features, options = {}) {
 
 
 watch(heatmapEnabled, (enabled) => {
-  if (enabled) {
-    ensureDeckInitialized().then((instance) => {
-      if (!instance) return;
-      markDeckLayersDirty();
-      scheduleDeckSync({ forceLayerRefresh: true });
-    });
-    return;
-  }
-  markDeckLayersDirty();
-  scheduleDeckSync({ forceLayerRefresh: true });
+  heatmapLayer.setVisible(enabled);
+  map.value?.renderSync?.();
 });
 
 /**
@@ -1714,7 +1685,6 @@ function clearPolygon() {
   currentGeometry = null;
   currentGeometryType = null;
   hasLocatedOnce = false;
-  currentLocatedPoi = null; // POI 相关说明
 }
 
 /**

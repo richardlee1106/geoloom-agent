@@ -32,7 +32,7 @@ describe('DeepSeekSearchSkill', () => {
       const model = String(body.model || '')
       seenRequests.push({ url: String(url), model })
 
-      if (model === 'deepseek-chat-search') {
+      if (model === 'mock-unavailable') {
         return mockResponse({ ok: false, status: 502, textBody: 'primary unavailable' })
       }
 
@@ -66,13 +66,13 @@ describe('DeepSeekSearchSkill', () => {
       endpoints: [
         {
           label: 'primary',
-          baseUrl: 'https://ciyuanshen.top/v1',
+          baseUrl: 'https://api.deepsb.com/v1',
           apiKey: 'primary-key',
-          model: 'deepseek-chat-search',
+          model: 'mock-unavailable',
         },
         {
           label: 'default',
-          baseUrl: 'https://api.deepsb.com',
+          baseUrl: 'https://api.deepsb.com/v1',
           apiKey: 'fallback-key',
           model: 'deepseek-v4-flash-search-nothinking',
         },
@@ -103,7 +103,7 @@ describe('DeepSeekSearchSkill', () => {
       fallbackAttempts: 1,
     })
     expect(seenRequests).toEqual([
-      { url: 'https://ciyuanshen.top/v1/chat/completions', model: 'deepseek-chat-search' },
+      { url: 'https://api.deepsb.com/v1/chat/completions', model: 'mock-unavailable' },
       { url: 'https://api.deepsb.com/v1/chat/completions', model: 'deepseek-v4-flash-search-nothinking' },
     ])
   })
@@ -113,9 +113,9 @@ describe('DeepSeekSearchSkill', () => {
       endpoints: [
         {
           label: 'primary',
-          baseUrl: 'https://ciyuanshen.top/v1',
+          baseUrl: 'https://api.deepsb.com/v1',
           apiKey: 'primary-key',
-          model: 'deepseek-chat-search',
+          model: 'deepseek-v4-flash-search-nothinking',
         },
         {
           label: 'default',
@@ -131,12 +131,12 @@ describe('DeepSeekSearchSkill', () => {
     expect(status?.deepseek_search).toMatchObject({
       ready: true,
       degraded: false,
-      target: 'https://ciyuanshen.top/v1',
+      target: 'https://api.deepsb.com/v1',
       details: {
         primary: {
           label: 'primary',
-          baseUrl: 'https://ciyuanshen.top/v1',
-          model: 'deepseek-chat-search',
+          baseUrl: 'https://api.deepsb.com/v1',
+          model: 'deepseek-v4-flash-search-nothinking',
         },
         fallbackCount: 1,
       },

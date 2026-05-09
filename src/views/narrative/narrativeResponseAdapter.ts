@@ -80,12 +80,11 @@ function poiKey(poi: NarrativePoi): string {
   return `${poi.lon.toFixed(6)}:${poi.lat.toFixed(6)}:${poi.tier}`
 }
 
-function evidenceCount(pois: NarrativePoi[]): number {
-  return pois.filter((poi) => poi.tier === 'core' || poi.tier === 'strong' || poi.tier === 'medium').length
-}
-
 function hasRenderablePoiEvidence(region: NarrativeRegion): boolean {
-  return region.pois.some((poi) => poi.tier !== 'excluded')
+  const evidencePoints = region.visual_layer.poi_heat?.points
+    .filter((point) => point.tier === 'core' || point.tier === 'strong' || point.tier === 'medium') ?? []
+  const uniquePointKeys = new Set(evidencePoints.map((point) => `${point.lon.toFixed(5)}:${point.lat.toFixed(5)}`))
+  return uniquePointKeys.size >= 3
 }
 
 function stableSortPois(pois: NarrativePoi[]): NarrativePoi[] {
@@ -140,6 +139,13 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
       uniqueRegions.push(region)
     }
   }
+  const chapterByRegionId = new Map<string, NarrativeChapter>()
+  for (const chapter of response.narration.chapters) {
+    const regionId = regionAlias.get(chapter.region_id) ?? chapter.region_id
+    if (!chapterByRegionId.has(regionId)) {
+      chapterByRegionId.set(regionId, { ...chapter, region_id: regionId })
+    }
+  }
 
   const pathPairs: Array<{ node: NarrativePathNode; chapter: NarrativeChapter }> = []
   const seenPathKeys = new Set<string>()
@@ -150,14 +156,15 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
     const pathKey = normalizeRegionKey(region?.display_name ?? regionId) || regionId
     if (seenPathKeys.has(pathKey)) continue
     seenPathKeys.add(pathKey)
+    const matchedChapter = chapterByRegionId.get(regionId) ?? response.narration.chapters[index]
     pathPairs.push({
       node: { ...node, region_id: regionId },
       chapter: {
         region_id: regionId,
-        text: response.narration.chapters[index]?.text ?? `${region?.display_name ?? regionId}是当前解说路径中的一站。`,
-        web_source: response.narration.chapters[index]?.web_source,
-        web_sources: response.narration.chapters[index]?.web_sources,
-        length_ms: response.narration.chapters[index]?.length_ms
+        text: matchedChapter?.text ?? `${region?.display_name ?? regionId}是当前解说路径中的一站。`,
+        web_source: matchedChapter?.web_source,
+        web_sources: matchedChapter?.web_sources,
+        length_ms: matchedChapter?.length_ms
       }
     })
   }

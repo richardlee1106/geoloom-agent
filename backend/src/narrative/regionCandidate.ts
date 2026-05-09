@@ -1,12 +1,6 @@
-import { classifyNarrativeEntity } from './entityClassifier.js'
+import type { NarrativeBoundaryGeometry, NarrativePoi, NarrativeRegion, SceneProfile, ViewportBBox } from './contract.js'
 import { discoverAbstractRegionCandidates } from './abstractRegionDiscovery.js'
-import type {
-  NarrativeBoundaryGeometry,
-  NarrativePoi,
-  NarrativeRegion,
-  SceneProfile,
-  ViewportBBox,
-} from './contract.js'
+import { classifyNarrativeEntity } from './entityClassifier.js'
 import { transformPolygonCoordsToGcj02, wgs84ToGcj02 } from './gcj02.js'
 import {
   boundaryAreaKm2,
@@ -21,6 +15,7 @@ import {
   viewportAreaKm2,
   type Bounds,
 } from './geometry.js'
+import { inferRegionStoryTags } from './storyTags.js'
 
 export interface AoiCandidateRow {
   id: string
@@ -49,6 +44,7 @@ const COMMERCIAL_AOI_RE = /(商业街|步行街|购物中心|购物广场|商业
 const COMMERCIAL_EVIDENCE_RE = /(餐饮|美食|小吃|咖啡|茶|饮品|酒吧|购物|商店|商铺|商场|广场|商业|影院|影城|娱乐|休闲|服饰|珠宝|书店|超市|便利店|汉街|楚河)/u
 const COMMERCIAL_CHILD_RE = /(购物中心|购物广场|商业广场|商场|广场|天地|汉街|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|欧亚达|群星城|K11|SKP|mall|plaza|MALL)/iu
 const HARD_EXCLUDED_POI_RE = /(党校|干部学院|行政学院|社会主义学院|医院|医学院|医学部|医疗|卫生院|诊所|门诊|卫生服务中心|hospital|medical|clinic|healthcare)/iu
+const NARRATIVE_CLUSTER_MIN_POINTS = 3
 
 export function buildRegionCandidates(input: {
   viewport: ViewportBBox
@@ -77,9 +73,17 @@ function candidateRank(candidate: RegionCandidate): number {
 }
 
 function isCandidateVisibleEnough(candidate: RegionCandidate): boolean {
-  if (candidate.source === 'abstract_region') return candidate.effectivePoiCount >= (isKnownAbstractStreet(candidate.display_name) || candidate.display_name === '徐东商圈' ? 2 : 3)
-  if (candidate.source === 'aoi') return candidate.effectivePoiCount >= 1
-  return candidate.effectivePoiCount >= 1 || candidate.pois.length >= 2 || candidate.coverage >= 0.006
+  if (!isRegionCandidateNarratable(candidate)) return false
+  if (candidate.source === 'abstract_region') return candidate.effectivePoiCount >= NARRATIVE_CLUSTER_MIN_POINTS
+  if (candidate.source === 'aoi') return candidate.effectivePoiCount >= NARRATIVE_CLUSTER_MIN_POINTS
+  return candidate.effectivePoiCount >= NARRATIVE_CLUSTER_MIN_POINTS
+}
+
+export function isRegionCandidateNarratable(candidate: RegionCandidate): boolean {
+  const heatPoints = candidate.visual_layer.poi_heat?.points ?? []
+  const evidencePoints = heatPoints.filter((point) => point.tier === 'core' || point.tier === 'strong' || point.tier === 'medium')
+  const uniquePointKeys = new Set(evidencePoints.map((point) => `${point.lon.toFixed(5)}:${point.lat.toFixed(5)}`))
+  return uniquePointKeys.size >= NARRATIVE_CLUSTER_MIN_POINTS
 }
 
 function suppressCompetingPrimaryAbstractRegions(candidates: RegionCandidate[], viewport: ViewportBBox): RegionCandidate[] {
@@ -146,6 +150,7 @@ function buildAoiRegionCandidates(input: {
     const areaKm2 = boundaryAreaKm2(boundary)
     if (areaKm2 < 0.0005) continue
 
+    const boundaryBounds = boundsFromBoundary(boundary)
     const classification = classifyNarrativeEntity({
       name: aoi.name,
       fclass: aoi.fclass,
@@ -155,7 +160,7 @@ function buildAoiRegionCandidates(input: {
     if (!classification.mainChainEligible && !classification.representative) continue
 
     const pois = input.pois
-      .filter((poi) => pointInBoundaryGeometry(poi, boundary))
+      .filter((poi) => pointInBounds(poi.lon, poi.lat, boundaryBounds) && pointInBoundary(lonLat(poi), boundary))
       .map((poi) => retierPoiWithinAoi(poi, aoi))
       .filter((poi): poi is NarrativePoi => poi !== null && poi.tier !== 'excluded')
     const evidencePois = pois.filter(isCandidateEvidencePoi)
@@ -230,10 +235,6 @@ function retierPoiWithinAoi(poi: NarrativePoi, aoi: AoiCandidateRow): NarrativeP
   return poi
 }
 
-function pointInBoundaryGeometry(poi: NarrativePoi, boundary: NarrativeBoundaryGeometry): boolean {
-  return pointInBoundary(lonLat(poi), boundary)
-}
-
 function lonLat(poi: NarrativePoi): [number, number] {
   return [poi.lon, poi.lat]
 }
@@ -295,6 +296,13 @@ function materializeCandidate(input: {
     const [gcjLon, gcjLat] = wgs84ToGcj02(poi.lon, poi.lat)
     return { ...poi, lon: gcjLon, lat: gcjLat }
   })
+  const storyTags = inferRegionStoryTags({
+    display_name: input.displayName,
+    role: input.role,
+    scene: input.scene,
+    source: input.source,
+    pois: candidatePois,
+  })
   return {
     id: input.id,
     display_name: input.displayName,
@@ -317,6 +325,7 @@ function materializeCandidate(input: {
     },
     pois: gcjPois,
     narrative_facts: [],
+    story_tags: storyTags,
     score: Number(input.score.toFixed(4)),
     source: input.source,
     coverage: Number(input.coverage.toFixed(4)),
@@ -349,7 +358,7 @@ function suppressChildCommercialCandidates(candidates: RegionCandidate[]): Regio
     candidate.source === 'abstract_region'
     && candidate.role === 'primary_region'
     && isCommercialDistrict(candidate.display_name)
-    && candidate.effectivePoiCount >= 2)
+    && isRegionCandidateNarratable(candidate))
   if (commercialDistricts.length === 0) return candidates
   return candidates.filter((candidate) => {
     if (commercialDistricts.some((district) => district.id === candidate.id)) return true
@@ -379,7 +388,7 @@ function shouldReplaceOverlappingCandidate(existing: RegionCandidate, candidate:
       && candidate.pois.length >= existing.pois.length
   }
   if (existing.source === 'aoi' && candidate.source === 'abstract_region' && isCommercialDistrict(candidate.display_name)) {
-    return isCommercialChildCandidate(existing) && candidate.effectivePoiCount >= 2
+    return isCommercialChildCandidate(existing) && isRegionCandidateNarratable(candidate)
   }
   return existing.source === 'aoi'
     && candidate.source === 'abstract_region'
@@ -388,10 +397,6 @@ function shouldReplaceOverlappingCandidate(existing: RegionCandidate, candidate:
 
 function isCommercialDistrict(name: string): boolean {
   return /商圈$/u.test(name)
-}
-
-function isKnownAbstractStreet(name: string): boolean {
-  return /^(万松园|吉庆街|黎黄陂路|昙华林|水塔街)$/u.test(name)
 }
 
 function colorForCandidate(id: string, scene: SceneProfile): string {

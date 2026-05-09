@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { LocalFallbackBridge } from '../../../../src/integration/jinaBridge.js'
+import { LocalFallbackBridge } from '../../../../src/integration/embedBridge.js'
 import { createEntityAlignmentSkill } from '../../../../src/skills/entity_alignment/EntityAlignmentSkill.js'
 
 describe('EntityAlignmentSkill', () => {

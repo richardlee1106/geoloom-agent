@@ -1,8 +1,11 @@
-import type { LODLevel, NarrativeChapter, NarrativeFact, NarrativePathNode, NarrativeRouteStrategy, NarrationTone, SceneProfile } from './contract.js'
+import type { LODLevel, NarrativeChapter, NarrativeFact, NarrativePathNode, NarrativeRouteStrategy, NarrationTone, SceneProfile, UserContext } from './contract.js'
 import type { RegionCandidate } from './regionCandidate.js'
 import { storyTagPhrase } from './storyTags.js'
 
-const FORBIDDEN_RE = /(宿舍|家属区|楼栋|服务中心|广告|优惠|促销|热线|联系电话|招商|加盟|POI|样本|节点|权重|score|tier)/u
+type ExplorationFocus = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
+
+const FORBIDDEN_RE = /(宿舍|家属区|楼栋|服务中心|商务住宅|住宅区|小区|广告|优惠|促销|热线|联系电话|招商|加盟|POI|样本|节点|权重|score|tier)/u
+const NARRATION_CATEGORY_FORBIDDEN_RE = /(商务住宅|住宅区|住宅|小区|宿舍|家属区|楼栋|单元|服务中心|售楼|营销中心|医院|医疗|党校)/u
 
 export function buildRegionFacts(input: {
   region: RegionCandidate
@@ -46,12 +49,14 @@ export function buildNarrationChapters(input: {
   lod?: LODLevel
   strategy?: NarrativeRouteStrategy
   pathNodes?: Array<Pick<NarrativePathNode, 'region_id' | 'transition_reason'>>
+  userContext?: UserContext
 }): NarrativeChapter[] {
   const transitionByRegion = new Map((input.pathNodes || []).map((node) => [node.region_id, node.transition_reason]))
+  const focus = resolveExplorationFocus(input.userContext, input.tone)
   return input.regions.map((region, index) => {
     const allowed = region.narrative_facts.filter(isAllowedFact)
     const sampleFact = rewriteSpatialFillerFact(stripRepeatedRegionPrefix(allowed[0]?.claim || `${region.display_name}由真实点簇和地界关系支撑。`, region.display_name))
-    const text = buildChapterText(region, sampleFact, input.scene, input.lod || 'meso', input.strategy, index, transitionByRegion.get(region.id))
+    const text = buildChapterText(region, sampleFact, input.scene, input.lod || 'meso', input.strategy, focus, index, transitionByRegion.get(region.id))
     return {
       region_id: region.id,
       text,
@@ -86,20 +91,22 @@ function rewriteSpatialFillerFact(fact: string): string {
     .replace(/在当前视野中。?/gu, '')
 }
 
-function buildChapterText(region: RegionCandidate, fact: string, scene: SceneProfile, lod: LODLevel, strategy: NarrativeRouteStrategy | undefined, index: number, transitionReason?: string): string {
+function buildChapterText(region: RegionCandidate, fact: string, scene: SceneProfile, lod: LODLevel, strategy: NarrativeRouteStrategy | undefined, focus: ExplorationFocus, index: number, transitionReason?: string): string {
   const lead = index === 0 ? `先看${region.display_name}。` : transitionLead(region, transitionReason)
   const tagPhrase = storyTagPhrase(region.story_tags, scene)
   const lodPhrase = lodNarrationPhrase(lod)
   const strategyPhrase = strategyNarrationPhrase(strategy)
-  const ecologyPhrase = surroundingEcologyPhrase(region, scene)
-  const relationPhrase = contextRelationPhrase(region, scene)
+  const focusPhrase = focusNarrationPhrase(region, focus)
+  const ecologyPhrase = surroundingEcologyPhrase(region, scene, focus)
+  const relationPhrase = contextRelationPhrase(region, scene, focus)
+  const closingPhrase = focusClosingPhrase(focus, scene)
   if (region.role === 'primary_region') {
-    return `${lead}${fact}${tagPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}从空间结构上看，它和周边${sceneLabel(scene)}氛围共同构成这一段解说的重心。`
+    return `${lead}${fact}${tagPhrase}${focusPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}${closingPhrase}`
   }
   if (region.role === 'support_region' || region.role === 'landmark_anchor') {
-    return `${lead}${fact}${tagPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}它不是孤立出现的地点，而是连接当前视野空间关系的重要支撑。`
+    return `${lead}${fact}${tagPhrase}${focusPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}它不是孤立出现的地点，而是连接这一轮${focusLabel(focus)}讲解的重要支撑。`
   }
-  return `${lead}${fact}${tagPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}它帮助我们理解当前视野为什么呈现出${sceneLabel(scene)}的整体气质。`
+  return `${lead}${fact}${tagPhrase}${focusPhrase}${lodPhrase}${strategyPhrase}${ecologyPhrase}${relationPhrase}它帮助我们理解这片区域为什么呈现出${focusLabel(focus)}与${sceneLabel(scene)}交织的整体气质。`
 }
 
 function transitionLead(region: RegionCandidate, transitionReason?: string): string {
@@ -108,21 +115,21 @@ function transitionLead(region: RegionCandidate, transitionReason?: string): str
   return `${/[。！？]$/u.test(cleaned) ? cleaned : `${cleaned}。`}`
 }
 
-function surroundingEcologyPhrase(region: RegionCandidate, scene: SceneProfile): string {
+function surroundingEcologyPhrase(region: RegionCandidate, scene: SceneProfile, focus: ExplorationFocus): string {
   const categories = [...new Set(region.pois
     .filter((poi) => poi.tier !== 'excluded')
     .map((poi) => poi.category_main || '')
-    .filter(Boolean))].slice(0, 3)
+    .filter((category) => category && !NARRATION_CATEGORY_FORBIDDEN_RE.test(category)))].slice(0, 3)
   if (categories.length > 0) {
-    return `周边生态上，${categories.join('、')}等真实地点共同构成可观察的活动底盘。`
+    return `周边生态上，${categories.join('、')}等真实地点共同构成${focusLabel(focus)}可观察的活动底盘。`
   }
   return `周边生态上，它需要放在当前${sceneLabel(scene)}视野的真实地界和空间证据中理解。`
 }
 
-function contextRelationPhrase(region: RegionCandidate, scene: SceneProfile): string {
-  if (region.role === 'primary_region') return `片区上下文上，它承担当前${sceneLabel(scene)}叙事的主轴。`
-  if (region.role === 'support_region' || region.role === 'landmark_anchor') return `片区上下文上，它负责把主体片区和周边功能点位串联起来。`
-  return `片区上下文上，它补足了当前视野的${sceneLabel(scene)}背景关系。`
+function contextRelationPhrase(region: RegionCandidate, scene: SceneProfile, focus: ExplorationFocus): string {
+  if (region.role === 'primary_region') return `片区上下文上，它承担当前${focusLabel(focus)}讲解的主轴。`
+  if (region.role === 'support_region' || region.role === 'landmark_anchor') return `片区上下文上，它负责把主体片区和周边${focusLabel(focus)}线索串联起来。`
+  return `片区上下文上，它补足了当前${focusLabel(focus)}观察里的${sceneLabel(scene)}背景关系。`
 }
 
 function chapterLengthMs(region: RegionCandidate, lod: LODLevel): number {
@@ -157,6 +164,90 @@ function strategyNarrationPhrase(strategy: NarrativeRouteStrategy | undefined): 
     case 'seeded_spatial_story': return '讲法上要顺着相邻空间自然推进。'
     default: return ''
   }
+}
+
+function resolveExplorationFocus(userContext: UserContext | undefined, tone: NarrationTone): ExplorationFocus {
+  const label = `${userContext?.preference_label || ''} ${userContext?.history_label || ''}`
+  if (/夜生活|夜市|晚间|烟火气/u.test(label)) return 'nightlife'
+  if (/商业活力|消费锚点|商圈层级|餐饮休闲/u.test(label)) return 'commerce'
+  if (/城市记忆|历史街巷|老地名|人文线索/u.test(label)) return 'memory'
+  if (/亲子休闲|公园绿地|公共服务|步行友好/u.test(label)) return 'family'
+  if (/高校科教|校园文化|知识社区/u.test(label)) return 'education'
+  if (/通勤生活|交通节点|日常便利|社区服务/u.test(label)) return 'commute'
+  if (/文旅打卡|地标景点|游览动线|城市名片/u.test(label)) return 'tourism'
+  if (tone === 'humanity') return 'memory'
+  if (tone === 'tour') return 'tourism'
+  return 'comprehensive'
+}
+
+function focusLabel(focus: ExplorationFocus): string {
+  switch (focus) {
+    case 'commerce': return '商业活力'
+    case 'nightlife': return '夜生活'
+    case 'memory': return '城市记忆'
+    case 'family': return '亲子休闲'
+    case 'education': return '高校科教'
+    case 'commute': return '通勤生活'
+    case 'tourism': return '文旅游览'
+    case 'comprehensive': return '综合观察'
+  }
+}
+
+function focusNarrationPhrase(region: RegionCandidate, focus: ExplorationFocus): string {
+  const categories = categoryText(region)
+  switch (focus) {
+    case 'commerce':
+      return /(购物|餐饮|住宿|商业|休闲|娱乐|商场|广场)/u.test(categories)
+        ? '这一轮要优先看它怎样聚拢消费、人流和商业支撑。'
+        : '这一轮只把它作为商业活动外缘来理解，不把它硬讲成消费核心。'
+    case 'nightlife':
+      return /(餐饮|美食|小吃|酒吧|娱乐|夜市|休闲)/u.test(categories)
+        ? '这一轮要优先看它怎样承接晚间餐饮、街巷烟火和停留活动。'
+        : '这一轮要判断它能否支撑夜间活动，不能只按白天功能泛泛介绍。'
+    case 'memory':
+      return /(文化|历史|博物馆|纪念|老街|街巷|古迹)/u.test(categories)
+        ? '这一轮要优先看它留下的城市记忆、文化线索和时间层次。'
+        : '这一轮更适合把它放进周边历史文化关系里，而不是硬编掌故。'
+    case 'family':
+      return /(公园|绿地|体育|休闲|公共|生活|科教)/u.test(categories)
+        ? '这一轮要优先看它对亲子停留、步行休闲和公共活动的友好度。'
+        : '这一轮只把它作为家庭出行路线上的辅助节点来讲。'
+    case 'education':
+      return /(大学|学院|学校|科教|文化|图书|书店)/u.test(`${region.display_name} ${categories}`)
+        ? '这一轮要优先看它怎样形成校园文化、学习活动和知识社区的外延。'
+        : '这一轮要看它和周边校园或文化设施之间有没有真实联系。'
+    case 'commute':
+      return /(交通|地铁|公交|停车|道路|站|生活|便利|公共)/u.test(categories)
+        ? '这一轮要优先看它怎样服务通勤入口、日常便利和片区到达性。'
+        : '这一轮只把它作为通勤路径上的背景，不夸大交通功能。'
+    case 'tourism':
+      return /(风景|景区|公园|文化|购物|休闲|地标|广场)/u.test(categories)
+        ? '这一轮要优先看它是否适合作为外来者理解这片区域的游览锚点。'
+        : '这一轮要把它解释成路线中的识别点，而不是单独打卡景点。'
+    case 'comprehensive':
+      return '这一轮要平衡看它的空间结构、功能混合和代表性。'
+  }
+}
+
+function focusClosingPhrase(focus: ExplorationFocus, scene: SceneProfile): string {
+  switch (focus) {
+    case 'commerce': return '所以这里的重点不是罗列店铺，而是看消费锚点怎样带动周边片区。'
+    case 'nightlife': return '所以这里的重点是夜间停留、餐饮烟火和街巷活动能不能连成气氛。'
+    case 'memory': return '所以这里的重点是把真实空间证据讲成时间层次，而不是编造故事。'
+    case 'family': return '所以这里的重点是亲子、慢行和公共休闲是否能形成轻松的停留半径。'
+    case 'education': return '所以这里的重点是校园、知识活动和周边生活如何互相渗透。'
+    case 'commute': return '所以这里的重点是到达、换乘和日常便利如何支撑本地人的使用路径。'
+    case 'tourism': return '所以这里的重点是它能不能成为游览路线里的清晰识别点。'
+    case 'comprehensive': return `从空间结构上看，它和周边${sceneLabel(scene)}氛围共同构成这一段解说的重心。`
+  }
+}
+
+function categoryText(region: RegionCandidate): string {
+  return [
+    region.display_name,
+    ...(region.story_tags || []),
+    ...region.pois.map((poi) => `${poi.display_name} ${poi.category_main || ''} ${poi.category_sub || ''}`),
+  ].join(' ')
 }
 
 function sceneLabel(scene: SceneProfile): string {

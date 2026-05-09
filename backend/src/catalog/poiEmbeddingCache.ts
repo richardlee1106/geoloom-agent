@@ -5,13 +5,13 @@
  * 查询时 embed 用户 query → 和 POI embedding 做 cosine → 语义重排序。
  *
  * 优势：
- * - 不需要全量预计算（Jina 免费版限流太严）
+ * - 不需要全量预计算（API 有限流）
  * - 只对被查询到的 POI（通常 10-50 条）计算 embedding
  * - 缓存到 pois.embedding 列，后续查询直接命中
  * - 逐步积累覆盖率
  */
 
-import type { EmbedRerankBridge } from '../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../integration/embedBridge.js'
 import type { QueryResultLike } from '../integration/postgisPool.js'
 
 export interface PoiEmbeddingCacheOptions {

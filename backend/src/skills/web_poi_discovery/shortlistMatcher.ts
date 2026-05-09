@@ -12,8 +12,8 @@
 
 import type { SceneProfile, ShortlistPoi, MentionMatch, DiscoveryScopeInput } from './types.js'
 import type { NormalizedMentionGroup } from './mentionNormalizer.js'
-import type { EmbedRerankBridge } from '../../integration/jinaBridge.js'
-import { LocalFallbackBridge } from '../../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../../integration/embedBridge.js'
+import { LocalFallbackBridge } from '../../integration/embedBridge.js'
 import { isAcceptableDbRow } from './sceneProfile.js'
 
 export interface DbQueryFn {

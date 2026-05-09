@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { EmbedRerankBridge } from '../../../src/integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../../../src/integration/embedBridge.js'
 import { CategoryEmbeddingIndex } from '../../../src/catalog/categoryEmbeddingIndex.js'
 
 function createBridge(vectorsByText: Record<string, number[]>): EmbedRerankBridge {
@@ -17,7 +17,7 @@ function createBridge(vectorsByText: Record<string, number[]>): EmbedRerankBridg
     },
     async getStatus() {
       return {
-        name: 'jina_api',
+        name: 'embed_api',
         ready: true,
         degraded: false,
         mode: 'remote',

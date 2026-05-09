@@ -37,6 +37,11 @@
         }
       </style>
     </div>
+    <script>
+      // 首屏加载计时标记
+      window.__GEOLOOM_PERF_T0 = performance.now()
+      console.log('[GeoLoom Perf] HTML parsed at', performance.now().toFixed(0), 'ms')
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

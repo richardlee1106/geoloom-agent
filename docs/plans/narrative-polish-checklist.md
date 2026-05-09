@@ -148,7 +148,7 @@ owner: GeoLoom Narrative Team
 - DeepSeek 单次搜索在实测中约 11-16 秒，异步化后首包实测约 1.1 秒；后台完成后武汉样例 viewport 仍可回填 9 条 `web_sources`。
 - `llmNarrator.ts` 已从 all-or-nothing 校验升级为按 `region_id` 对齐的部分采纳：可用章节采用 LLM 文案，异常章节单独 fallback 到模板。
 - `debug.web_facts.items[].error` 已能暴露 timeout / upstream failure，`debug.llm_narrator.partial_fallback_count` 可观察按章 fallback 数。
-- DeepSeek Search 已支持 primary/fallback endpoint：优先使用 `DEEPSEEK_SEARCH_PRIMARY_*`（当前本地配置为 `https://ciyuanshen.top/v1` + `deepseek-chat-search`），失败后回退到 `DEEPSEEK_SEARCH_*` / `NEWAPI_SEARCH_*`。
+- DeepSeek Search 已支持 primary/fallback endpoint：优先使用 `DEEPSEEK_SEARCH_PRIMARY_*`，失败后回退到 `DEEPSEEK_SEARCH_*` / `NEWAPI_SEARCH_*`。
 
 ## 6. 阶段 4.5：调试面板与用户面板分离
 

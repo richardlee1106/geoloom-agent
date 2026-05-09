@@ -227,8 +227,6 @@ import { ref, shallowRef, onMounted, onUnmounted, nextTick, computed, watch, def
 import { useRouter } from 'vue-router';
 import { vLoading } from 'element-plus/es/components/loading/index';
 import { ElNotification } from 'element-plus/es/components/notification/index';
-import { fromLonLat, toLonLat } from 'ol/proj';
-import ControlPanel from './components/ControlPanel.vue';
 function createLoadingPlaceholder(label) {
   return {
     render() {
@@ -239,6 +237,11 @@ function createLoadingPlaceholder(label) {
     }
   };
 }
+const ControlPanel = defineAsyncComponent({
+  loader: () => import('./components/ControlPanel.vue'),
+  loadingComponent: createLoadingPlaceholder('控制面板加载中...'),
+  delay: 0
+});
 
 // MapContainer 使用异步组件延迟加载 OpenLayers（318KB）
 const MapContainer = defineAsyncComponent({
@@ -473,9 +476,10 @@ function stopCurrentLocationWatch() {
   geolocationWatchId = null;
 }
 
-function getCurrentMapDisplayCenter() {
+async function getCurrentMapDisplayCenter() {
   const center = map.value?.getView?.()?.getCenter?.();
   if (!center) return null;
+  const { toLonLat } = await import('ol/proj');
   const [lon, lat] = toLonLat(center);
   if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
   return { lon, lat };
@@ -541,7 +545,7 @@ function buildCurrentLocationProgressMessage(review) {
   return `${accuracyText}，我先继续等待更精确的设备定位结果。`;
 }
 
-function animateToUserLocation(location, options = {}) {
+async function animateToUserLocation(location, options = {}) {
   if (!map.value || !location) return;
   const view = map.value.getView?.();
   if (!view) return;
@@ -551,6 +555,7 @@ function animateToUserLocation(location, options = {}) {
     : 16;
   const currentZoom = Number(view.getZoom?.()) || 14;
 
+  const { fromLonLat } = await import('ol/proj');
   view.animate({
     center: fromLonLat([location.lon, location.lat]),
     zoom: Math.max(currentZoom, zoomFloor),

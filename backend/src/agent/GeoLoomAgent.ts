@@ -46,7 +46,7 @@ import { loadCategoryTreeFromDatabase } from '../catalog/categoryCatalog.js'
 import { CategoryEmbeddingIndex } from '../catalog/categoryEmbeddingIndex.js'
 import { PoiEmbeddingCache } from '../catalog/poiEmbeddingCache.js'
 import { EmbeddingIntentClassifier, type EmbeddingIntentResult } from '../catalog/embeddingIntentClassifier.js'
-import type { EmbedRerankBridge } from '../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../integration/embedBridge.js'
 import { MemoryManager } from '../memory/MemoryManager.js'
 import { ShortTermMemory } from '../memory/ShortTermMemory.js'
 import { LongTermMemory } from '../memory/LongTermMemory.js'
@@ -2117,7 +2117,7 @@ export interface GeoLoomAgentOptions {
   areaSemanticDenoiser?: AreaSemanticDenoiser
   /** 品类 Embedding 索引（启动时预计算，查询时语义匹配） */
   categoryIndex?: CategoryEmbeddingIndex
-  /** EmbedRerankBridge 实例（JinaBridge），供品类 embedding 解析使用 */
+  /** EmbedRerankBridge 实例，供品类 embedding 解析使用 */
   bridge?: EmbedRerankBridge
   /** POI Embedding 缓存 + 语义重排序 */
   poiEmbeddingCache?: PoiEmbeddingCache

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { NarrativeBoundaryGeometry } from '../../../src/narrative/contract.js'
+import type { NarrativeBoundaryGeometry, NarrativePoi } from '../../../src/narrative/contract.js'
 import { buildNarrationChapters } from '../../../src/narrative/factGrounding.js'
 import type { RegionCandidate } from '../../../src/narrative/regionCandidate.js'
 
@@ -9,7 +9,7 @@ const boundary: NarrativeBoundaryGeometry = {
   coordinates: [[[114.3, 30.5], [114.4, 30.5], [114.4, 30.6], [114.3, 30.6], [114.3, 30.5]]],
 }
 
-function region(): RegionCandidate {
+function region(pois: NarrativePoi[] = []): RegionCandidate {
   return {
     id: 'wut-yujiatou',
     display_name: '武汉理工大学余家头校区',
@@ -17,7 +17,7 @@ function region(): RegionCandidate {
     core_anchor: { id: 'wut-yujiatou', lon: 114.35, lat: 30.55 },
     boundary,
     visual_layer: { mode: 'region_glow', poi_heat: { radius: 24, points: [] } },
-    pois: [],
+    pois,
     narrative_facts: [
       {
         claim: '武汉理工大学余家头校区。武汉理工大学余家头校区在当前视野中有可用的真实地界。',
@@ -60,5 +60,41 @@ describe('buildNarrationChapters', () => {
 
     expect(chapters[1].text).toContain('右侧片区在武汉理工大学余家头校区的东侧')
     expect(chapters[1].text).not.toContain('位于当前视野范围内')
+  })
+
+  it('同一片区会按探索主题切换讲解重心', () => {
+    const commerce = buildNarrationChapters({
+      regions: [region()],
+      tone: 'tour',
+      scene: 'education_culture',
+      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察商业活力、消费锚点、商圈层级与餐饮休闲支撑', history_label: '测试' },
+    })
+    const education = buildNarrationChapters({
+      regions: [region()],
+      tone: 'humanity',
+      scene: 'education_culture',
+      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察高校科教、校园文化、周边生活与知识社区', history_label: '测试' },
+    })
+
+    expect(commerce[0].text).toContain('商业活力')
+    expect(commerce[0].text).toContain('消费核心')
+    expect(education[0].text).toContain('高校科教')
+    expect(education[0].text).toContain('校园文化')
+    expect(commerce[0].text).not.toEqual(education[0].text)
+  })
+
+  it('章节生态描述不会暴露住宅类类别', () => {
+    const chapters = buildNarrationChapters({
+      regions: [region([
+        { id: 'home', lon: 114.35, lat: 30.55, display_name: '某住宅', tier: 'medium', role: 'scene_evidence', category_main: '商务住宅' },
+        { id: 'mall', lon: 114.351, lat: 30.551, display_name: '购物中心', tier: 'medium', role: 'scene_evidence', category_main: '购物服务' },
+      ])],
+      tone: 'tour',
+      scene: 'commercial_leisure',
+      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察商业活力、消费锚点、商圈层级与餐饮休闲支撑', history_label: '测试' },
+    })
+
+    expect(chapters[0].text).not.toContain('商务住宅')
+    expect(chapters[0].text).toContain('购物服务')
   })
 })

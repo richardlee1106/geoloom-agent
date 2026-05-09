@@ -6,8 +6,8 @@
  */
 
 import type { SkillDefinition, SkillActionDefinition } from '../types.js'
-import type { EmbedRerankBridge } from '../../integration/jinaBridge.js'
-import { LocalFallbackBridge } from '../../integration/jinaBridge.js'
+import type { EmbedRerankBridge } from '../../integration/embedBridge.js'
+import { LocalFallbackBridge } from '../../integration/embedBridge.js'
 
 // ── 类型定义 ──
 
