@@ -1,12 +1,34 @@
+import { PassThrough } from 'node:stream'
+
 import type { FastifyInstance } from 'fastify'
 
-import type { NarrativeBuilder, NarrativeRequest } from '../narrative/contract.js'
+import type { NarrativeBuilder, NarrativeEnrichmentJob, NarrativeRequest } from '../narrative/contract.js'
 import type { NarrativeTtsProvider, NarrativeTtsRequest } from '../narrative/NarrativeTtsService.js'
 
 function isNarrativeContractError(error: unknown): error is Error & { code: string; statusCode: number } {
   return error instanceof Error
     && typeof (error as { code?: unknown }).code === 'string'
     && typeof (error as { statusCode?: unknown }).statusCode === 'number'
+}
+
+function writeNarrativeSseEvent(stream: PassThrough, event: string, data: unknown) {
+  stream.write(`event: ${event}\n`)
+  stream.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
+function narrativeEnrichmentJobVersion(job: NarrativeEnrichmentJob) {
+  return [
+    job.status,
+    job.summary.status,
+    job.summary.phase,
+    job.summary.completed_region_count,
+    job.summary.cached_region_count,
+    job.summary.source_count,
+    job.summary.updated_at || '',
+    job.summary.completed_at || '',
+    job.summary.error || '',
+    job.error || '',
+  ].join('|')
 }
 
 export async function registerNarrativeRoutes(
@@ -82,6 +104,100 @@ export async function registerNarrativeRoutes(
         },
       })
     }
+  })
+
+  app.get('/enrichment/:jobId/events', async (request, reply) => {
+    if (!deps.narrative?.getEnrichmentJob) {
+      return reply.status(503).send({
+        success: false,
+        error: {
+          code: 'narrative_enrichment_unavailable',
+          message: 'Narrative enrichment is unavailable',
+        },
+      })
+    }
+    const jobId = String((request.params as { jobId?: string }).jobId || '').trim()
+    const initialJob = deps.narrative.getEnrichmentJob(jobId)
+    if (!initialJob) {
+      return reply.status(404).send({
+        success: false,
+        error: {
+          code: 'narrative_enrichment_not_found',
+          message: 'Narrative enrichment job was not found',
+        },
+      })
+    }
+
+    const stream = new PassThrough()
+    let streamClosed = false
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+    let lastVersion = ''
+    const closeStream = () => {
+      if (streamClosed) return
+      streamClosed = true
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+      stream.end()
+    }
+    const writeJob = (job: NarrativeEnrichmentJob) => {
+      if (streamClosed || stream.destroyed || stream.writableEnded) return
+      lastVersion = narrativeEnrichmentJobVersion(job)
+      try {
+        writeNarrativeSseEvent(stream, 'enrichment', job)
+      } catch {
+        closeStream()
+        return
+      }
+      if (job.status === 'completed' || job.status === 'failed') closeStream()
+    }
+    const pollJob = () => {
+      if (streamClosed || stream.destroyed || stream.writableEnded) {
+        closeStream()
+        return
+      }
+      const job = deps.narrative?.getEnrichmentJob?.(jobId)
+      if (!job) {
+        writeNarrativeSseEvent(stream, 'error', {
+          success: false,
+          error: {
+            code: 'narrative_enrichment_not_found',
+            message: 'Narrative enrichment job was not found',
+          },
+        })
+        closeStream()
+        return
+      }
+      const version = narrativeEnrichmentJobVersion(job)
+      if (version !== lastVersion) writeJob(job)
+    }
+
+    reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+    reply.raw.setHeader('Cache-Control', 'no-cache, no-transform')
+    reply.raw.setHeader('Connection', 'keep-alive')
+    reply.raw.setHeader('X-Accel-Buffering', 'no')
+    reply.send(stream)
+    reply.raw.on('close', closeStream)
+    writeJob(initialJob)
+    if (!streamClosed) {
+      pollTimer = setInterval(pollJob, 250)
+      pollTimer.unref?.()
+      heartbeatTimer = setInterval(() => {
+        if (streamClosed || stream.destroyed || stream.writableEnded) {
+          closeStream()
+          return
+        }
+        stream.write(': keepalive\n\n')
+      }, 15000)
+      heartbeatTimer.unref?.()
+    }
+    return reply
   })
 
   app.get('/enrichment/:jobId', async (request, reply) => {

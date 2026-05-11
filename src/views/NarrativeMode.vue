@@ -3,7 +3,13 @@
     <!-- 顶部栏 -->
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark"></span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="brand-mark-svg" viewBox="0 0 28 28" focusable="false">
+            <circle cx="12.5" cy="15.5" r="9.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+            <path d="M16.5 6 A 9 9 0 0 1 22 11.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.45" />
+            <circle cx="20" cy="9" r="3.1" fill="currentColor" />
+          </svg>
+        </span>
         <span class="brand-name">智能地图解说引擎</span>
         <span class="brand-tag">BETA</span>
       </div>
@@ -63,7 +69,7 @@
             <input
               v-model.trim="scopeQuery"
               class="search-input"
-              placeholder="搜索片区 / POI"
+              placeholder="关键词关注：片区 / POI / 街巷"
               @keydown.enter="analyzeCurrentViewport"
             />
           </div>
@@ -174,10 +180,10 @@
           <div class="slider-ticks"><span>0%</span><span>50%</span><span>100%</span></div>
         </section>
 
-        <!-- 4. 尺度与重心 -->
+        <!-- 3. 尺度与重心 -->
         <section v-show="activeExploreTool === 'scale'" class="panel-card explore-tool-card">
           <div class="card-head">
-            <span class="card-index">4</span>
+            <span class="card-index">3</span>
             <span class="card-title">尺度与重心</span>
           </div>
           <div class="lod-row">
@@ -254,7 +260,6 @@
               <select class="select-input" v-model="ui.tonePreset" @change="markExploreSettingsDirty('解说风格已更新')">
                 <option v-for="o in tonePresetOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
               </select>
-              <button class="ghost-btn" :disabled="!canNarrate" @click="restartNarration"><span v-html="ICONS.dice" /><span>重新播放</span></button>
             </div>
           </div>
           <div class="centroid-hint">
@@ -447,11 +452,10 @@
 
       <!-- 右面板 -->
       <aside v-if="mode === 'explore'" class="right-panel">
-        <!-- 3. 智能解说 -->
         <section class="panel-card right-narration-card">
           <div class="card-head">
-            <span class="card-index">3</span>
             <span class="card-title">智能解说</span>
+            <button class="mini-link" type="button" @click="assistantOpen = true">打开助手</button>
             <label class="auto-toggle">
               <span>自动解说</span>
               <input type="checkbox" v-model="ui.autoNarrate" />
@@ -562,8 +566,13 @@
           <ul class="ctx-list">
             <li><span class="ctx-key">时间</span><span>{{ effectiveUserContext.time_label }}</span></li>
             <li><span class="ctx-key">天气</span><span>{{ effectiveUserContext.weather_label }}</span></li>
-            <li><span class="ctx-key">兴趣偏好</span><span>{{ effectiveUserContext.preference_label }}</span></li>
-            <li><span class="ctx-key">历史轨迹</span><span>{{ effectiveUserContext.history_label }}</span></li>
+            <li class="ctx-list-wide">
+              <span class="ctx-key">兴趣偏好</span>
+              <span class="ctx-chip-list">
+                <span v-for="chip in preferenceChips" :key="chip" class="ctx-chip">{{ chip }}</span>
+              </span>
+            </li>
+            <li><span class="ctx-key">范围状态</span><span>{{ scopeStatusText }}</span></li>
           </ul>
           <div class="ctx-hint">
             <span class="ctx-bullet" />
@@ -644,6 +653,7 @@
         :elapsed-ms="elapsedMs"
         :total-duration-ms="totalDurationMs"
         :timeline-dots-by-region="timelineDotsByRegion"
+        @restart="restartNarration"
         @previous="goPrev"
         @next="goNext"
         @rewind="rewind"
@@ -660,16 +670,18 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { fetchNarrativeEnrichmentJob, fetchNarrativeResponse, synthesizeNarrativeSpeech, type FetchNarrativeOptions } from './narrative/narrativeApi'
+import { fetchNarrativeEnrichmentJob, fetchNarrativeResponse, subscribeNarrativeEnrichmentJob, synthesizeNarrativeSpeech, type FetchNarrativeOptions, type NarrativeEnrichmentSubscription } from './narrative/narrativeApi'
 import { adaptNarrativeResponse } from './narrative/narrativeResponseAdapter'
 import NarrativeMapPlaceholder from './narrative/NarrativeMapPlaceholder.vue'
 import type {
   NarrativeMode as ChatMode,
   NarrativeResponse,
   NarrativeChapter,
+  NarrativeEnrichmentJob,
   NarrativePoi,
   NarrativeRegion,
   NarrativeEnrichmentMode,
+  NarrativeExplorationControls,
   NarrativeUiSettings,
   NarrationTone,
   PathNarrationRole,
@@ -681,11 +693,11 @@ import type {
 type ChapterSourceView = NonNullable<NarrativeChapter['web_sources']>[number]
 type PlaybackState = 'idle' | 'prepared' | 'auto_started' | 'manual_started' | 'paused' | 'step_completed' | 'completed'
 type ExploreToolKey = 'scope' | 'layers' | 'scale'
-type ExplorationThemeKey = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
-type GranularityKey = 'auto' | 'district' | 'aoi' | 'poi_cluster'
-type EvidenceStrictnessKey = 'strict' | 'balanced' | 'loose'
-type DiversityKey = 'low' | 'medium' | 'high'
-type LocalnessKey = 'tourist' | 'balanced' | 'local'
+type ExplorationThemeKey = NonNullable<NarrativeExplorationControls['theme']>
+type GranularityKey = NonNullable<NarrativeExplorationControls['granularity']>
+type EvidenceStrictnessKey = NonNullable<NarrativeExplorationControls['evidence_strictness']>
+type DiversityKey = NonNullable<NarrativeExplorationControls['diversity']>
+type LocalnessKey = NonNullable<NarrativeExplorationControls['localness']>
 type WebFactModeKey = 'off' | 'light' | 'full'
 type ScopeMode = 'current_viewport' | 'drawing_aoi' | 'locked_viewport' | 'uploaded_geojson'
 type CompareToolKey = 'rectangle' | 'freeform' | 'circle'
@@ -858,9 +870,9 @@ const centroidStrategyOptions = [
 ]
 
 const exploreToolTabs: Array<{ key: ExploreToolKey; index: string; label: string; hint: string }> = [
-  { key: 'scope', index: '01', label: '范围', hint: '视野与片区' },
-  { key: 'layers', index: '02', label: '分层', hint: '证据与剔除' },
-  { key: 'scale', index: '03', label: '尺度', hint: '粒度与重心' }
+  { key: 'scope', index: '1', label: '范围', hint: '视野与片区' },
+  { key: 'layers', index: '2', label: '分层', hint: '证据与剔除' },
+  { key: 'scale', index: '3', label: '尺度', hint: '粒度与重心' }
 ]
 
 const explorationThemeOptions: Array<ExploreOption<ExplorationThemeKey>> = [
@@ -938,13 +950,110 @@ const hoveredSourceIndex = ref<number | null>(null)
 const playbackState = ref<PlaybackState>('idle')
 const activeExploreTool = ref<ExploreToolKey>('scope')
 let enrichmentPollToken = 0
+let narrativeRequestController: AbortController | null = null
+let enrichmentPollController: AbortController | null = null
+let enrichmentSubscription: NarrativeEnrichmentSubscription | null = null
+
+function simplifyNarrativeErrorMessage(value: unknown): string {
+  return String(value || '')
+    .replace(/^narrative request failed \(\d+\):\s*/i, '')
+    .replace(/^narrative enrichment request failed \(\d+\):\s*/i, '')
+    .replace(/^narrative tts request failed \(\d+\):\s*/i, '')
+    .replace(/^narrative_tts_failed:\s*/i, '')
+    .replace(/^web_fact_searcher_unavailable:\s*/i, '')
+    .replace(/^llm_narration_unavailable:\s*/i, 'LLM 解说暂不可用：')
+    .replace(/^missing_llm_provider\s*/i, 'LLM 解说服务未配置')
+    .trim()
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+    || error instanceof Error && error.name === 'AbortError'
+}
+
+function waitForNarrativePollDelay(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = 0
+    let onAbort = () => {}
+    const finish = (completed: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve(completed)
+    }
+    timer = window.setTimeout(() => finish(true), ms)
+    onAbort = () => finish(false)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function resolveTtsPlaybackErrorMessage(error: unknown): string {
+  const raw = simplifyNarrativeErrorMessage(error instanceof Error ? error.message : error)
+  if (/play\(\)|NotAllowedError|user didn't interact|not allowed/i.test(raw)) {
+    return '浏览器拦截了自动播放，请点击“开始”后保持页面激活。'
+  }
+  if (/ECONNREFUSED|fetch failed|Failed to fetch|network|connect/i.test(raw)) {
+    return '语音服务未连接或尚未启动完成，已切换为字幕节奏。'
+  }
+  if (/\b503\b|not ready|starting up|warming|model_loaded":false|ready":false/i.test(raw)) {
+    return '语音服务仍在预热，稍等几秒可恢复语音播放。'
+  }
+  if (!raw) return '语音服务暂不可用，已切换为字幕节奏。'
+  return `语音服务异常：${raw}`
+}
+
+function resolveEnrichmentFailureState(value: unknown): { label: string; hint: string; sourceMessage: string } | null {
+  const raw = simplifyNarrativeErrorMessage(value)
+  if (!raw) return null
+  const lower = raw.toLowerCase()
+  const hasWebFact = /web_fact|deepseek_search|newapi_search|searcher_unavailable|search endpoint|网页来源|网页资料|搜索/.test(lower)
+  const hasLlm = /llm|missing_llm_provider|invalid_llm_output|partial_invalid_llm_output|llm 解说|解说生成/.test(lower)
+  const hasPolling = /enrichment request failed|轮询|poll|回填/.test(lower)
+  const hasTimeout = /timeout|超时/.test(lower)
+
+  if (hasWebFact && !hasLlm && !hasPolling) {
+    return {
+      label: '网页资料异常',
+      hint: `网页资料服务异常：${raw}`,
+      sourceMessage: `网页来源补强失败：${raw}`,
+    }
+  }
+  if (hasLlm && !hasWebFact && !hasPolling) {
+    return {
+      label: '解说生成失败',
+      hint: `首段解说生成失败：${raw}`,
+      sourceMessage: `解说生成失败：${raw}`,
+    }
+  }
+  if (hasPolling || hasTimeout) {
+    return {
+      label: hasTimeout ? '资料回填超时' : '资料回填失败',
+      hint: `资料回填异常：${raw}`,
+      sourceMessage: `资料回填异常：${raw}`,
+    }
+  }
+  return {
+    label: '补强链路异常',
+    hint: `资料补强异常：${raw}`,
+    sourceMessage: `资料补强异常：${raw}`,
+  }
+}
+
 const canNarrate = computed(() => analysisStatus.value === 'ready' && displayPathNodes.value.length > 0)
+const enrichedChapterCount = computed(() => narrative.value.enrichment?.completed_region_count ?? 0)
+const hasPlayableNarration = computed(() => displayChapters.value.some((chapter) => String(chapter.text || '').trim().length > 0))
+const waitingForFirstNarration = computed(() => Boolean(narrative.value.enrichment?.job_id) && (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') && !hasPlayableNarration.value)
 const showDeveloperPanel = computed(() => import.meta.env.DEV && Boolean(narrative.value.debug))
+const enrichmentFailureState = computed(() => resolveEnrichmentFailureState(enrichmentError.value || narrative.value.enrichment?.error || ''))
 const narrativeSourceLabel = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在分析'
+  if (ttsPlaybackError.value) return '语音服务异常'
   if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充资料'
   if (enrichmentStatus.value === 'completed') return '已增强'
-  if (enrichmentStatus.value === 'failed') return '资料补强失败'
+  if (enrichmentStatus.value === 'failed') return enrichmentFailureState.value?.label || '资料补强失败'
   if (analysisStatus.value === 'ready') return '后端实时'
   if (analysisStatus.value === 'error') return '分析失败'
   return '等待分析'
@@ -971,10 +1080,9 @@ const activeChapterSources = computed<ChapterSourceView[]>(() => {
 })
 const sourceEmptyMessage = computed(() => {
   const summary = narrative.value.enrichment
-  const error = enrichmentError.value || summary?.error || ''
   if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充网页来源，完成后会自动回填当前章节。'
   if (enrichmentStatus.value === 'failed' || summary?.status === 'failed') {
-    return error ? `网页来源补强失败：${error}` : '网页来源补强失败，请检查搜索接口配置或稍后重试。'
+    return enrichmentFailureState.value?.sourceMessage || '网页来源补强失败，请检查搜索接口配置或稍后重试。'
   }
   if (summary?.phase === 'enriched' && summary.source_count === 0) return '已完成资料补强，但当前视野没有返回可核验网页来源。'
   if ((summary?.source_count ?? 0) > 0) return '当前章节暂无网页来源，其他章节可能已有来源。'
@@ -982,7 +1090,8 @@ const sourceEmptyMessage = computed(() => {
 })
 const previewedChapterSourceIndex = computed(() => {
   if (!activeChapterSources.value.length) return -1
-  return hoveredSourceIndex.value === null ? 0 : Math.min(hoveredSourceIndex.value, activeChapterSources.value.length - 1)
+  if (hoveredSourceIndex.value === null) return -1
+  return Math.min(hoveredSourceIndex.value, activeChapterSources.value.length - 1)
 })
 const previewedChapterSource = computed(() => {
   if (previewedChapterSourceIndex.value < 0) return null
@@ -991,7 +1100,9 @@ const previewedChapterSource = computed(() => {
 const playbackHint = computed(() => {
   if (analysisStatus.value === 'analyzing') return '正在生成解说路径，完成后会按你的自动解说设置处理。'
   if (!canNarrate.value) return '分析当前视野后，可以播放逐段解说。'
+  if (waitingForFirstNarration.value) return '正在搜索资料并写第一段解说，写好就开始播放。'
   if (ttsPlaybackError.value) return ttsPlaybackError.value
+  if (enrichmentStatus.value === 'failed' && enrichmentFailureState.value) return enrichmentFailureState.value.hint
   if (playbackState.value === 'prepared' && autoStartRemainingMs.value > 0) return `已在当前视野识别出 ${displayRegions.value.length} 个片区，${Math.ceil(autoStartRemainingMs.value / 1000)} 秒后自动开始。`
   if (playbackState.value === 'step_completed') return activeStepIndex.value < displayChapters.value.length - 1 ? '本段已讲完，点击“下一个”继续下一片区。' : '最后一段已讲完，可重新分析当前视野。'
   if (playing.value) return '正在播放当前片区，播完会停在本段。'
@@ -1003,6 +1114,7 @@ const playbackHint = computed(() => {
 const narratePrimaryLabel = computed(() => {
   if (!mapStageReady.value) return '地图加载中…'
   if (analysisStatus.value === 'analyzing') return '正在准备…'
+  if (waitingForFirstNarration.value) return '\u6b63\u5728\u5199\u7b2c\u4e00\u6bb5\u2026'
   if (playing.value) return '播放中…'
   if (playbackState.value === 'step_completed' && activeStepIndex.value < displayChapters.value.length - 1) return '下一个'
   if (canNarrate.value && !playing.value && playbackState.value !== 'completed') return '开始'
@@ -1010,6 +1122,7 @@ const narratePrimaryLabel = computed(() => {
 })
 const narratePrimaryDisabled = computed(() => {
   if (!mapStageReady.value || analysisStatus.value === 'analyzing') return true
+  if (waitingForFirstNarration.value) return true
   if (playing.value) return true
   if (playbackState.value === 'step_completed') return activeStepIndex.value >= displayChapters.value.length - 1
   return false
@@ -1159,40 +1272,8 @@ function themePreferenceText(theme: ExplorationThemeKey): string {
   return map[theme]
 }
 
-function granularityPreferenceText(granularity: GranularityKey): string {
-  if (granularity === 'district') return '片区粒度偏近景商圈、街区边界和可解释 AOI'
-  if (granularity === 'aoi') return '片区粒度偏真实 AOI 和可解释地界'
-  if (granularity === 'poi_cluster') return '片区粒度偏更近景的 POI 点簇切片，避免退成过宽城市横截面'
-  return '片区粒度由当前缩放尺度自动判断'
-}
-
-function strictnessPreferenceText(strictness: EvidenceStrictnessKey): string {
-  if (strictness === 'strict') return '证据门槛严格，只保留高相关核心与强支撑'
-  if (strictness === 'loose') return '证据门槛宽松，允许更多边缘线索进入观察'
-  return '证据门槛均衡，兼顾核心主体与周边支撑'
-}
-
-function diversityPreferenceText(diversity: DiversityKey): string {
-  if (diversity === 'low') return '路线更聚焦，减少主题跳转'
-  if (diversity === 'high') return '路线更漫游，强化功能与故事多样性'
-  return '路线保持均衡多样性'
-}
-
-function localnessPreferenceText(localness: LocalnessKey): string {
-  if (localness === 'tourist') return '表达更游客友好，突出易理解地标和游览价值'
-  if (localness === 'local') return '表达更偏本地生活，突出街巷、日常和口头高频片区'
-  return '表达兼顾外来理解与本地生活感'
-}
-
-function durationPreferenceText(): string {
-  return durationPreferenceTextFor(ui.durationPreset)
-}
-
-function durationPreferenceTextFor(preset: NarrativeUiSettings['durationPreset']): string {
-  if (preset === 'casual') return '解说节奏短平快，优先讲最重要的 3 到 4 个片区'
-  if (preset === 'detailed') return '解说节奏更详尽，允许展开更多支撑片区与转场关系'
-  return '解说节奏标准，保持 3 分钟左右的导览密度'
-}
+// 探索参数完全走显式 NarrativeExplorationControls 契约，
+// preference_label 不再拼中文 hint，因此移除全部 *PreferenceText helper。
 
 function granularityZoom(granularity: GranularityKey, fallbackZoom = ui.viewportZoom): number {
   if (granularity === 'district') return 15.5
@@ -1213,22 +1294,42 @@ function poiLimitForExploreSettings(settings: ExploreSettings): number {
   return Math.max(500, Math.min(50000, Math.round(settings.candidateCount * 1800 * strictnessFactor * granularityFactor)))
 }
 
-function effectiveUserContextFor(settings: ExploreSettings, durationPreset: NarrativeUiSettings['durationPreset'] = ui.durationPreset): UserContext {
+function currentTimeContextLabel(): string {
+  const hour = new Date().getHours()
+  if (hour < 6) return '凌晨'
+  if (hour < 11) return '上午'
+  if (hour < 14) return '中午'
+  if (hour < 18) return '下午'
+  if (hour < 22) return '夜间'
+  return '深夜'
+}
+
+function effectiveUserContextFor(settings: ExploreSettings, _durationPreset: NarrativeUiSettings['durationPreset'] = ui.durationPreset): UserContext {
+  // 显式 exploration controls 已经承载所有探索参数，preference_label 只给后端语义召回保留 theme + scopeQuery 这两段真正有语义价值的 hint。
+  // history_label 暂未接入真实轨迹，留空避免在 UI/后端被误读为历史。
   return {
-    time_label: narrative.value.user_context.time_label || '当前时段',
-    weather_label: narrative.value.user_context.weather_label || '天气未指定',
+    time_label: currentTimeContextLabel(),
+    weather_label: '未接入实时天气',
     preference_label: [
       themePreferenceText(settings.theme),
-      granularityPreferenceText(settings.granularity),
-      strictnessPreferenceText(settings.evidenceStrictness),
-      diversityPreferenceText(settings.diversity),
-      localnessPreferenceText(settings.localness),
-      durationPreferenceTextFor(durationPreset),
-      scopeQuery.value ? `额外关注“${scopeQuery.value}”` : '',
-      `${centroidStrategyLabel(ui.centroidStrategy)}构图`,
-      `候选数量目标 ${settings.candidateCount}`
+      scopeQuery.value ? `关注「${scopeQuery.value}」` : ''
     ].filter(Boolean).join('｜'),
-    history_label: scopeStatusText.value
+    history_label: ''
+  }
+}
+
+function explorationControlsFor(settings: ExploreSettings, durationPreset: NarrativeUiSettings['durationPreset'] = ui.durationPreset): NarrativeExplorationControls {
+  return {
+    theme: settings.theme,
+    granularity: settings.granularity,
+    evidence_strictness: settings.evidenceStrictness,
+    relevance_threshold: Number(ui.relevanceThreshold.toFixed(2)),
+    diversity: settings.diversity,
+    localness: settings.localness,
+    duration_preset: durationPreset,
+    candidate_count: settings.candidateCount,
+    scope_query: scopeQuery.value.trim() || undefined,
+    centroid_strategy: ui.centroidStrategy
   }
 }
 
@@ -1255,13 +1356,11 @@ function setGranularity(granularity: GranularityKey) {
 
 function setEvidenceStrictness(strictness: EvidenceStrictnessKey) {
   exploreSettings.evidenceStrictness = strictness
-  ui.relevanceThreshold = strictness === 'strict' ? 0.55 : strictness === 'loose' ? 0.12 : 0.25
   markExploreSettingsDirty(`证据严格度已切换为「${optionLabel(evidenceStrictnessOptions, strictness)}」`)
 }
 
 function setDiversity(diversity: DiversityKey) {
   exploreSettings.diversity = diversity
-  exploreSettings.candidateCount = diversity === 'low' ? Math.min(exploreSettings.candidateCount, 5) : diversity === 'high' ? Math.max(exploreSettings.candidateCount, 9) : Math.max(5, Math.min(exploreSettings.candidateCount, 8))
   markExploreSettingsDirty(`多样性强度已切换为「${optionLabel(diversityOptions, diversity)}」`)
 }
 
@@ -1277,7 +1376,6 @@ function setWebFactMode(mode: WebFactModeKey) {
 
 function setDurationPreset(preset: NarrativeUiSettings['durationPreset']) {
   ui.durationPreset = preset
-  exploreSettings.candidateCount = preset === 'casual' ? 4 : preset === 'detailed' ? 9 : 6
   markExploreSettingsDirty(`解说时长已切换为「${durationPresetOptions.find((item) => item.key === preset)?.label ?? preset}」`)
 }
 
@@ -1414,11 +1512,26 @@ const explorationEnrichmentMode = computed<NarrativeEnrichmentMode>(() => enrich
 const explorationPoiLimit = computed(() => poiLimitForExploreSettings(exploreSettings))
 
 const effectiveUserContext = computed<UserContext>(() => effectiveUserContextFor(exploreSettings))
+const effectiveExplorationControls = computed<NarrativeExplorationControls>(() => explorationControlsFor(exploreSettings))
+const preferenceChips = computed(() => [
+  optionLabel(explorationThemeOptions, exploreSettings.theme),
+  optionLabel(granularityOptions, exploreSettings.granularity),
+  optionLabel(evidenceStrictnessOptions, exploreSettings.evidenceStrictness),
+  optionLabel(diversityOptions, exploreSettings.diversity),
+  optionLabel(localnessOptions, exploreSettings.localness),
+  durationPresetOptions.find((item) => item.key === ui.durationPreset)?.label ?? ui.durationPreset,
+  `候选 ${exploreSettings.candidateCount}`,
+  scopeQuery.value ? `关注 ${scopeQuery.value}` : '',
+  centroidStrategyLabel(ui.centroidStrategy),
+].filter(Boolean))
 
 const exploreNarrationTitle = computed(() => {
   const themeLabel = optionLabel(explorationThemeOptions, exploreSettings.theme)
-  const scopeLabel = scopeQuery.value || activeRegion.value.display_name
-  return `${scopeLabel} · ${themeLabel}`
+  const regionLabel = activeRegion.value.display_name
+  const scopeKeyword = scopeQuery.value.trim()
+  // 关注词只是一个语义提示，并不保证后端会精确锁定到该 POI；这里同时展示当前正在播的真实片区，避免标题误导用户。
+  if (scopeKeyword && regionLabel) return `关注「${scopeKeyword}」 · 当前 ${regionLabel} · ${themeLabel}`
+  return `${regionLabel || scopeKeyword || '当前视野'} · ${themeLabel}`
 })
 
 const exploreRequestSummary = computed(() => [
@@ -1704,6 +1817,7 @@ async function captureCompareViewport(viewport: ViewportBBox | null, method: Com
       limit: explorationPoiLimit.value,
       debug: false,
       enrichment_mode: compareEnrichmentMode(),
+      exploration: effectiveExplorationControls.value,
       user_context: compareUserContext(method)
     })
     replaceCompareSample(id, {
@@ -1766,8 +1880,12 @@ watch(() => displayPathNodes.value.length, (length) => {
   if (activeStepIndex.value >= length) activeStepIndex.value = length - 1
 })
 
-watch(() => [ui.ttsVoice, ui.ttsSpeed] as const, () => {
-  restartCurrentSpeechWithTtsSettings()
+watch(() => [ui.ttsVoice, ui.ttsSpeed] as const, (next, prev) => {
+  if (!prev) return
+  handleActiveSpeechSettingsChange(
+    { voice: String(next[0] || 'fable'), speed: Number(next[1] || 1) },
+    { voice: String(prev[0] || 'fable'), speed: Number(prev[1] || 1) }
+  )
 })
 
 // ============================================================================
@@ -1854,6 +1972,7 @@ function goldenViewportPayload() {
     tone: ui.tonePreset,
     debug: true,
     enrichment_mode: 'async',
+    exploration: effectiveExplorationControls.value,
     user_context: narrative.value.user_context
   }
 }
@@ -1905,6 +2024,7 @@ function buildExploreAgentRequest(baseViewport: ViewportBBox, scenario: ExploreA
       limit: poiLimitForExploreSettings(settings),
       debug: true,
       enrichment_mode: enrichmentModeForWebFacts(settings.webFacts),
+      exploration: explorationControlsFor(settings, scenario.durationPreset ?? ui.durationPreset),
       user_context: effectiveUserContextFor(settings, scenario.durationPreset ?? ui.durationPreset)
     }
   }
@@ -2142,12 +2262,110 @@ let progressTimer: ReturnType<typeof setInterval> | null = null
 let autoStartTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartTicker: ReturnType<typeof setInterval> | null = null
 let speechAudio: HTMLAudioElement | null = null
+let speechAbortCurrent: (() => void) | null = null
 let speechObjectUrl = ''
 let speechToken = 0
+let speechSettingsRevision = 0
+let speechActiveSegmentSettings: SpeechSettings | null = null
+let speechSynthesisController: AbortController | null = null
 
 const AUTO_START_DELAY_MS = 3000
+const DEFAULT_TTS_SYNTHESIS_SPEED = 1
+const MAX_TTS_SEGMENT_LENGTH = 220
 const MAX_NARRATION_SENTENCE_LENGTH = 96
 const MIN_NARRATION_SENTENCE_LENGTH = 14
+
+interface SpeechSegment {
+  startIndex: number
+  endIndex: number
+  text: string
+}
+
+interface SpeechSettings {
+  voice: string
+  speed: number
+}
+
+interface SpeechSegmentRequest {
+  segment: SpeechSegment
+  settings: SpeechSettings
+  revision: number
+  controller: AbortController
+  promise: Promise<{ blob?: Blob; error?: unknown }>
+}
+
+function currentSpeechSettings(): SpeechSettings {
+  return {
+    voice: String(ui.ttsVoice || 'fable'),
+    speed: Number(ui.ttsSpeed || 1)
+  }
+}
+
+function sameSpeechSettings(a?: SpeechSettings | null, b?: SpeechSettings | null): boolean {
+  if (!a || !b) return false
+  return a.voice === b.voice && Math.abs(a.speed - b.speed) < 0.001
+}
+
+function normalizeNarrationTextForTts(text: string): string {
+  const normalized = String(text || '')
+    .replace(/\s+/gu, ' ')
+    .replace(/（视野内片区）/gu, '')
+    .replace(/[：:；;]/gu, '，')
+    .replace(/[—–－]+/gu, '，')
+    .replace(/(?:\.{3,}|…{2,})/gu, '，')
+    .replace(/[\\/|]+/gu, '，')
+    .replace(/\s*([，、。！？])/gu, '$1')
+    .replace(/([（《“‘])\s+/gu, '$1')
+    .replace(/\s+([）》”’])/gu, '$1')
+    .replace(/([，、]){2,}/gu, '，')
+    .replace(/([。！？]){2,}/gu, '$1')
+    .trim()
+  return normalized || String(text || '').trim()
+}
+
+function setAudioPitchPreservation(audio: HTMLAudioElement) {
+  const media = audio as HTMLAudioElement & {
+    preservesPitch?: boolean
+    mozPreservesPitch?: boolean
+    webkitPreservesPitch?: boolean
+  }
+  media.preservesPitch = true
+  media.mozPreservesPitch = true
+  media.webkitPreservesPitch = true
+}
+
+function setSpeechAudioPlaybackRate(audio: HTMLAudioElement, baseSettings: SpeechSettings, targetSpeed: number) {
+  const baseSpeed = Math.max(0.55, Number(baseSettings.speed || 1))
+  const desiredSpeed = Math.max(0.55, Math.min(1.6, Number.isFinite(targetSpeed) ? targetSpeed : baseSpeed))
+  const playbackRate = Math.max(0.65, Math.min(1.6, desiredSpeed / baseSpeed))
+  audio.defaultPlaybackRate = playbackRate
+  audio.playbackRate = playbackRate
+}
+
+function applyLiveSpeechSpeed(targetSpeed: number) {
+  if (!speechAudio || !speechActiveSegmentSettings) return
+  setSpeechAudioPlaybackRate(speechAudio, speechActiveSegmentSettings, targetSpeed)
+}
+
+function resolveSpeechSynthesisSettings(settings: SpeechSettings): SpeechSettings {
+  return {
+    voice: settings.voice,
+    speed: DEFAULT_TTS_SYNTHESIS_SPEED
+  }
+}
+
+function createSpeechSegmentRequest(segment: SpeechSegment): SpeechSegmentRequest {
+  const settings = resolveSpeechSynthesisSettings(currentSpeechSettings())
+  const controller = new AbortController()
+  speechSynthesisController = controller
+  return {
+    segment,
+    settings,
+    revision: speechSettingsRevision,
+    controller,
+    promise: requestSpeechSegmentBlob(segment, settings, controller.signal)
+  }
+}
 
 function splitLongNarrationSentence(sentence: string): string[] {
   const result: string[] = []
@@ -2213,6 +2431,24 @@ function narrationSentenceIndexAt(lines: string[], elapsedMs: number, totalMs: n
     if (targetWeight <= acc) return i
   }
   return lines.length - 1
+}
+
+function buildNarrationSpeechSegments(lines: string[], startIndex: number): SpeechSegment[] {
+  const segments: SpeechSegment[] = []
+  let segmentStart = Math.max(0, Math.min(startIndex, lines.length - 1))
+  let segmentText = ''
+  for (let i = segmentStart; i < lines.length; i += 1) {
+    const nextText = `${segmentText}${lines[i]}`.replace(/\s+/g, ' ').trim()
+    if (segmentText && nextText.length > MAX_TTS_SEGMENT_LENGTH) {
+      segments.push({ startIndex: segmentStart, endIndex: i - 1, text: segmentText })
+      segmentStart = i
+      segmentText = lines[i].replace(/\s+/g, ' ').trim()
+      continue
+    }
+    segmentText = nextText
+  }
+  if (segmentText) segments.push({ startIndex: segmentStart, endIndex: lines.length - 1, text: segmentText })
+  return segments
 }
 
 function updateNarrationSubtitle(lines: string[], index: number) {
@@ -2284,11 +2520,102 @@ function playTimedSubtitleFallback(lines: string[], index: number, token: number
   typingTimer = setTimeout(finishLine, linePlaybackDurationMs(line))
 }
 
+function requestSpeechSegmentBlob(segment: SpeechSegment, settings: SpeechSettings, signal?: AbortSignal) {
+  const ttsText = normalizeNarrationTextForTts(segment.text)
+  return synthesizeNarrativeSpeech({
+    text: ttsText || segment.text,
+    voice: settings.voice,
+    speed: settings.speed
+  }, { signal }).then(
+    (blob) => ({ blob }),
+    (error) => ({ error })
+  )
+}
+
+function playSpeechSegmentAudio(audioBlob: Blob, lines: string[], segment: SpeechSegment, settings: SpeechSettings, token: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (token !== speechToken) {
+      resolve()
+      return
+    }
+    if (speechObjectUrl) URL.revokeObjectURL(speechObjectUrl)
+    const localUrl = URL.createObjectURL(audioBlob)
+    speechObjectUrl = localUrl
+    const audio = new Audio(localUrl)
+    speechAudio = audio
+    speechActiveSegmentSettings = settings
+    setAudioPitchPreservation(audio)
+    setSpeechAudioPlaybackRate(audio, settings, Number(ui.ttsSpeed || settings.speed))
+    const segmentLines = lines.slice(segment.startIndex, segment.endIndex + 1)
+    const fallbackDurationMs = Math.max(segmentLines.reduce((acc, line) => acc + linePlaybackDurationMs(line), 0), 900)
+    let settled = false
+    let syncRaf = 0
+    let abortCurrent = () => {}
+    const cleanup = () => {
+      if (syncRaf) {
+        window.cancelAnimationFrame(syncRaf)
+        syncRaf = 0
+      }
+      audio.onloadedmetadata = null
+      audio.ontimeupdate = null
+      audio.onplay = null
+      audio.onended = null
+      audio.onerror = null
+      if (speechAudio === audio) speechAudio = null
+      if (speechActiveSegmentSettings === settings) speechActiveSegmentSettings = null
+      if (speechObjectUrl === localUrl) {
+        URL.revokeObjectURL(localUrl)
+        speechObjectUrl = ''
+      }
+      if (speechAbortCurrent === abortCurrent) speechAbortCurrent = null
+    }
+    const finish = (ok: boolean, error?: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (ok) {
+        resolve()
+      } else {
+        reject(error instanceof Error ? error : new Error('audio_playback_error'))
+      }
+    }
+    abortCurrent = () => {
+      audio.pause()
+      audio.src = ''
+      finish(true)
+    }
+    speechAbortCurrent = abortCurrent
+    const syncSubtitle = () => {
+      if (token !== speechToken) return
+      const durationMs = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1000 : fallbackDurationMs
+      const localIndex = narrationSentenceIndexAt(segmentLines, audio.currentTime * 1000, durationMs)
+      updateNarrationSubtitle(lines, segment.startIndex + localIndex)
+    }
+    const requestSyncSubtitle = () => {
+      if (syncRaf) return
+      syncRaf = window.requestAnimationFrame(() => {
+        syncRaf = 0
+        syncSubtitle()
+      })
+    }
+    audio.onloadedmetadata = requestSyncSubtitle
+    audio.ontimeupdate = requestSyncSubtitle
+    audio.onplay = requestSyncSubtitle
+    audio.onended = () => {
+      if (token === speechToken) updateNarrationSubtitle(lines, segment.endIndex)
+      finish(true)
+    }
+    audio.onerror = () => finish(false, new Error('audio_playback_error'))
+    updateNarrationSubtitle(lines, segment.startIndex)
+    void audio.play().catch((error) => finish(false, error))
+  })
+}
+
 async function playNarrationChapter(chapter: NarrativeChapter, lines: string[], token: number, onComplete?: () => void, startLineIndex = 0) {
   if (token !== speechToken) return
   const safeStartIndex = Math.max(0, Math.min(startLineIndex, lines.length - 1))
-  const remainingLines = lines.slice(safeStartIndex)
-  if (!remainingLines.length) {
+  const segments = buildNarrationSpeechSegments(lines, safeStartIndex)
+  if (!segments.length) {
     typing.value = false
     onComplete?.()
     return
@@ -2298,68 +2625,62 @@ async function playNarrationChapter(chapter: NarrativeChapter, lines: string[], 
     updateNarrationSubtitle(lines, lines.length - 1)
     typing.value = false
     speechAudio = null
+    speechSynthesisController = null
     onComplete?.()
   }
   try {
-    const audioBlob = await synthesizeNarrativeSpeech({
-      text: remainingLines.join('').replace(/\s+/g, ' ').trim(),
-      voice: ui.ttsVoice,
-      speed: ui.ttsSpeed
-    })
-    if (token !== speechToken) return
-    if (speechObjectUrl) URL.revokeObjectURL(speechObjectUrl)
-    speechObjectUrl = URL.createObjectURL(audioBlob)
-    const audio = new Audio(speechObjectUrl)
-    speechAudio = audio
-    const fallbackDurationMs = Math.max(remainingLines.reduce((acc, line) => acc + linePlaybackDurationMs(line), 0), 1000)
-    const syncSubtitle = () => {
+    let pendingRequest: SpeechSegmentRequest | null = createSpeechSegmentRequest(segments[0])
+    for (let i = 0; i < segments.length; i += 1) {
       if (token !== speechToken) return
-      const durationMs = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1000 : fallbackDurationMs
-      const localIndex = narrationSentenceIndexAt(remainingLines, audio.currentTime * 1000, durationMs)
-      updateNarrationSubtitle(lines, safeStartIndex + localIndex)
-    }
-    audio.onloadedmetadata = syncSubtitle
-    audio.ontimeupdate = syncSubtitle
-    audio.onplay = syncSubtitle
-    audio.onended = finishChapter
-    audio.onerror = () => {
+      if (!pendingRequest) throw new Error('narrative_tts_segment_missing')
+      if (pendingRequest.revision !== speechSettingsRevision) {
+        pendingRequest.controller.abort()
+        pendingRequest = createSpeechSegmentRequest(segments[i])
+      }
+      let currentRequest = pendingRequest
+      let result = await currentRequest.promise
       if (token !== speechToken) return
-      ttsPlaybackError.value = '音频播放中断，已切换为字幕节奏。'
-      playTimedSubtitleFallback(lines, Math.max(activeLineIndex.value, safeStartIndex), token, onComplete)
+      if (currentRequest.revision !== speechSettingsRevision) {
+        currentRequest.controller.abort()
+        currentRequest = createSpeechSegmentRequest(segments[i])
+        result = await currentRequest.promise
+        if (token !== speechToken) return
+      }
+      if (!result?.blob || result.error) throw result.error || new Error('narrative_tts_segment_failed')
+      pendingRequest = i + 1 < segments.length ? createSpeechSegmentRequest(segments[i + 1]) : null
+      await playSpeechSegmentAudio(result.blob, lines, currentRequest.segment, currentRequest.settings, token)
     }
-    updateNarrationSubtitle(lines, safeStartIndex)
-    await audio.play()
+    finishChapter()
   } catch (error) {
-    ttsPlaybackError.value = error instanceof Error && /play\(\)|NotAllowedError|user didn't interact|not allowed/i.test(error.message)
-      ? '浏览器拦截了自动播放，请点击“开始”后保持页面激活。'
-      : '语音服务暂不可用，已切换为字幕节奏。'
+    if (token !== speechToken || isAbortError(error)) return
+    ttsPlaybackError.value = resolveTtsPlaybackErrorMessage(error)
     if (import.meta.env.DEV) {
       console.warn('[Narrative] 本地 TTS 播放失败，降级为字幕节奏', error)
     }
-    if (token !== speechToken) return
     playTimedSubtitleFallback(lines, safeStartIndex, token, onComplete)
   }
 }
 
-function restartCurrentSpeechWithTtsSettings() {
+function handleActiveSpeechSettingsChange(nextSettings: SpeechSettings, prevSettings: SpeechSettings) {
+  if (sameSpeechSettings(nextSettings, prevSettings)) return
   if (!playing.value || !typing.value) return
-  const chapter = displayChapters.value[activeStepIndex.value]
-  if (!chapter) return
-  const lines = splitNarrationText(chapter.text)
-  if (!lines.length) return
-  const stepIndex = activeStepIndex.value
-  const restartIndex = Math.max(0, Math.min(activeLineIndex.value, lines.length - 1))
-  stopTyping()
-  typing.value = true
-  ttsPlaybackError.value = ''
-  activeLineCount.value = lines.length
-  updateNarrationSubtitle(lines, restartIndex)
-  const token = ++speechToken
-  void playNarrationChapter(chapter, lines, token, () => finishStepAfterTyping(stepIndex), restartIndex)
+  const voiceChanged = nextSettings.voice !== prevSettings.voice
+  const speedChanged = Math.abs(nextSettings.speed - prevSettings.speed) >= 0.01
+  if (voiceChanged) speechSettingsRevision += 1
+  if (speedChanged) applyLiveSpeechSpeed(nextSettings.speed)
 }
 
 function stopTyping() {
   speechToken += 1
+  if (speechSynthesisController) {
+    speechSynthesisController.abort()
+    speechSynthesisController = null
+  }
+  if (speechAbortCurrent) {
+    const abortCurrent = speechAbortCurrent
+    speechAbortCurrent = null
+    abortCurrent()
+  }
   if (speechAudio) {
     speechAudio.onended = null
     speechAudio.onerror = null
@@ -2370,6 +2691,7 @@ function stopTyping() {
     speechAudio.src = ''
     speechAudio = null
   }
+  speechActiveSegmentSettings = null
   if (speechObjectUrl) {
     URL.revokeObjectURL(speechObjectUrl)
     speechObjectUrl = ''
@@ -2418,13 +2740,13 @@ function startProgress() {
   stopProgress()
   progressTimer = setInterval(() => {
     if (!playing.value) return
-    elapsedMs.value += 100
+    elapsedMs.value += 250
     const total = totalDurationMs.value
     if (elapsedMs.value >= total) {
       elapsedMs.value = total
       stopAll('completed')
     }
-  }, 100)
+  }, 250)
 }
 
 function stopProgress() {
@@ -2617,6 +2939,10 @@ function applyViewportZoom() {
   mapStageRef.value?.applyViewportZoom(ui.viewportZoom)
 }
 
+function hasNarrationText(chapters: NarrativeChapter[]): boolean {
+  return chapters.some((chapter) => String(chapter.text || '').trim().length > 0)
+}
+
 function focusByCentroidStrategy(strategy: CentroidStrategy = ui.centroidStrategy) {
   mapStageRef.value?.focusByCentroidStrategy(strategy, activeRegion.value, ui.viewportZoom)
 }
@@ -2624,12 +2950,26 @@ function focusByCentroidStrategy(strategy: CentroidStrategy = ui.centroidStrateg
 function setCentroidStrategy(strategy: CentroidStrategy) {
   ui.centroidStrategy = strategy
   focusByCentroidStrategy(strategy)
+  markExploreSettingsDirty(`重心策略已切换为「${centroidStrategyLabel(strategy)}」`)
+}
+
+function abortNarrativeNetworkRequests() {
+  narrativeRequestController?.abort()
+  narrativeRequestController = null
+  enrichmentPollController?.abort()
+  enrichmentPollController = null
+  enrichmentSubscription?.close()
+  enrichmentSubscription = null
 }
 
 async function analyzeCurrentViewport() {
   const viewport = resolveAnalysisViewport(mapStageRef.value?.getCurrentMapViewport() ?? null)
   if (!viewport || analysisStatus.value === 'analyzing') return
+  abortNarrativeNetworkRequests()
   enrichmentPollToken += 1
+  const requestToken = enrichmentPollToken
+  const requestController = new AbortController()
+  narrativeRequestController = requestController
   analysisStatus.value = 'analyzing'
   enrichmentStatus.value = 'idle'
   enrichmentError.value = ''
@@ -2642,8 +2982,10 @@ async function analyzeCurrentViewport() {
       limit: explorationPoiLimit.value,
       debug: import.meta.env.DEV,
       enrichment_mode: explorationEnrichmentMode.value,
+      exploration: effectiveExplorationControls.value,
       user_context: effectiveUserContext.value
-    })
+    }, { signal: requestController.signal })
+    if (requestToken !== enrichmentPollToken) return
     if (import.meta.env.DEV) {
       const webFacts = response.debug?.web_facts as { source_count?: number; items?: Array<{ query?: string; error?: string }> } | undefined
       console.info('[Narrative] 后端实时分析结果', {
@@ -2658,18 +3000,19 @@ async function analyzeCurrentViewport() {
       }
     }
     stopAll()
+    const hasInitialNarration = hasNarrationText(response.narration?.chapters || [])
     narrative.value = response
     analysisStatus.value = 'ready'
     exploreSettingsDirty.value = false
     exploreLastChange.value = '当前探索设置已应用。'
     refreshMapLayersAfterNarrativeChange()
-    const waitForEnrichmentBeforePlayback = false
     prepareNarrationAfterAnalysis()
-    scheduleAutoStartPlayback()
+    if (hasInitialNarration) scheduleAutoStartPlayback()
     if (response.enrichment?.job_id) {
-      pollNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken, { startPlaybackOnComplete: waitForEnrichmentBeforePlayback })
+      subscribeNarrativeEnrichment(response.enrichment.job_id, enrichmentPollToken, { startPlaybackOnFirstPartial: !hasInitialNarration })
     }
   } catch (error) {
+    if (isAbortError(error) || requestToken !== enrichmentPollToken) return
     analysisStatus.value = 'error'
     enrichmentStatus.value = 'idle'
     enrichmentError.value = ''
@@ -2677,60 +3020,142 @@ async function analyzeCurrentViewport() {
     if (import.meta.env.DEV) {
       console.warn('[Narrative] 当前视野分析失败', error)
     }
+  } finally {
+    if (narrativeRequestController === requestController) narrativeRequestController = null
   }
 }
 
-async function pollNarrativeEnrichment(jobId: string, token: number, options: { startPlaybackOnComplete?: boolean } = {}) {
-  enrichmentStatus.value = 'pending'
-  for (let attempt = 0; attempt < 45; attempt += 1) {
-    if (token !== enrichmentPollToken) return
-    await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1200 : 2200))
-    if (token !== enrichmentPollToken) return
-    try {
-      const job = await fetchNarrativeEnrichmentJob(jobId)
-      enrichmentStatus.value = job.status === 'pending' ? 'pending' : job.status === 'running' ? 'running' : job.status === 'completed' ? 'completed' : 'failed'
-      enrichmentError.value = job.summary?.error || job.error || ''
-      if (job.status === 'completed' && job.response) {
-        const shouldAutoStart = Boolean(options.startPlaybackOnComplete && ui.autoNarrate)
-        const wasPlaying = playing.value
-        narrative.value = job.response
-        enrichmentError.value = job.response.enrichment?.error || ''
-        refreshMapLayersAfterNarrativeChange()
-        if (shouldAutoStart) {
-          stopAll()
-          activeStepIndex.value = 0
-          startPlayback('auto_started', 0)
-          return
-        }
-        const nextStepIndex = clampStepIndex(activeStepIndex.value)
-        if (displayChapters.value.length > 0 && playbackState.value === 'prepared' && !wasPlaying) {
-          activeStepIndex.value = nextStepIndex
-          return
-        }
-        if (displayChapters.value.length > 0) applyStep(nextStepIndex, { fly: false, narrate: wasPlaying })
-        return
-      }
-      if (job.status === 'failed') {
-        if (options.startPlaybackOnComplete && ui.autoNarrate) startPlayback('auto_started', activeStepIndex.value)
-        return
-      }
-    } catch (error) {
-      enrichmentStatus.value = 'failed'
-      enrichmentError.value = error instanceof Error ? error.message : '资料补强轮询失败'
-      if (import.meta.env.DEV) {
-        console.warn('[Narrative] 资料补强轮询失败', error)
-      }
-      return
-    }
+function shouldApplyNarrativeEnrichmentJob(job: NarrativeEnrichmentJob): boolean {
+  if (!job.response) return false
+  const previous = narrative.value.enrichment
+  const next = job.response.enrichment || job.summary
+  if (!previous || !next) return true
+  return job.status === 'completed'
+    || next.completed_region_count > previous.completed_region_count
+    || next.source_count > previous.source_count
+    || next.cached_region_count > previous.cached_region_count
+    || next.phase !== previous.phase
+}
+
+function applyNarrativeEnrichmentJob(job: NarrativeEnrichmentJob, options: { startPlaybackOnComplete?: boolean; startPlaybackOnFirstPartial?: boolean }) {
+  if (!job.response) return
+  const previousCompletedCount = narrative.value.enrichment?.completed_region_count ?? 0
+  const completedCount = job.response.enrichment?.completed_region_count ?? job.summary?.completed_region_count ?? 0
+  const updatedChapterIndex = Math.max(0, completedCount - 1)
+  const hadPlayableNarration = hasPlayableNarration.value
+  const wasPlaying = playing.value
+  const activeIndexBeforeUpdate = activeStepIndex.value
+  narrative.value = job.response
+  enrichmentError.value = job.response.enrichment?.error || ''
+  refreshMapLayersAfterNarrativeChange()
+  if (job.status === 'completed' && options.startPlaybackOnComplete && ui.autoNarrate) {
+    stopAll()
+    activeStepIndex.value = 0
+    startPlayback('auto_started', 0)
+    return
   }
-  if (token === enrichmentPollToken) {
-    enrichmentStatus.value = 'failed'
-    enrichmentError.value = '资料补强超时，请检查搜索接口或稍后重试。'
+  const gainedFirstCompletedChapter = previousCompletedCount <= 0 && completedCount > 0
+  const gainedFirstPlayableNarration = !hadPlayableNarration && hasNarrationText(job.response.narration?.chapters || [])
+  if (gainedFirstCompletedChapter || gainedFirstPlayableNarration) {
+    if (!wasPlaying && playbackState.value === 'prepared') {
+      prepareNarrationAfterAnalysis()
+      if (options.startPlaybackOnFirstPartial && ui.autoNarrate && gainedFirstPlayableNarration) startPlayback('auto_started', 0)
+    } else {
+      activeStepIndex.value = clampStepIndex(activeIndexBeforeUpdate)
+    }
+    return
+  }
+  const nextStepIndex = clampStepIndex(activeIndexBeforeUpdate)
+  if (wasPlaying && updatedChapterIndex !== activeIndexBeforeUpdate && displayChapters.value.length > 0) {
+    activeStepIndex.value = nextStepIndex
+  } else if (displayChapters.value.length > 0 && playbackState.value === 'prepared' && !wasPlaying) {
+    activeStepIndex.value = nextStepIndex
+  }
+}
+
+function handleNarrativeEnrichmentJob(job: NarrativeEnrichmentJob, options: { startPlaybackOnComplete?: boolean; startPlaybackOnFirstPartial?: boolean }): boolean {
+  enrichmentStatus.value = job.status === 'pending' ? 'pending' : job.status === 'running' ? 'running' : job.status === 'completed' ? 'completed' : 'failed'
+  enrichmentError.value = job.summary?.error || job.error || ''
+  if (shouldApplyNarrativeEnrichmentJob(job)) {
+    applyNarrativeEnrichmentJob(job, options)
+  }
+  if (job.status === 'completed') return true
+  if (job.status === 'failed') {
+    if (options.startPlaybackOnComplete && ui.autoNarrate) startPlayback('auto_started', activeStepIndex.value)
+    return true
+  }
+  return false
+}
+
+function subscribeNarrativeEnrichment(jobId: string, token: number, options: { startPlaybackOnComplete?: boolean; startPlaybackOnFirstPartial?: boolean } = {}) {
+  enrichmentSubscription?.close()
+  enrichmentPollController?.abort()
+  enrichmentPollController = null
+  enrichmentStatus.value = 'pending'
+  const subscription = subscribeNarrativeEnrichmentJob(jobId, {
+    onJob: (job) => {
+      if (token !== enrichmentPollToken) {
+        subscription.close()
+        return
+      }
+      const completed = handleNarrativeEnrichmentJob(job, options)
+      if (completed) {
+        subscription.close()
+        if (enrichmentSubscription === subscription) enrichmentSubscription = null
+      }
+    },
+    onError: (error) => {
+      if (token !== enrichmentPollToken) return
+      if (enrichmentSubscription === subscription) enrichmentSubscription = null
+      if (import.meta.env.DEV) {
+        console.warn('[Narrative] 资料补强 SSE 失败，回退轮询', error)
+      }
+      void pollNarrativeEnrichment(jobId, token, options)
+    }
+  })
+  enrichmentSubscription = subscription
+}
+
+async function pollNarrativeEnrichment(jobId: string, token: number, options: { startPlaybackOnComplete?: boolean; startPlaybackOnFirstPartial?: boolean } = {}) {
+  enrichmentPollController?.abort()
+  const pollController = new AbortController()
+  enrichmentPollController = pollController
+  enrichmentStatus.value = 'pending'
+  try {
+    for (let attempt = 0; attempt < 45; attempt += 1) {
+      if (token !== enrichmentPollToken) return
+      if (attempt > 0) {
+        const completedDelay = await waitForNarrativePollDelay(attempt < 6 ? 650 : 1600, pollController.signal)
+        if (!completedDelay) return
+      }
+      if (token !== enrichmentPollToken) return
+      try {
+        const job = await fetchNarrativeEnrichmentJob(jobId, { signal: pollController.signal })
+        if (handleNarrativeEnrichmentJob(job, options)) return
+      } catch (error) {
+        if (isAbortError(error) || token !== enrichmentPollToken) return
+        enrichmentStatus.value = 'failed'
+        enrichmentError.value = error instanceof Error ? error.message : '资料补强轮询失败'
+        if (import.meta.env.DEV) {
+          console.warn('[Narrative] 资料补强轮询失败', error)
+        }
+        return
+      }
+    }
+    if (token === enrichmentPollToken) {
+      enrichmentStatus.value = 'failed'
+      enrichmentError.value = '资料补强超时，请检查搜索接口或稍后重试。'
+    }
+  } finally {
+    if (enrichmentPollController === pollController) {
+      enrichmentPollController = null
+    }
   }
 }
 
 onBeforeUnmount(() => {
   enrichmentPollToken += 1
+  abortNarrativeNetworkRequests()
   stopAll()
 })
 
@@ -2830,24 +3255,28 @@ const ICONS = {
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark {
-  width: 22px; height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #3b82f6, #06b6d4);
-  position: relative;
+  width: 28px; height: 28px;
+  display: grid;
+  place-items: center;
+  color: #7dd3fc;
+  flex-shrink: 0;
 }
-.brand-mark::before {
-  content: '';
-  position: absolute; inset: 4px;
-  border: 1.5px solid rgba(255,255,255,0.85);
-  border-radius: 3px;
+.brand-mark-svg { width: 28px; height: 28px; }
+.brand-name {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  color: var(--txt);
+  opacity: 0.94;
 }
-.brand-name { font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
 .brand-tag {
-  font-size: 10px; padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(59,130,246,0.18);
-  color: #7ab0ff;
-  border: 1px solid rgba(59,130,246,0.3);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(125, 211, 252, 0.10);
+  color: rgba(125, 211, 252, 0.7);
+  letter-spacing: 1.2px;
+  font-weight: 600;
 }
 .mode-switch {
   display: flex; gap: 8px; justify-self: center;
@@ -4298,6 +4727,23 @@ const ICONS = {
 }
 .ctx-list li:last-child { border-bottom: 0; }
 .ctx-key { color: var(--txt-mute); }
+.ctx-list-wide {
+  align-items: start;
+}
+.ctx-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ctx-chip {
+  padding: 2px 6px;
+  border: 1px solid rgba(96,165,250,0.22);
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(59,130,246,0.10);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .ctx-list li::before {
   content: '·'; color: var(--primary); font-weight: 700;
   position: absolute; margin-left: -10px;

@@ -39,8 +39,44 @@ echo.
 
 set OMNIVOICE_RUN_DIR=%TEMP%\geoloom-omnivoice
 if not exist "%OMNIVOICE_RUN_DIR%" mkdir "%OMNIVOICE_RUN_DIR%"
-pushd "%OMNIVOICE_RUN_DIR%"
-omnivoice-server --host %HOST% --port %PORT% --device %DEVICE% --model %MODEL_ID%
-popd
+set OMNIVOICE_LOG_DIR=%OMNIVOICE_RUN_DIR%\logs
+if not exist "%OMNIVOICE_LOG_DIR%" mkdir "%OMNIVOICE_LOG_DIR%"
+set OMNIVOICE_PID_FILE=%OMNIVOICE_RUN_DIR%\omnivoice-%PORT%.pid
+set OMNIVOICE_STDOUT_LOG=%OMNIVOICE_LOG_DIR%\omnivoice-%PORT%.out.log
+set OMNIVOICE_STDERR_LOG=%OMNIVOICE_LOG_DIR%\omnivoice-%PORT%.err.log
+
+curl.exe -fsS "http://%HOST%:%PORT%/health" >nul 2>&1
+if not errorlevel 1 (
+    echo [OmniVoice] TTS server already running.
+    echo [OmniVoice] Health: http://%HOST%:%PORT%/health
+    endlocal
+    exit /b 0
+)
+
+set OMNIVOICE_EXE=
+for /f "delims=" %%I in ('where omnivoice-server 2^>nul') do (
+    set OMNIVOICE_EXE=%%I
+    goto :omnivoice_exe_found
+)
+
+:omnivoice_exe_found
+if "%OMNIVOICE_EXE%"=="" (
+    echo [OmniVoice] ERROR: omnivoice-server was not found in PATH.
+    echo [OmniVoice] Install it first: pip install omnivoice-server
+    endlocal
+    exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$argsList=@('--host',$env:HOST,'--port',$env:PORT,'--device',$env:DEVICE,'--model',$env:MODEL_ID); $p=Start-Process -FilePath $env:OMNIVOICE_EXE -ArgumentList $argsList -WorkingDirectory $env:OMNIVOICE_RUN_DIR -WindowStyle Hidden -RedirectStandardOutput $env:OMNIVOICE_STDOUT_LOG -RedirectStandardError $env:OMNIVOICE_STDERR_LOG -PassThru; Set-Content -LiteralPath $env:OMNIVOICE_PID_FILE -Value $p.Id; Write-Host ('[OmniVoice] Background process started. PID=' + $p.Id)"
+if errorlevel 1 (
+    echo [OmniVoice] ERROR: failed to start background process.
+    endlocal
+    exit /b 1
+)
+
+echo [OmniVoice] PID file: %OMNIVOICE_PID_FILE%
+echo [OmniVoice] stdout log: %OMNIVOICE_STDOUT_LOG%
+echo [OmniVoice] stderr log: %OMNIVOICE_STDERR_LOG%
+echo [OmniVoice] You can close this window now; the TTS server keeps running in background.
 
 endlocal

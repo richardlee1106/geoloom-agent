@@ -11,6 +11,13 @@ export type VisualTier = 'core' | 'strong' | 'medium' | 'weak' | 'excluded'
 export type LODLevel = 'micro' | 'meso' | 'macro'
 export type SceneProfile = 'education_culture' | 'heritage_tourism' | 'commercial_leisure' | 'natural_ecology' | 'mixed_urban'
 export type NarrationTone = 'science' | 'tour' | 'humanity'
+export type NarrativeExplorationTheme = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
+export type NarrativeGranularity = 'auto' | 'district' | 'aoi' | 'poi_cluster'
+export type NarrativeEvidenceStrictness = 'strict' | 'balanced' | 'loose'
+export type NarrativeDiversity = 'low' | 'medium' | 'high'
+export type NarrativeLocalness = 'tourist' | 'balanced' | 'local'
+export type NarrativeDurationPreset = 'casual' | 'standard' | 'detailed'
+export type NarrativeCentroidStrategy = 'auto' | 'region_first' | 'poi_first'
 export type StoryTag =
   | 'campus'
   | 'education'
@@ -95,6 +102,22 @@ export interface NarrativePoiHeatLayer {
   points: Array<{ lon: number; lat: number; tier: VisualTier }>
 }
 
+export interface NarrativePoiBusinessCategoryProfile {
+  name: string
+  count: number
+  share: number
+  examples?: string[]
+}
+
+export interface NarrativePoiBusinessProfile {
+  sample_size: number
+  dominant_main_types: NarrativePoiBusinessCategoryProfile[]
+  dominant_sub_types: NarrativePoiBusinessCategoryProfile[]
+  representative_places: string[]
+  summary_hint: string
+  confidence: 'low' | 'medium' | 'high'
+}
+
 export interface NarrativeVisualLayer {
   mode: 'region_glow' | 'poi_heat'
   region_glow?: NarrativeRegionGlowLayer
@@ -103,7 +126,7 @@ export interface NarrativeVisualLayer {
 
 export interface NarrativeFact {
   claim: string
-  source: 'postgis' | 'web_verified' | 'web_snippet' | 'spatial_encoder' | 'aoi_entity'
+  source: 'postgis' | 'web_verified' | 'web_snippet' | 'spatial_encoder' | 'aoi_entity' | 'poi_business_profile'
   confidence: number
   verified: boolean
   related_entity: { type: 'poi' | 'aoi' | 'region'; id: string }
@@ -117,6 +140,7 @@ export interface NarrativeRegion {
   boundary: NarrativeBoundaryGeometry
   visual_layer: NarrativeVisualLayer
   pois: NarrativePoi[]
+  business_profile?: NarrativePoiBusinessProfile
   narrative_facts: NarrativeFact[]
   story_tags?: StoryTag[]
 }
@@ -137,6 +161,7 @@ export interface NarrativeChapter {
   web_sources?: NarrativeWebSource[]
   length_ms?: number
   story_tags?: StoryTag[]
+  generation_error?: string
 }
 
 export interface NarrativeWebSource {
@@ -156,6 +181,19 @@ export interface UserContext {
 
 export type NarrativeEnrichmentMode = 'sync' | 'async' | 'cache_only' | 'off'
 export type NarrativeEnrichmentStatus = 'disabled' | 'pending' | 'running' | 'completed' | 'failed'
+
+export interface NarrativeExplorationControls {
+  theme?: NarrativeExplorationTheme
+  granularity?: NarrativeGranularity
+  evidence_strictness?: NarrativeEvidenceStrictness
+  relevance_threshold?: number
+  diversity?: NarrativeDiversity
+  localness?: NarrativeLocalness
+  duration_preset?: NarrativeDurationPreset
+  candidate_count?: number
+  scope_query?: string
+  centroid_strategy?: NarrativeCentroidStrategy
+}
 
 export interface NarrativeEnrichmentSummary {
   job_id?: string
@@ -198,6 +236,8 @@ export interface NarrativeResponse {
     alternatives_count: number
     strategy?: NarrativeRouteStrategy
     story_tags?: StoryTag[]
+    relations?: unknown[]
+    lod_policy?: unknown
   }
   narration: {
     chapters: NarrativeChapter[]
@@ -213,6 +253,7 @@ export interface NarrativeRequest {
   viewport?: Partial<ViewportBBox>
   tone?: NarrationTone
   user_context?: Partial<UserContext>
+  exploration?: NarrativeExplorationControls
   limit?: number
   debug?: boolean
   enrichment_mode?: NarrativeEnrichmentMode

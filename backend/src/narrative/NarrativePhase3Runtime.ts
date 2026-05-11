@@ -9,6 +9,7 @@ import type {
   NarrativeEnrichmentJob,
   NarrativeEnrichmentMode,
   NarrativeEnrichmentSummary,
+  NarrativeExplorationControls,
   NarrationTone,
   NarrativeBuilder,
   NarrativePoi,
@@ -23,10 +24,11 @@ import { classifyNarrativeEntity } from './entityClassifier.js'
 import { gcj02ToWgs84 } from './gcj02.js'
 import { buildNarrationChapters, buildRegionFacts } from './factGrounding.js'
 import { semanticDiversity, viewportAreaKm2 } from './geometry.js'
-import { buildGraphNarration, type LlmNarratorDebug } from './llmNarrator.js'
+import { buildGraphNarrationChapter, LlmNarratorError, type ChapterNarrationResult, type LlmNarratorDebug } from './llmNarrator.js'
 import { classifyLod } from './lodPolicy.js'
 import { NarrativeWebFactCache, type NarrativeWebFactCacheStatus } from './NarrativeWebFactCache.js'
-import { sampleNarrativePath } from './pathSampler.js'
+import { focusSearchHints, resolveExplorationFocus, type ExplorationFocus } from './explorationFocus.js'
+import { sampleNarrativePath, type PathSamplerResult } from './pathSampler.js'
 import { buildFallbackRegion, buildRegionCandidates, isRegionCandidateNarratable, type AoiCandidateRow, type RegionCandidate } from './regionCandidate.js'
 import { countStoryTags, inferPathStoryTags, inferPoiStoryTags } from './storyTags.js'
 
@@ -58,6 +60,8 @@ interface WebFactDebugItem {
   cache_status?: NarrativeWebFactCacheStatus
   error?: string
 }
+
+type ChapterWebFactBuild = { chapters: NarrativeChapter[]; debug: WebFactDebugItem[] }
 
 interface WebNameCandidateDebugItem {
   name: string
@@ -97,9 +101,10 @@ const OFFICIAL_SOURCE_RE = /(gov\.cn|edu\.cn|org\.cn|wuhan\.gov|wh\.gov|官网|�
 const ENCYCLOPEDIA_SOURCE_RE = /(baike\.baidu\.com|wikipedia\.org|百科)/iu
 const MEDIA_SOURCE_RE = /(news|xinhuanet|people\.com\.cn|cctv|chinanews|thepaper|长江日报|湖北日报|新华社|人民网|央视|澎湃)/iu
 const LOW_QUALITY_SOURCE_RE = /(广告|优惠|团购|预订|点评|论坛|贴吧|小红书|营销|软文|自媒体|携程|马蜂窝|去哪儿|美团|大众点评)/iu
-const WEB_INTRO_FORBIDDEN_RE = /(广告|优惠|团购|预订|招商|加盟|联系电话|热线|小红书|大众点评|携程|马蜂窝|去哪儿|营销中心|售楼处|开盘|盛大开放|引爆|脱口秀|抽奖|招聘|扫码|小程序|优惠券|户型|置业|楼盘|返现|特价|秒杀|直播)/iu
+const WEB_INTRO_FORBIDDEN_RE = /(广告|优惠|团购|预订|招商|加盟|联系电话|热线|小红书|大众点评|携程|马蜂窝|去哪儿|营销中心|售楼处|开盘|开业三日|盛大开业|盛大开放|客流累计|零售额|销售额|引爆|脱口秀|抽奖|招聘|加盟|扫码|小程序|优惠券|户型|置业|楼盘|返现|特价|秒杀|直播)/iu
 const WEB_NAME_CANDIDATE_RE = /([\u4e00-\u9fa5A-Za-z0-9·]{2,18}(?:步行街|商业街|美食街|夜市|商圈|街区|汉街|天地|万象城|万象汇|天街|印象城|吾悦广场|万达广场|销品茂|购物中心|购物广场|商业广场|K11|SKP|路|街|大道|巷))/giu
 const WEB_FACT_SEARCHER_UNAVAILABLE_ERROR = 'web_fact_searcher_unavailable: 未配置 DEEPSEEK_SEARCH_* / NEWAPI_SEARCH_* 搜索端点'
+const ENRICHMENT_JOB_CANCELLED_ERROR = 'narrative_enrichment_cancelled'
 const WEB_INTRO_ABSTRACT_REGION_NAMES = [
   '江汉路步行街',
   '楚河汉街',
@@ -203,6 +208,11 @@ function resolveNarrativeSemanticCandidateLimit(poiLimit: number): number {
   return resolveBoundedInteger(process.env.NARRATIVE_POI_SEMANTIC_CANDIDATE_LIMIT, Math.max(poiLimit * 3, 2000), poiLimit, 80000)
 }
 
+function resolveProgressiveLlmChapterTimeoutMs(index: number): number {
+  const fallback = index === 0 ? 12000 : 16000
+  return resolveBoundedInteger(process.env.NARRATIVE_PROGRESSIVE_LLM_CHAPTER_TIMEOUT_MS, fallback, 1000, 45000)
+}
+
 function narrativeSemanticEnabled(options: NarrativePhase3RuntimeOptions): boolean {
   return process.env.NARRATIVE_POI_EMBEDDING_ENABLED !== 'false' && Boolean(options.embedNarrativeQuery)
 }
@@ -215,10 +225,24 @@ function buildNarrativeSemanticQuery(input: {
   tone: NarrationTone
   userContext: UserContext
   viewport: ViewportBBox
+  controls?: NarrativeExplorationControls
 }): string {
   const lodHint = input.viewport.zoom >= 15 ? '街巷 POI 过早 夜市 门店' : input.viewport.zoom >= 12 ? '片区 商圈 街区 公园 高校' : '城市结构 大片区 江湖 商圈 生态'
   const toneHint = input.tone === 'humanity' ? '历史 老街 生活气息 本地人' : input.tone === 'science' ? '空间结构 功能分区 人流热度' : '游览 地标 文旅 消费'
-  return `武汉 ${lodHint} ${toneHint} ${input.userContext.preference_label} ${input.userContext.time_label}`
+  return `武汉 ${lodHint} ${toneHint} ${explorationSemanticHint(input.controls)} ${input.userContext.preference_label} ${input.userContext.time_label}`
+}
+
+function explorationSemanticHint(controls?: NarrativeExplorationControls): string {
+  if (!controls) return ''
+  return [
+    controls.scope_query ? `${controls.scope_query} 周边 片区 POI` : '',
+    controls.theme ? `主题 ${controls.theme}` : '',
+    controls.granularity === 'district' ? '商圈 街区 抽象区域' : '',
+    controls.granularity === 'aoi' ? '真实 AOI 边界 公园 高校 商业街' : '',
+    controls.granularity === 'poi_cluster' ? '近景 点簇 门店 设施 街巷' : '',
+    controls.localness === 'local' ? '本地生活 街巷 夜市 口头高频片区' : '',
+    controls.localness === 'tourist' ? '游客友好 地标 景区 步行街' : '',
+  ].filter(Boolean).join(' ')
 }
 
 function describeRuntimeError(error: unknown): string {
@@ -228,6 +252,7 @@ function describeRuntimeError(error: unknown): string {
 function withBudget<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label}_timeout`)), Math.max(1, timeoutMs))
+    timer.unref?.()
     promise.then((value) => {
       clearTimeout(timer)
       resolve(value)
@@ -236,6 +261,10 @@ function withBudget<T>(promise: Promise<T>, timeoutMs: number, label: string): P
       reject(error)
     })
   })
+}
+
+function isBudgetTimeoutMessage(error: string): boolean {
+  return /_timeout$/iu.test(error)
 }
 
 function resolveTone(value: unknown): NarrationTone {
@@ -251,6 +280,59 @@ function mergeUserContext(value: unknown): UserContext {
     preference_label: String(raw.preference_label || DEFAULT_USER_CONTEXT.preference_label),
     history_label: String(raw.history_label || DEFAULT_USER_CONTEXT.history_label),
   }
+}
+
+function resolveExplorationControls(value: unknown): NarrativeExplorationControls {
+  if (!value || typeof value !== 'object') return {}
+  const raw = value as Record<string, unknown>
+  const relevanceThreshold = readFiniteNumber(raw.relevance_threshold)
+  const candidateCount = readFiniteNumber(raw.candidate_count)
+  return {
+    theme: isExplorationTheme(raw.theme) ? raw.theme : undefined,
+    granularity: isGranularity(raw.granularity) ? raw.granularity : undefined,
+    evidence_strictness: isEvidenceStrictness(raw.evidence_strictness) ? raw.evidence_strictness : undefined,
+    relevance_threshold: relevanceThreshold === null ? undefined : Math.max(0, Math.min(relevanceThreshold, 1)),
+    diversity: isDiversity(raw.diversity) ? raw.diversity : undefined,
+    localness: isLocalness(raw.localness) ? raw.localness : undefined,
+    duration_preset: isDurationPreset(raw.duration_preset) ? raw.duration_preset : undefined,
+    candidate_count: candidateCount === null ? undefined : Math.max(3, Math.min(Math.trunc(candidateCount), 12)),
+    scope_query: typeof raw.scope_query === 'string' ? raw.scope_query.trim().slice(0, 80) || undefined : undefined,
+    centroid_strategy: isCentroidStrategy(raw.centroid_strategy) ? raw.centroid_strategy : undefined,
+  }
+}
+
+function isExplorationTheme(value: unknown): value is NonNullable<NarrativeExplorationControls['theme']> {
+  return value === 'comprehensive' || value === 'commerce' || value === 'nightlife' || value === 'memory' || value === 'family' || value === 'education' || value === 'commute' || value === 'tourism'
+}
+
+function isGranularity(value: unknown): value is NonNullable<NarrativeExplorationControls['granularity']> {
+  return value === 'auto' || value === 'district' || value === 'aoi' || value === 'poi_cluster'
+}
+
+function isEvidenceStrictness(value: unknown): value is NonNullable<NarrativeExplorationControls['evidence_strictness']> {
+  return value === 'strict' || value === 'balanced' || value === 'loose'
+}
+
+function isDiversity(value: unknown): value is NonNullable<NarrativeExplorationControls['diversity']> {
+  return value === 'low' || value === 'medium' || value === 'high'
+}
+
+function isLocalness(value: unknown): value is NonNullable<NarrativeExplorationControls['localness']> {
+  return value === 'tourist' || value === 'balanced' || value === 'local'
+}
+
+function isDurationPreset(value: unknown): value is NonNullable<NarrativeExplorationControls['duration_preset']> {
+  return value === 'casual' || value === 'standard' || value === 'detailed'
+}
+
+function isCentroidStrategy(value: unknown): value is NonNullable<NarrativeExplorationControls['centroid_strategy']> {
+  return value === 'auto' || value === 'region_first' || value === 'poi_first'
+}
+
+function hasExplicitExplorationPreference(userContext: UserContext, controls?: NarrativeExplorationControls): boolean {
+  if (controls && Object.values(controls).some((value) => value !== undefined && value !== '')) return true
+  const label = userContext.preference_label.trim()
+  return Boolean(label) && label !== DEFAULT_USER_CONTEXT.preference_label
 }
 
 function classifyWebSourceQuality(source: Pick<NarrativeWebSource, 'title' | 'url' | 'snippet'>): Required<Pick<NarrativeWebSource, 'quality' | 'quality_score'>> {
@@ -276,6 +358,7 @@ function sortWebSourcesByQuality(sources: NarrativeWebSource[]): NarrativeWebSou
 function normalizeWebIntroSnippet(value: unknown): string {
   const normalized = String(value || '')
     .replace(/\s+/gu, ' ')
+    .replace(/^详细介绍了?/u, '')
     .replace(/^[\s"'“”‘’：:，,。；;]+|[\s"'“”‘’]+$/gu, '')
     .trim()
   if (!normalized || WEB_INTRO_FORBIDDEN_RE.test(normalized)) return ''
@@ -292,23 +375,33 @@ function buildWebIntroSentence(sources: NarrativeWebSource[], regionName: string
   const source = sources.find((item) => isWebIntroSourceRelevant(item, regionName))
     || sources.find((item) => isFallbackWebIntroSourceUsable(item, regionName))
   if (!source) return ''
-  return `参考资料显示，${normalizeWebIntroSnippet(source.snippet)}`
+  return `资料里提到，${normalizeWebIntroSnippet(source.snippet)}`
 }
 
 function attachIntroToChapterText(text: string, sources: NarrativeWebSource[], regionName: string): string {
   const intro = buildWebIntroSentence(sources, regionName)
   if (!intro || text.includes(intro)) return text
-  return `${text}${intro}`
+  const insertAt = firstSentenceEndIndex(text)
+  if (insertAt <= 0 || insertAt >= text.length) return `${text}${intro}`
+  return `${text.slice(0, insertAt)}${intro}${text.slice(insertAt)}`
+}
+
+function firstSentenceEndIndex(text: string): number {
+  const match = String(text || '').match(/[。！？]/u)
+  return match?.index === undefined ? -1 : match.index + match[0].length
 }
 
 function webFactQueryRegionName(regionName: string): string {
   return String(regionName || '').replace(/[（(](视野内片区|A区|B区|C区|D区|东区|西区|南区|北区|琴园|歌笛湖)[）)]/gu, '').trim() || regionName
 }
 
-function webFactQueriesForRegion(regionName: string, region?: RegionCandidate): string[] {
+function webFactQueriesForRegion(regionName: string, region: RegionCandidate | undefined, focus: ExplorationFocus, useFocusSearch: boolean): string[] {
   const name = webFactQueryRegionName(regionName)
   const storyHint = region?.story_tags?.some((tag) => tag === 'heritage' || tag === 'culture') ? '历史文化' : region?.story_tags?.some((tag) => tag === 'commerce' || tag === 'food' || tag === 'nightlife') ? '商业生活' : ''
+  const focusHints = useFocusSearch ? focusSearchHints(focus) : []
   return [...new Set([
+    focusHints[0] ? `${name} 武汉 ${focusHints[0]}` : '',
+    focusHints[1] ? `${name} ${focusHints[1]}` : '',
     `${name} 介绍`,
     `${name} 武汉 介绍`,
     storyHint ? `${name} 武汉 ${storyHint} 介绍` : '',
@@ -323,9 +416,13 @@ function mergeWebFactsIntoFinalChapters(input: {
   const groundedByRegionId = new Map(input.groundedChapters.map((chapter) => [chapter.region_id, chapter]))
   const regionById = new Map(input.regions.map((region) => [region.id, region]))
   return input.chapters.map((chapter) => {
+    const region = regionById.get(chapter.region_id)
+    // 失败章节保留 text='' 与 generation_error，不再注入 web intro，避免用 grounded snippet 假装 LLM 已经生成。
+    if (chapter.generation_error) {
+      return { ...chapter, story_tags: chapter.story_tags || region?.story_tags }
+    }
     const grounded = groundedByRegionId.get(chapter.region_id)
     const sources = grounded?.web_sources || chapter.web_sources
-    const region = regionById.get(chapter.region_id)
     if (!sources?.length) return { ...chapter, story_tags: chapter.story_tags || region?.story_tags }
     const regionName = region?.display_name || chapter.region_id
     return {
@@ -463,6 +560,7 @@ function buildDebugSnapshot(input: {
   webNameCandidates: WebNameCandidateDebugItem[]
   llmNarratorDebug: LlmNarratorDebug
   performance: NarrativeBuildPerformanceDebug
+  explorationControls: NarrativeExplorationControls
 }) {
   const poiTierStats = input.pois.reduce<Record<string, number>>((acc, poi) => {
     acc[poi.tier] = (acc[poi.tier] || 0) + 1
@@ -474,6 +572,7 @@ function buildDebugSnapshot(input: {
       build: NARRATIVE_RUNTIME_BUILD,
     },
     performance: input.performance,
+    exploration_controls: input.explorationControls,
     story_tags: {
       path: input.path.storyTags,
       counts: countStoryTags(input.selectedRegions),
@@ -499,6 +598,13 @@ function buildDebugSnapshot(input: {
         coverage: Number(candidate.coverage.toFixed(4)),
         diversity: Number(candidate.diversity.toFixed(4)),
         story_tags: candidate.story_tags || [],
+        business_profile: candidate.business_profile ? {
+          summary_hint: candidate.business_profile.summary_hint,
+          confidence: candidate.business_profile.confidence,
+          sample_size: candidate.business_profile.sample_size,
+          dominant_main_types: candidate.business_profile.dominant_main_types,
+          dominant_sub_types: candidate.business_profile.dominant_sub_types,
+        } : null,
         poi_count: candidate.pois.length,
         effective_poi_count: candidate.effectivePoiCount,
         heat_point_count: candidate.visual_layer.poi_heat?.points.length ?? 0,
@@ -663,6 +769,8 @@ async function attachWebSources(input: {
   searchWebFacts?: (query: string, maxResults: number) => Promise<NarrativeWebSource[]>
   webFactCache: NarrativeWebFactCache
   mode: NarrativeEnrichmentMode
+  focus: ExplorationFocus
+  useFocusSearch: boolean
 }) {
   const debug: WebFactDebugItem[] = []
   if (input.mode === 'off') return { chapters: input.chapters, debug }
@@ -675,7 +783,7 @@ async function attachWebSources(input: {
     region: regionById.get(chapter.region_id),
   }))
   const settled = await allSettledWithConcurrency(pairs, resolveWebFactConcurrency(), async ({ chapter, region }) => {
-    const queries = webFactQueriesForRegion(region?.display_name || chapter.region_id, region)
+    const queries = webFactQueriesForRegion(region?.display_name || chapter.region_id, region, input.focus, input.useFocusSearch)
     const started = Date.now()
     let lastCacheStatus: NarrativeWebFactCacheStatus | undefined
     let lastError: string | undefined
@@ -822,6 +930,65 @@ function resolveEnrichmentMode(value: unknown): NarrativeEnrichmentMode {
   return value === 'async' || value === 'cache_only' || value === 'off' || value === 'sync' ? value : 'sync'
 }
 
+function effectiveLodForExploration(lod: ReturnType<typeof classifyLod>['lod'], controls: NarrativeExplorationControls): ReturnType<typeof classifyLod>['lod'] {
+  if (controls.granularity === 'district' || controls.granularity === 'aoi') return 'meso'
+  if (controls.granularity === 'poi_cluster') return 'micro'
+  return lod
+}
+
+function explorationScoreBonus(candidate: RegionCandidate, controls: NarrativeExplorationControls, focus: ExplorationFocus): number {
+  let bonus = 0
+  const text = `${candidate.display_name} ${candidate.pois.map((poi) => `${poi.display_name} ${poi.category_main || ''} ${poi.category_sub || ''}`).join(' ')} ${(candidate.story_tags || []).join(' ')}`
+  if (controls.scope_query && text.includes(controls.scope_query)) bonus += 1.2
+  if (controls.granularity === 'aoi' && candidate.source === 'aoi') bonus += 0.18
+  if (controls.granularity === 'district' && candidate.source === 'abstract_region') bonus += 0.2
+  if (controls.granularity === 'poi_cluster' && candidate.coverage <= 0.08) bonus += 0.16
+  if (controls.evidence_strictness === 'strict') bonus += Math.min(0.18, candidate.effectivePoiCount * 0.018)
+  if (controls.evidence_strictness === 'loose' && candidate.effectivePoiCount >= 2) bonus += 0.06
+  if (controls.localness === 'local' && (candidate.source === 'abstract_region' || /(夜市|粮道街|水塔街|万松园|吉庆街|保成路|山海关路|台北路|胜利街|market|nightlife|food|urban_life)/u.test(text))) bonus += 0.16
+  if (controls.localness === 'tourist' && /(景区|公园|博物馆|纪念馆|地标|步行街|风景名胜|tourism|landmark)/u.test(text)) bonus += 0.12
+  bonus += regionFocusBonus(candidate, focus, controls.theme)
+  return bonus
+}
+
+function regionFocusBonus(candidate: RegionCandidate, focus: ExplorationFocus, theme: NarrativeExplorationControls['theme']): number {
+  if (!theme || theme === 'comprehensive') return 0
+  return regionExplorationFocusScoreForRuntime(candidate, focus) * 0.42
+}
+
+function regionExplorationFocusScoreForRuntime(candidate: RegionCandidate, focus: ExplorationFocus): number {
+  if (focus === 'comprehensive') return 0
+  const text = `${candidate.display_name} ${(candidate.story_tags || []).join(' ')} ${candidate.pois.map((poi) => `${poi.display_name} ${poi.category_main || ''}`).join(' ')}`
+  if (focus === 'commerce') return /(购物|商业|商圈|商场|广场|餐饮|commerce|food)/u.test(text) ? 1 : 0
+  if (focus === 'nightlife') return /(夜市|酒吧|餐饮|小吃|晚间|nightlife|food|market)/u.test(text) ? 1 : 0
+  if (focus === 'memory') return /(历史|文化|老街|博物馆|纪念|heritage|culture)/u.test(text) ? 1 : 0
+  if (focus === 'family') return /(公园|绿地|儿童|游乐|亲子|ecology|leisure)/u.test(text) ? 1 : 0
+  if (focus === 'education') return /(大学|学院|学校|书店|图书|education|campus)/u.test(text) ? 1 : 0
+  if (focus === 'commute') return /(地铁|公交|车站|交通|换乘|transit)/u.test(text) ? 1 : 0
+  return /(景区|地标|步行街|江滩|博物馆|tourism|landmark)/u.test(text) ? 1 : 0
+}
+
+function minimumEvidenceForExploration(controls: NarrativeExplorationControls): number {
+  if (controls.evidence_strictness === 'strict' || (controls.relevance_threshold ?? 0) >= 0.5) return 4
+  if (controls.evidence_strictness === 'loose' || (controls.relevance_threshold ?? 1) <= 0.18) return 2
+  return 3
+}
+
+function applyExplorationCandidatePolicy(candidates: RegionCandidate[], controls: NarrativeExplorationControls, focus: ExplorationFocus): RegionCandidate[] {
+  if (!hasExplorationControls(controls)) return candidates
+  const minEvidence = minimumEvidenceForExploration(controls)
+  const filtered = candidates.filter((candidate) => candidate.effectivePoiCount >= minEvidence || (controls.scope_query && `${candidate.display_name} ${candidate.pois.map((poi) => poi.display_name).join(' ')}`.includes(controls.scope_query)))
+  const source = filtered.length > 0 ? filtered : candidates
+  return [...source].sort((left, right) =>
+    right.score + explorationScoreBonus(right, controls, focus)
+    - (left.score + explorationScoreBonus(left, controls, focus))
+    || right.effectivePoiCount - left.effectivePoiCount)
+}
+
+function hasExplorationControls(controls: NarrativeExplorationControls): boolean {
+  return Object.values(controls).some((value) => value !== undefined && value !== '')
+}
+
 function resolveWebFactConcurrency(): number {
   const parsed = Number(process.env.NARRATIVE_WEB_FACT_CONCURRENCY || '3')
   if (!Number.isFinite(parsed)) return 3
@@ -869,7 +1036,9 @@ function sumWebFactSources(items: WebFactDebugItem[]): number {
 }
 
 function summarizeWebFactErrors(items: WebFactDebugItem[]): string | undefined {
-  const errors = [...new Set(items.map((item) => item.error).filter((error): error is string => Boolean(error)))]
+  const errors = [...new Set(items
+    .map((item) => item.error)
+    .filter((error): error is string => typeof error === 'string' && error.length > 0 && !isBudgetTimeoutMessage(error)))]
   return errors.length > 0 ? errors.slice(0, 3).join('；') : undefined
 }
 
@@ -905,12 +1074,13 @@ function buildEnrichmentSummary(input: {
     started_at: input.startedAt,
     updated_at: input.updatedAt,
     completed_at: input.completedAt,
-  }
+}
 }
 
 export class NarrativePhase3Runtime implements NarrativeBuilder {
   private readonly webFactCache: NarrativeWebFactCache
   private readonly enrichmentJobs = new Map<string, NarrativeEnrichmentJob>()
+  private readonly latestEnrichmentJobBySession = new Map<string, string>()
 
   constructor(private readonly options: NarrativePhase3RuntimeOptions) {
     this.webFactCache = options.webFactCache || new NarrativeWebFactCache()
@@ -921,6 +1091,9 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     if (mode === 'async') {
       const initialResponse = await this.buildOnce({ ...input, enrichment_mode: 'cache_only' }, 'cache_only')
       const job = this.createEnrichmentJob(initialResponse)
+      this.cancelPreviousSessionEnrichmentJob(initialResponse.session_id, job.job_id)
+      this.latestEnrichmentJobBySession.set(initialResponse.session_id, job.job_id)
+      this.pruneEnrichmentJobs()
       initialResponse.enrichment = job.summary
       this.runEnrichmentJob(job.job_id, { ...input, session_id: initialResponse.session_id })
       return initialResponse
@@ -932,6 +1105,59 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     return this.enrichmentJobs.get(jobId)
   }
 
+  private cancelPreviousSessionEnrichmentJob(sessionId: string, nextJobId: string) {
+    const previousJobId = this.latestEnrichmentJobBySession.get(sessionId)
+    if (!previousJobId || previousJobId === nextJobId) return
+    this.cancelEnrichmentJob(previousJobId, ENRICHMENT_JOB_CANCELLED_ERROR)
+  }
+
+  private cancelEnrichmentJob(jobId: string, reason: string) {
+    const current = this.enrichmentJobs.get(jobId)
+    if (!current || current.status === 'completed' || current.status === 'failed') return
+    const updatedAt = new Date().toISOString()
+    this.enrichmentJobs.set(jobId, {
+      ...current,
+      status: 'failed',
+      summary: {
+        ...current.summary,
+        status: 'failed',
+        error: reason,
+        updated_at: updatedAt,
+        completed_at: updatedAt,
+      },
+      response: current.response ? {
+        ...current.response,
+        enrichment: {
+          ...(current.response.enrichment || current.summary),
+          status: 'failed',
+          error: reason,
+          updated_at: updatedAt,
+          completed_at: updatedAt,
+        },
+      } : current.response,
+      error: reason,
+    })
+  }
+
+  private isEnrichmentJobActive(jobId: string): boolean {
+    const current = this.enrichmentJobs.get(jobId)
+    return Boolean(current && current.status !== 'failed' && current.status !== 'completed')
+  }
+
+  private pruneEnrichmentJobs() {
+    const maxJobs = resolveBoundedInteger(process.env.NARRATIVE_ENRICHMENT_JOB_CACHE_LIMIT, 32, 4, 256)
+    const overflow = this.enrichmentJobs.size - maxJobs
+    if (overflow <= 0) return
+    const entries = [...this.enrichmentJobs.entries()]
+    const removable = entries.filter(([, job]) => job.status === 'completed' || job.status === 'failed')
+    for (const [jobId, job] of removable.slice(0, overflow)) {
+      this.enrichmentJobs.delete(jobId)
+      if (job.response?.session_id && this.latestEnrichmentJobBySession.get(job.response.session_id) === jobId) {
+        this.latestEnrichmentJobBySession.delete(job.response.session_id)
+      }
+    }
+  }
+
   private async buildOnce(input: NarrativeRequest, mode: NarrativeEnrichmentMode): Promise<NarrativeResponse> {
     const buildStarted = Date.now()
     const timings: Record<string, number> = {}
@@ -939,6 +1165,10 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     const viewport = normalizeViewport(input.viewport)
     const tone = resolveTone(input.tone)
     const userContext = mergeUserContext(input.user_context)
+    const explorationControls = resolveExplorationControls(input.exploration)
+    const activeExplorationControls = hasExplorationControls(explorationControls) ? explorationControls : undefined
+    const focus = resolveExplorationFocus(userContext, tone, explorationControls)
+    const useFocusSearch = hasExplicitExplorationPreference(userContext, explorationControls)
     const debugEnabled = input.debug === true
     const sessionId = resolveSessionId(input.session_id) || randomUUID()
     const seed = `${sessionId}:${viewport.west.toFixed(4)}:${viewport.south.toFixed(4)}:${viewport.east.toFixed(4)}:${viewport.north.toFixed(4)}:${tone}`
@@ -961,7 +1191,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       }
     }
     const semanticWeight = resolveNarrativeSemanticWeight()
-    const semanticQuery = buildNarrativeSemanticQuery({ tone, userContext, viewport })
+    const semanticQuery = buildNarrativeSemanticQuery({ tone, userContext, viewport, controls: explorationControls })
     const semanticDebug: NarrativeBuildPerformanceDebug['semantic_recall'] = {
       enabled: narrativeSemanticEnabled(this.options),
       used_query_vector: false,
@@ -1009,19 +1239,21 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     const candidateStarted = Date.now()
     const scene = resolveSceneProfile(renderablePois)
     const builtCandidates = buildRegionCandidates({ viewport, pois, aois, scene })
-    const fallbackUsed = builtCandidates.length === 0
+    const rankedCandidates = applyExplorationCandidatePolicy(builtCandidates, explorationControls, focus)
+    const fallbackUsed = rankedCandidates.length === 0
     const fallbackCandidate = fallbackUsed ? buildFallbackRegion({ viewport, pois, scene }) : null
-    const candidates = fallbackCandidate ? [fallbackCandidate].filter(isRegionCandidateNarratable) : builtCandidates
+    const candidates = fallbackCandidate ? [fallbackCandidate].filter(isRegionCandidateNarratable) : rankedCandidates
     const dominantCoverage = Math.max(...candidates.map((candidate) => candidate.coverage), 0)
     const semanticDiversityValue = semanticDiversity(renderablePois)
-    const lodDecision = classifyLod({
+    const rawLodDecision = classifyLod({
       dominantCoverage,
       candidateCount: candidates.length,
       semanticDiversity: semanticDiversityValue,
     })
+    const lodDecision = { ...rawLodDecision, lod: effectiveLodForExploration(rawLodDecision.lod, explorationControls) }
     timings.candidate_build = Date.now() - candidateStarted
     const pathStarted = Date.now()
-    const path = sampleNarrativePath({ candidates, viewport, lod: lodDecision.lod, seed })
+    const path = sampleNarrativePath({ candidates, viewport, lod: lodDecision.lod, seed, focus: useFocusSearch ? focus : 'comprehensive', controls: activeExplorationControls })
     timings.path_sample = Date.now() - pathStarted
     const factsStarted = Date.now()
     const responseRegions = candidates.map((region) => ({ ...region, narrative_facts: buildRegionFacts({ region, scene }) }))
@@ -1029,28 +1261,68 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
     const responseStoryTags = path.storyTags.length > 0 ? path.storyTags : inferPathStoryTags(selectedRegions)
     timings.fact_grounding = Date.now() - factsStarted
     const webFactStarted = Date.now()
+    const scaffolds = buildNarrationChapters({ regions: selectedRegions, tone, scene, lod: lodDecision.lod, strategy: path.strategy, pathNodes: path.nodes, viewport, userContext, controls: activeExplorationControls })
     const chapterBuild = await attachWebSources({
-      chapters: buildNarrationChapters({ regions: selectedRegions, tone, scene, lod: lodDecision.lod, strategy: path.strategy, pathNodes: path.nodes, userContext }),
+      chapters: scaffolds,
       regions: selectedRegions,
       searchWebFacts: this.options.searchWebFacts,
       webFactCache: this.webFactCache,
       mode,
+      focus,
+      useFocusSearch,
     })
     timings.web_fact_attach = Date.now() - webFactStarted
+    const llmEnabled = mode === 'sync' && resolveNarrativeLlmEnabled()
     const llmStarted = Date.now()
-    const graphNarration = await buildGraphNarration({
-      chapters: chapterBuild.chapters,
-      regions: selectedRegions,
-      path,
-      scene,
-      tone,
-      userContext,
-      llmProvider: this.options.llmProvider,
-      enabled: mode === 'sync' && resolveNarrativeLlmEnabled(),
-    })
+    let llmNarratorDebug: LlmNarratorDebug = {
+      used: false,
+      provider: this.options.llmProvider?.getStatus(),
+    }
+    let generatedChapters: NarrativeChapter[] = chapterBuild.chapters
+    if (llmEnabled) {
+      const settled = await Promise.allSettled(chapterBuild.chapters.map((scaffold) =>
+        buildGraphNarrationChapter({
+          chapter: scaffold,
+          allChapters: chapterBuild.chapters,
+          regions: selectedRegions,
+          path,
+          scene,
+          tone,
+          userContext,
+          llmProvider: this.options.llmProvider,
+          enabled: true,
+        })))
+      const errorMessages: string[] = []
+      let lastSuccessDebug: LlmNarratorDebug | undefined
+      generatedChapters = settled.map((result, index) => {
+        const scaffold = chapterBuild.chapters[index]
+        if (result.status === 'fulfilled') {
+          lastSuccessDebug = result.value.debug
+          return result.value.chapter
+        }
+        const reason = result.reason
+        const message = reason instanceof Error ? reason.message : String(reason)
+        const errorCode = reason instanceof LlmNarratorError ? reason.code : undefined
+        errorMessages.push(`${scaffold.region_id}: ${message}`)
+        return { ...scaffold, generation_error: errorCode ? `${errorCode}: ${message}` : message }
+      })
+      if (lastSuccessDebug) {
+        llmNarratorDebug = { ...lastSuccessDebug }
+        if (errorMessages.length > 0) llmNarratorDebug.error = errorMessages.join(' | ')
+      } else if (errorMessages.length > 0) {
+        const firstFailure = settled.find((item) => item.status === 'rejected') as PromiseRejectedResult | undefined
+        const firstReason = firstFailure?.reason
+        llmNarratorDebug = {
+          used: false,
+          provider: this.options.llmProvider?.getStatus(),
+          error: errorMessages.join(' | '),
+          error_code: firstReason instanceof LlmNarratorError ? firstReason.code : 'request_failed',
+        }
+      }
+    }
     timings.llm_narration = Date.now() - llmStarted
     const chapters = mergeWebFactsIntoFinalChapters({
-      chapters: graphNarration.chapters,
+      chapters: generatedChapters,
       groundedChapters: chapterBuild.chapters,
       regions: selectedRegions,
     })
@@ -1098,6 +1370,8 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         alternatives_count: path.alternativesCount,
         strategy: path.strategy,
         story_tags: responseStoryTags,
+        relations: path.relations,
+        lod_policy: path.lodPolicy,
       },
       narration: {
         chapters,
@@ -1126,8 +1400,9 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         selectedRegions,
         webFactDebug: chapterBuild.debug,
         webNameCandidates,
-        llmNarratorDebug: graphNarration.debug,
+        llmNarratorDebug,
         performance,
+        explorationControls,
       })
     }
     return response
@@ -1150,6 +1425,10 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       mode: 'async',
       status: 'pending',
       phase: 'initial',
+      completed_region_count: 0,
+      cached_region_count: 0,
+      source_count: 0,
+      error: undefined,
       started_at: now,
       updated_at: now,
     }
@@ -1157,6 +1436,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       job_id: jobId,
       status: 'pending',
       summary,
+      response: { ...response, enrichment: summary },
     }
     this.enrichmentJobs.set(jobId, job)
     return job
@@ -1173,51 +1453,283 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       updated_at: new Date().toISOString(),
     }
     this.enrichmentJobs.set(jobId, job)
-    void this.buildOnce({ ...input, enrichment_mode: 'sync' }, 'sync')
-      .then((response) => {
-        const completedAt = new Date().toISOString()
-        const nextStatus = response.enrichment?.status === 'failed' ? 'failed' : 'completed'
-        response.enrichment = {
-          ...(response.enrichment || {
-            mode: 'async',
-            status: nextStatus,
-            phase: 'enriched',
-            total_region_count: response.narration.chapters.length,
-            completed_region_count: 0,
-            cached_region_count: 0,
-            source_count: 0,
-          }),
-          job_id: jobId,
-          mode: 'async',
-          status: nextStatus,
-          phase: 'enriched',
-          started_at: startedAt,
-          updated_at: completedAt,
-          completed_at: completedAt,
-        }
-        this.enrichmentJobs.set(jobId, {
-          job_id: jobId,
-          status: nextStatus,
-          summary: response.enrichment,
-          response: nextStatus === 'completed' ? response : undefined,
-          error: nextStatus === 'failed' ? response.enrichment.error : undefined,
-        })
-      })
-      .catch((error) => {
-        const updatedAt = new Date().toISOString()
-        const message = error instanceof Error ? error.message : String(error)
-        this.enrichmentJobs.set(jobId, {
-          job_id: jobId,
+    void this.runProgressiveEnrichmentJob(jobId, input, startedAt).catch((error) => {
+      if (!this.isEnrichmentJobActive(jobId)) return
+      const updatedAt = new Date().toISOString()
+      const message = error instanceof Error ? error.message : String(error)
+      const current = this.enrichmentJobs.get(jobId)
+      this.enrichmentJobs.set(jobId, {
+        job_id: jobId,
+        status: 'failed',
+        summary: {
+          ...(current?.summary || job.summary),
           status: 'failed',
-          summary: {
-            ...job.summary,
-            status: 'failed',
-            error: message,
-            updated_at: updatedAt,
-            completed_at: updatedAt,
-          },
           error: message,
-        })
+          updated_at: updatedAt,
+          completed_at: updatedAt,
+        },
+        response: current?.response,
+        error: message,
       })
+    })
   }
+
+  private async runProgressiveEnrichmentJob(jobId: string, input: NarrativeRequest, startedAt: string) {
+    const currentJob = this.enrichmentJobs.get(jobId)
+    if (!currentJob) return
+    const missingProgressiveNarrator = !this.options.searchWebFacts && !this.options.llmProvider?.isReady()
+    if (missingProgressiveNarrator) {
+      if (!this.isEnrichmentJobActive(jobId)) return
+      const updatedAt = new Date().toISOString()
+      this.enrichmentJobs.set(jobId, {
+        job_id: jobId,
+        status: 'failed',
+        summary: {
+          ...currentJob.summary,
+          status: 'failed',
+          phase: 'enriched',
+          source_count: 0,
+          error: WEB_FACT_SEARCHER_UNAVAILABLE_ERROR,
+          updated_at: updatedAt,
+          completed_at: updatedAt,
+        },
+        error: WEB_FACT_SEARCHER_UNAVAILABLE_ERROR,
+      })
+      return
+    }
+    const seedResponse = currentJob.response || await this.buildOnce({ ...input, enrichment_mode: 'cache_only' }, 'cache_only')
+    const selectedRegions = resolveSelectedRegions(seedResponse.regions as RegionCandidate[], seedResponse.path.nodes.map((node) => node.region_id))
+    const chapters = seedResponse.narration.chapters.map((chapter) => ({ ...chapter }))
+    const path = this.pathFromResponse(seedResponse)
+    const explorationControls = resolveExplorationControls(input.exploration)
+    const focus = resolveExplorationFocus(seedResponse.user_context, seedResponse.narration.tone, explorationControls)
+    const useFocusSearch = hasExplicitExplorationPreference(seedResponse.user_context, explorationControls)
+    const webFactDebug: WebFactDebugItem[] = []
+    const upsertWebFactDebug = (items: WebFactDebugItem[]) => {
+      for (const item of items) {
+        const debugKey = item.query === 'llm_narration' ? `${item.region_id}:llm_narration` : `${item.region_id}:web_fact`
+        const existingIndex = webFactDebug.findIndex((debugItem) => {
+          const existingKey = debugItem.query === 'llm_narration' ? `${debugItem.region_id}:llm_narration` : `${debugItem.region_id}:web_fact`
+          return existingKey === debugKey
+        })
+        if (existingIndex >= 0) {
+          webFactDebug[existingIndex] = item
+        } else {
+          webFactDebug.push(item)
+        }
+      }
+    }
+    const buildChapterWebFacts = async (index: number): Promise<ChapterWebFactBuild> => {
+      const chapterWebFactStarted = Date.now()
+      try {
+        return await attachWebSources({
+          chapters: [chapters[index]],
+          regions: selectedRegions,
+          searchWebFacts: this.options.searchWebFacts,
+          webFactCache: this.webFactCache,
+          mode: 'sync',
+          focus,
+          useFocusSearch,
+        })
+      } catch (error) {
+        return {
+          chapters: [chapters[index]],
+          debug: [{
+            region_id: chapters[index].region_id,
+            query: chapters[index].region_id,
+            source_count: 0,
+            latency_ms: Date.now() - chapterWebFactStarted,
+            error: describeWebFactError(error),
+          }],
+        }
+      }
+    }
+    let llmNarratorDebug: LlmNarratorDebug = {
+      used: false,
+      provider: this.options.llmProvider?.getStatus(),
+    }
+    if (!resolveNarrativeLlmEnabled()) {
+      llmNarratorDebug = { ...llmNarratorDebug, error: 'LLM 解说已禁用', error_code: 'disabled' }
+    } else if (!this.options.llmProvider?.isReady()) {
+      llmNarratorDebug = { ...llmNarratorDebug, error: 'LLM provider 未就绪', error_code: 'provider_not_ready' }
+    }
+
+    const publish = (status: NarrativeEnrichmentSummary['status'], completedCount: number, completedAt?: string) => {
+      if (!this.isEnrichmentJobActive(jobId)) return
+      const updatedAt = new Date().toISOString()
+      const sourceCount = sumWebFactSources(webFactDebug)
+      const cachedRegionCount = countCachedWebFactRegions(webFactDebug)
+      const summary: NarrativeEnrichmentSummary = {
+        job_id: jobId,
+        mode: 'async',
+        status,
+        phase: completedCount > 0 || sourceCount > 0 || cachedRegionCount > 0 || status === 'completed' ? 'enriched' : 'initial',
+        total_region_count: chapters.length,
+        completed_region_count: completedCount,
+        cached_region_count: cachedRegionCount,
+        source_count: sourceCount,
+        error: summarizeWebFactErrors(webFactDebug),
+        started_at: startedAt,
+        updated_at: updatedAt,
+        completed_at: completedAt,
+      }
+      const response: NarrativeResponse = {
+        ...seedResponse,
+        narration: { ...seedResponse.narration, chapters: chapters.map((chapter) => ({ ...chapter })) },
+        enrichment: summary,
+        debug: seedResponse.debug ? {
+          ...seedResponse.debug,
+          web_facts: {
+            queried_region_count: webFactDebug.length,
+            source_count: sumWebFactSources(webFactDebug),
+            items: webFactDebug,
+          },
+          llm_narrator: llmNarratorDebug,
+        } : seedResponse.debug,
+      }
+      this.enrichmentJobs.set(jobId, {
+        job_id: jobId,
+        status,
+        summary,
+        response,
+        error: status === 'failed' ? summary.error : undefined,
+      })
+    }
+
+    publish('running', 0)
+    const webFactTasks = chapters.map((_, index) => buildChapterWebFacts(index))
+    let completedChapterCount = 0
+    const publishWebFactUpdate = (index: number, chapterBuild: ChapterWebFactBuild) => {
+      if (!this.isEnrichmentJobActive(jobId)) return
+      upsertWebFactDebug(chapterBuild.debug)
+      const groundedChapter = chapterBuild.chapters[0]
+      if (groundedChapter?.web_sources?.length) {
+        chapters[index] = mergeWebFactsIntoFinalChapters({
+          chapters: [chapters[index]],
+          groundedChapters: [groundedChapter],
+          regions: selectedRegions,
+        })[0] || chapters[index]
+      }
+      const current = this.enrichmentJobs.get(jobId)
+      if (!current || current.status === 'failed' || current.status === 'completed') return
+      publish('running', completedChapterCount)
+    }
+    webFactTasks.forEach((task, index) => {
+      void task.then((chapterBuild) => {
+        if (!this.isEnrichmentJobActive(jobId)) return
+        publishWebFactUpdate(index, chapterBuild)
+      })
+    })
+    const processChapter = async (index: number): Promise<void> => {
+      if (!this.isEnrichmentJobActive(jobId)) return
+      const chapterWebFactStarted = Date.now()
+      const webFactTimeoutMs = index === 0
+        ? resolveBoundedInteger(process.env.NARRATIVE_FIRST_CHAPTER_WEB_FACT_TIMEOUT_MS, 1200, 500, 15000)
+        : resolveBoundedInteger(process.env.NARRATIVE_PROGRESSIVE_WEB_FACT_TIMEOUT_MS, 10000, 1000, 30000)
+      let chapterBuild: ChapterWebFactBuild
+      try {
+        chapterBuild = await withBudget(webFactTasks[index], webFactTimeoutMs, `progressive_web_fact_${index}`)
+      } catch (error) {
+        chapterBuild = {
+          chapters: [chapters[index]],
+          debug: [{
+            region_id: chapters[index].region_id,
+            query: chapters[index].region_id,
+            source_count: 0,
+            latency_ms: Date.now() - chapterWebFactStarted,
+            error: describeWebFactError(error),
+          }],
+        }
+      }
+      if (!this.isEnrichmentJobActive(jobId)) return
+      publishWebFactUpdate(index, chapterBuild)
+      const groundedChapter = chapterBuild.chapters[0] || chapters[index]
+      const contextChapters = chapters.map((chapter, chapterIndex) => chapterIndex === index ? groundedChapter : chapter)
+      if (!this.isEnrichmentJobActive(jobId)) return
+      const llmStarted = Date.now()
+      try {
+        const result = await withBudget(buildGraphNarrationChapter({
+          chapter: groundedChapter,
+          allChapters: contextChapters,
+          regions: selectedRegions,
+          path,
+          scene: seedResponse.scene_profile,
+          tone: seedResponse.narration.tone,
+          userContext: seedResponse.user_context,
+          llmProvider: this.options.llmProvider,
+          enabled: resolveNarrativeLlmEnabled(),
+        }), resolveProgressiveLlmChapterTimeoutMs(index), `progressive_llm_chapter_${index}`)
+        if (!this.isEnrichmentJobActive(jobId)) return
+        llmNarratorDebug = result.debug
+        chapters[index] = mergeWebFactsIntoFinalChapters({
+          chapters: [result.chapter],
+          groundedChapters: [groundedChapter],
+          regions: selectedRegions,
+        })[0] || result.chapter
+        completedChapterCount += 1
+      } catch (error) {
+        if (!this.isEnrichmentJobActive(jobId)) return
+        const message = error instanceof Error ? error.message : String(error)
+        const errorCode = error instanceof LlmNarratorError ? error.code : undefined
+        // 该章 LLM 失败：保留 text=''，把错误显式记入 chapter.generation_error 和 llmNarratorDebug。
+        // 不再用 grounded 模板章节兜底，避免误导用户认为 LLM 生成成功。
+        llmNarratorDebug = {
+          used: false,
+          provider: this.options.llmProvider?.getStatus(),
+          error: message,
+          error_code: errorCode || 'request_failed',
+          fallback_reason: error instanceof LlmNarratorError ? 'invalid_llm_output' : 'llm_error',
+          latency_ms: Date.now() - llmStarted,
+        }
+        chapters[index] = {
+          ...chapters[index],
+          text: '',
+          web_sources: groundedChapter.web_sources || chapters[index].web_sources,
+          generation_error: errorCode ? `${errorCode}: ${message}` : message,
+        }
+      }
+      publish('running', completedChapterCount)
+    }
+    // 关键并发改造：原 for 循环串行 await 每章 LLM，导致第二章等第一章完才开始；
+    // 现改成 Promise.allSettled 并发处理所有章节，第一章先到时其它章节早已并行写入，
+    // 用户读首章的时间正好覆盖后续章节生成延迟。
+    await Promise.allSettled(chapters.map((_, index) => processChapter(index)))
+    if (!this.isEnrichmentJobActive(jobId)) return
+    const finalWebFactTimeoutMs = resolveBoundedInteger(process.env.NARRATIVE_PROGRESSIVE_FINAL_WEB_FACT_TIMEOUT_MS, 2000, 0, 10000)
+    if (finalWebFactTimeoutMs > 0) {
+      const lateBuilds = await Promise.all(webFactTasks.map((task, index) =>
+        withBudget(task, finalWebFactTimeoutMs, `progressive_web_fact_final_${index}`).then(
+          (value) => ({ status: 'fulfilled' as const, value, index }),
+          (reason) => ({ status: 'rejected' as const, reason, index }),
+        )))
+      for (const item of lateBuilds) {
+        if (!this.isEnrichmentJobActive(jobId)) return
+        if (item.status !== 'fulfilled') continue
+        publishWebFactUpdate(item.index, item.value)
+      }
+    }
+    if (!this.isEnrichmentJobActive(jobId)) return
+    publish('completed', chapters.length, new Date().toISOString())
+  }
+
+  private pathFromResponse(response: NarrativeResponse): PathSamplerResult {
+    return {
+      nodes: response.path.nodes,
+      alternativesCount: response.path.alternatives_count,
+      engine: 'seeded_lod_bbox_sampler',
+      strategy: response.path.strategy || 'seeded_spatial_story',
+      storyTags: response.path.story_tags || response.story_tags || [],
+      relations: (Array.isArray(response.path.relations) ? response.path.relations : []) as PathSamplerResult['relations'],
+      lodPolicy: ((response.path.lod_policy || {
+        lod: response.lod,
+        max_nodes: response.path.nodes.length,
+        top_k: 4,
+        beta: 8,
+        distance_bias: 'balanced',
+        continuity_bias: 'balanced',
+        diversity_bias: 'mixed_cluster',
+      }) as unknown) as PathSamplerResult['lodPolicy'],
+    }
+  }
+
 }

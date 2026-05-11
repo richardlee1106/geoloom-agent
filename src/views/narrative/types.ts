@@ -122,6 +122,22 @@ export interface NarrativePoiHeatLayer {
   points: Array<{ lon: number; lat: number; tier: VisualTier }>
 }
 
+export interface NarrativePoiBusinessCategoryProfile {
+  name: string
+  count: number
+  share: number
+  examples?: string[]
+}
+
+export interface NarrativePoiBusinessProfile {
+  sample_size: number
+  dominant_main_types: NarrativePoiBusinessCategoryProfile[]
+  dominant_sub_types: NarrativePoiBusinessCategoryProfile[]
+  representative_places: string[]
+  summary_hint: string
+  confidence: 'low' | 'medium' | 'high'
+}
+
 export interface NarrativeVisualLayer {
   mode: 'region_glow' | 'poi_heat'
   region_glow?: NarrativeRegionGlowLayer
@@ -130,7 +146,7 @@ export interface NarrativeVisualLayer {
 
 export interface NarrativeFact {
   claim: string
-  source: 'postgis' | 'web_verified' | 'web_snippet' | 'spatial_encoder' | 'aoi_entity'
+  source: 'postgis' | 'web_verified' | 'web_snippet' | 'spatial_encoder' | 'aoi_entity' | 'poi_business_profile'
   confidence: number
   verified: boolean
   related_entity: { type: 'poi' | 'aoi' | 'region'; id: string }
@@ -145,6 +161,7 @@ export interface NarrativeRegion {
   boundary: NarrativeBoundaryGeometry
   visual_layer: NarrativeVisualLayer
   pois: NarrativePoi[]
+  business_profile?: NarrativePoiBusinessProfile
   // LLM 允许使用的事实（§7.2）
   narrative_facts: NarrativeFact[]
   story_tags?: StoryTag[]
@@ -174,6 +191,8 @@ export interface NarrativeChapter {
   web_sources?: Array<{ title: string; url: string; snippet?: string; quality?: 'official' | 'encyclopedia' | 'media' | 'general'; quality_score?: number }>
   length_ms?: number
   story_tags?: StoryTag[]
+  // 单章 LLM 生成失败时由后端写入；前端可据此显式展示该章错误而不是继续等待。
+  generation_error?: string
 }
 
 // 12. 上下文（§5.2）
@@ -183,6 +202,27 @@ export interface UserContext {
   preference_label: string
   history_label: string
 }
+
+export interface NarrativeExplorationControls {
+  theme?: NarrativeExplorationTheme
+  granularity?: NarrativeGranularity
+  evidence_strictness?: NarrativeEvidenceStrictness
+  relevance_threshold?: number
+  diversity?: NarrativeDiversity
+  localness?: NarrativeLocalness
+  duration_preset?: NarrativeDurationPreset
+  candidate_count?: number
+  scope_query?: string
+  centroid_strategy?: NarrativeCentroidStrategy
+}
+
+export type NarrativeExplorationTheme = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
+export type NarrativeGranularity = 'auto' | 'district' | 'aoi' | 'poi_cluster'
+export type NarrativeEvidenceStrictness = 'strict' | 'balanced' | 'loose'
+export type NarrativeDiversity = 'low' | 'medium' | 'high'
+export type NarrativeLocalness = 'tourist' | 'balanced' | 'local'
+export type NarrativeDurationPreset = 'casual' | 'standard' | 'detailed'
+export type NarrativeCentroidStrategy = 'auto' | 'region_first' | 'poi_first'
 
 export type NarrativeEnrichmentMode = 'sync' | 'async' | 'cache_only' | 'off'
 export type NarrativeEnrichmentStatus = 'disabled' | 'pending' | 'running' | 'completed' | 'failed'
@@ -229,6 +269,8 @@ export interface NarrativeResponse {
     alternatives_count: number
     strategy?: NarrativeRouteStrategy
     story_tags?: StoryTag[]
+    relations?: unknown[]
+    lod_policy?: unknown
   }
   narration: {
     chapters: NarrativeChapter[]
@@ -253,11 +295,11 @@ export interface TierStats {
 export interface NarrativeUiSettings {
   relevanceThreshold: number  // 0~1
   viewportZoom: number
-  durationPreset: 'casual' | 'standard' | 'detailed'
+  durationPreset: NarrativeDurationPreset
   tonePreset: NarrationTone
   ttsSpeed: number
   ttsVoice: string
-  centroidStrategy: 'auto' | 'region_first' | 'poi_first'
+  centroidStrategy: NarrativeCentroidStrategy
   autoNarrate: boolean
 }
 

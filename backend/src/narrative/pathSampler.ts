@@ -1,4 +1,5 @@
-import type { LODLevel, NarrativePathNode, NarrativeRouteStrategy, PathNarrationRole, StoryTag, ViewportBBox } from './contract.js'
+import type { LODLevel, NarrativeExplorationControls, NarrativePathNode, NarrativeRouteStrategy, PathNarrationRole, StoryTag, ViewportBBox } from './contract.js'
+import { regionExplorationFocusScore, type ExplorationFocus } from './explorationFocus.js'
 import { boundsFromBoundary } from './geometry.js'
 import type { RegionCandidate } from './regionCandidate.js'
 import { buildRegionRelation, type RegionRelationType } from './regionRelations.js'
@@ -31,6 +32,9 @@ export interface LodRoutePolicyDebug {
   distance_bias: 'strong' | 'balanced' | 'loose'
   continuity_bias: 'strong' | 'balanced' | 'loose'
   diversity_bias: 'local_detail' | 'mixed_cluster' | 'cross_section'
+  requested_candidate_count?: number
+  requested_diversity?: NarrativeExplorationControls['diversity']
+  requested_duration_preset?: NarrativeExplorationControls['duration_preset']
 }
 
 interface LodRoutePolicy extends LodRoutePolicyDebug {
@@ -47,6 +51,7 @@ interface LodRoutePolicy extends LodRoutePolicyDebug {
   thirdRolePenalty: number
   sameDominantTagPenalty: number
   distanceWeight: number
+  focusWeight: number
 }
 
 export function sampleNarrativePath(input: {
@@ -54,18 +59,24 @@ export function sampleNarrativePath(input: {
   viewport: ViewportBBox
   lod: LODLevel
   seed: string
+  focus?: ExplorationFocus
+  controls?: NarrativeExplorationControls
 }): PathSamplerResult {
-  const policy = resolveLodRoutePolicy(input.lod)
+  const policy = resolveLodRoutePolicy(input.lod, input.controls)
   const limit = policy.max_nodes
-  const valid = [...input.candidates]
+  const focus = input.focus || 'comprehensive'
+  const valid = filterCandidatesForFocus(rankCandidatesForFocus(input.candidates, focus), focus, limit)
   const selected: RegionCandidate[] = []
   const pool = valid.slice(0, Math.max(limit * policy.poolMultiplier, policy.poolMin))
-  const random = seededRandom(`${input.seed}:${input.lod}:${viewportSignature(input.viewport)}`)
+  const randomSeed = focus === 'comprehensive'
+    ? `${input.seed}:${input.lod}:${viewportSignature(input.viewport)}:${explorationSignature(input.controls)}`
+    : `${input.seed}:${input.lod}:${viewportSignature(input.viewport)}:${focus}:${explorationSignature(input.controls)}`
+  const random = seededRandom(randomSeed)
   const first = pool.shift()
   if (first) selected.push(first)
 
   while (selected.length < limit && pool.length > 0) {
-    const index = pickSeededNextCandidate(selected, pool, input.lod, random, policy)
+    const index = pickSeededNextCandidate(selected, pool, input.lod, random, policy, focus, input.controls)
     selected.push(pool.splice(index, 1)[0])
   }
 
@@ -107,6 +118,9 @@ export function sampleNarrativePath(input: {
       distance_bias: policy.distance_bias,
       continuity_bias: policy.continuity_bias,
       diversity_bias: policy.diversity_bias,
+      requested_candidate_count: policy.requested_candidate_count,
+      requested_diversity: policy.requested_diversity,
+      requested_duration_preset: policy.requested_duration_preset,
     },
   }
 }
@@ -169,6 +183,28 @@ function candidateRankForSpatialReading(candidate: RegionCandidate): number {
   return candidate.score + roleBoost
 }
 
+function rankCandidatesForFocus(candidates: RegionCandidate[], focus: ExplorationFocus): RegionCandidate[] {
+  if (focus === 'comprehensive') return [...candidates]
+  return [...candidates].sort((left, right) =>
+    focusAdjustedRank(right, focus) - focusAdjustedRank(left, focus)
+    || candidateRankForSpatialReading(right) - candidateRankForSpatialReading(left))
+}
+
+function filterCandidatesForFocus(candidates: RegionCandidate[], focus: ExplorationFocus, limit: number): RegionCandidate[] {
+  if (focus === 'comprehensive' || candidates.length <= 1) return candidates
+  const scored = candidates.map((candidate) => ({ candidate, focusScore: regionExplorationFocusScore(candidate, focus) }))
+  const strong = scored.filter((item) => item.focusScore >= 0.55).map((item) => item.candidate)
+  const supportive = scored.filter((item) => item.focusScore >= 0.25).map((item) => item.candidate)
+  if (candidates.length <= limit && strong.length > 0) return strong
+  if (strong.length >= 2) return strong
+  if (supportive.length >= 2) return supportive
+  return candidates
+}
+
+function focusAdjustedRank(candidate: RegionCandidate, focus: ExplorationFocus): number {
+  return candidateRankForSpatialReading(candidate) + regionExplorationFocusScore(candidate, focus) * 0.68
+}
+
 function buildTransitionReason(previous: RegionCandidate | null, current: RegionCandidate): string {
   if (!previous) return '从这组片区的西侧或北侧开始讲起，再按从左到右、由上到下的空间顺序推进。'
   const relation = buildRegionRelation(previous, current)
@@ -187,7 +223,7 @@ function relativeDirection(previous: RegionCandidate, current: RegionCandidate):
   const northSouth = Math.abs(dy) < 0.0006 ? '' : dy > 0 ? '北' : '南'
   if (northSouth && absDy > absDx * 1.6) return northSouth
   if (eastWest && absDx > absDy * 1.6) return eastWest
-  return northSouth && eastWest ? `${northSouth}${eastWest}` : eastWest || northSouth || '相邻'
+  return northSouth && eastWest ? `${eastWest}${northSouth}` : eastWest || northSouth || '相邻'
 }
 
 function pickSeededNextCandidate(
@@ -196,6 +232,8 @@ function pickSeededNextCandidate(
   lod: LODLevel,
   random: () => number,
   policy: LodRoutePolicy,
+  focus: ExplorationFocus,
+  controls: NarrativeExplorationControls | undefined,
 ): number {
   const previous = selected[selected.length - 1]
   const avoidRole = selected.length >= 2 && selected[selected.length - 2].role === previous.role ? previous.role : null
@@ -220,6 +258,8 @@ function pickSeededNextCandidate(
       + relationDiversityBonus
       + storyTagBonus
       + lodFitScore(candidate, lod) * policy.lodFitWeight
+      + regionExplorationFocusScore(candidate, focus) * policy.focusWeight
+      + explorationPathCandidateBonus(candidate, controls)
       - sameRolePenalty
       - thirdRolePenalty
       - sameDominantTagPenalty
@@ -258,7 +298,12 @@ function lodFitScore(candidate: RegionCandidate, lod: LODLevel): number {
   return candidate.role === 'primary_region' ? 1 : candidate.coverage >= 0.08 ? 0.75 : 0.45
 }
 
-function resolveLodRoutePolicy(lod: LODLevel): LodRoutePolicy {
+function resolveLodRoutePolicy(lod: LODLevel, controls?: NarrativeExplorationControls): LodRoutePolicy {
+  const policy = baseLodRoutePolicy(lod)
+  return applyExplorationControlsToPolicy(policy, controls)
+}
+
+function baseLodRoutePolicy(lod: LODLevel): LodRoutePolicy {
   if (lod === 'micro') {
     return {
       lod,
@@ -281,6 +326,7 @@ function resolveLodRoutePolicy(lod: LODLevel): LodRoutePolicy {
       thirdRolePenalty: 0.26,
       sameDominantTagPenalty: 0.035,
       distanceWeight: 11,
+      focusWeight: 0.34,
     }
   }
   if (lod === 'meso') {
@@ -305,6 +351,7 @@ function resolveLodRoutePolicy(lod: LODLevel): LodRoutePolicy {
       thirdRolePenalty: 0.24,
       sameDominantTagPenalty: 0.045,
       distanceWeight: 6,
+      focusWeight: 0.36,
     }
   }
   return {
@@ -328,7 +375,80 @@ function resolveLodRoutePolicy(lod: LODLevel): LodRoutePolicy {
     thirdRolePenalty: 0.3,
     sameDominantTagPenalty: 0.075,
     distanceWeight: 2.4,
+    focusWeight: 0.38,
   }
+}
+
+function applyExplorationControlsToPolicy(policy: LodRoutePolicy, controls?: NarrativeExplorationControls): LodRoutePolicy {
+  if (!controls) return policy
+  const requestedCount = boundedInteger(controls.candidate_count, 3, 12)
+  const durationCount = controls.duration_preset === 'casual'
+    ? Math.min(policy.max_nodes, 4)
+    : controls.duration_preset === 'detailed'
+      ? Math.max(policy.max_nodes, 9)
+      : controls.duration_preset === 'standard'
+        ? Math.max(policy.max_nodes, 6)
+        : policy.max_nodes
+  const maxNodes = requestedCount ?? durationCount
+  const lowDiversity = controls.diversity === 'low'
+  const highDiversity = controls.diversity === 'high'
+  return {
+    ...policy,
+    max_nodes: maxNodes,
+    top_k: lowDiversity ? Math.max(2, policy.top_k - 1) : highDiversity ? Math.min(8, policy.top_k + 2) : policy.top_k,
+    beta: lowDiversity ? policy.beta + 1.5 : highDiversity ? Math.max(3.5, policy.beta - 1.5) : policy.beta,
+    poolMultiplier: lowDiversity ? Math.max(2, policy.poolMultiplier - 1) : highDiversity ? policy.poolMultiplier + 1 : policy.poolMultiplier,
+    poolMin: lowDiversity ? Math.max(6, policy.poolMin - 2) : highDiversity ? policy.poolMin + 4 : policy.poolMin,
+    diversityBonus: lowDiversity ? policy.diversityBonus * 0.45 : highDiversity ? policy.diversityBonus * 1.7 : policy.diversityBonus,
+    relationDiversityBonus: lowDiversity ? policy.relationDiversityBonus * 0.55 : highDiversity ? policy.relationDiversityBonus * 1.55 : policy.relationDiversityBonus,
+    newTagWeight: lowDiversity ? policy.newTagWeight * 0.55 : highDiversity ? policy.newTagWeight * 1.7 : policy.newTagWeight,
+    sameDominantTagPenalty: lowDiversity ? policy.sameDominantTagPenalty * 0.45 : highDiversity ? policy.sameDominantTagPenalty * 1.35 : policy.sameDominantTagPenalty,
+    distanceWeight: controls.localness === 'local' || lowDiversity ? policy.distanceWeight * 1.15 : highDiversity ? policy.distanceWeight * 0.72 : policy.distanceWeight,
+    focusWeight: controls.theme && controls.theme !== 'comprehensive' ? policy.focusWeight + 0.08 : policy.focusWeight,
+    diversity_bias: lowDiversity ? 'local_detail' : highDiversity ? 'cross_section' : policy.diversity_bias,
+    requested_candidate_count: requestedCount,
+    requested_diversity: controls.diversity,
+    requested_duration_preset: controls.duration_preset,
+  }
+}
+
+function explorationPathCandidateBonus(candidate: RegionCandidate, controls?: NarrativeExplorationControls): number {
+  if (!controls) return 0
+  let bonus = 0
+  if (controls.centroid_strategy === 'region_first' && (candidate.role === 'primary_region' || candidate.role === 'support_region')) bonus += 0.08
+  if (controls.centroid_strategy === 'poi_first') bonus += Math.min(0.1, candidate.effectivePoiCount * 0.012)
+  if (controls.localness === 'local') {
+    const text = `${candidate.display_name} ${(candidate.story_tags || []).join(' ')}`
+    if (candidate.source === 'abstract_region') bonus += 0.08
+    if (/(夜市|粮道街|水塔街|万松园|吉庆街|保成路|山海关路|台北路|胜利街|market|nightlife|food|urban_life)/u.test(text)) bonus += 0.08
+  }
+  if (controls.localness === 'tourist') {
+    const text = `${candidate.display_name} ${candidate.pois.map((poi) => `${poi.display_name} ${poi.category_main || ''}`).join(' ')}`
+    if (candidate.role === 'landmark_anchor' || /(景区|公园|博物馆|纪念馆|地标|步行街|风景名胜|tourism|landmark)/u.test(text)) bonus += 0.08
+  }
+  return bonus
+}
+
+function boundedInteger(value: unknown, min: number, max: number): number | undefined {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return undefined
+  return Math.max(min, Math.min(Math.trunc(parsed), max))
+}
+
+function explorationSignature(controls?: NarrativeExplorationControls): string {
+  if (!controls) return 'default'
+  return [
+    controls.theme || '',
+    controls.granularity || '',
+    controls.evidence_strictness || '',
+    controls.relevance_threshold ?? '',
+    controls.diversity || '',
+    controls.localness || '',
+    controls.duration_preset || '',
+    controls.candidate_count ?? '',
+    controls.scope_query || '',
+    controls.centroid_strategy || '',
+  ].join(':')
 }
 
 function viewportSignature(viewport: ViewportBBox): string {

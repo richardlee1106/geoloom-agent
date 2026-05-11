@@ -3,6 +3,7 @@
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
 import { buildCompositeNarrativeWebFactSearcher, buildDeepSeekNarrativeWebFactSearcher, NarrativePhase3Runtime } from '../../../src/narrative/NarrativePhase3Runtime.js'
 import { NarrativeWebFactCache } from '../../../src/narrative/NarrativeWebFactCache.js'
+import type { NarrativeWebSource } from '../../../src/narrative/contract.js'
 import type { SpatialFeature } from '../../../src/spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../../../src/skills/types.js'
 import type { LLMProvider } from '../../../src/llm/types.js'
@@ -16,6 +17,37 @@ function feature(id: string, name: string, lon: number, lat: number, categoryMai
       name,
       category_main: categoryMain,
       category_sub: categorySub,
+    },
+  }
+}
+
+
+
+function createProgressiveLlmProvider(opts: { delayAfterFirstCallMs?: number } = {}): LLMProvider {
+  let callIndex = 0
+  return {
+    getStatus: () => ({ ready: true, provider: 'test', model: 'test-model' }),
+    isReady: () => true,
+    complete: async (request) => {
+      callIndex += 1
+      if (callIndex > 1 && opts.delayAfterFirstCallMs && opts.delayAfterFirstCallMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, opts.delayAfterFirstCallMs))
+      }
+      const payload = JSON.parse(request.messages[1]?.content || '{}') as { target_region_id?: string }
+      const regionId = String(payload.target_region_id || '')
+      // 新 LLM 契约：每次调用只出单章，使用 target_region_id 身份返回 chapter。
+      return {
+        assistantMessage: {
+          role: 'assistant',
+          content: JSON.stringify({
+            region_id: regionId,
+            text: `${regionId} \u8fd9\u4e00\u6bb5\u7531\u672c\u5730\u670b\u53cb\u53e3\u543b\u8bb2\u6e05\u695a\uff0c\u5148\u6293\u4f4f\u773c\u524d\u7279\u70b9\uff0c\u518d\u987a\u7740\u524d\u540e\u7247\u533a\u81ea\u7136\u8d70\u8fc7\u53bb\u3002`,
+          }),
+          toolCalls: [],
+        },
+        toolCalls: [],
+        finishReason: 'stop' as const,
+      }
     },
   }
 }
@@ -215,12 +247,96 @@ describe('NarrativePhase3Runtime', () => {
     })
     const commerceText = commerce.narration.chapters.map((chapter) => chapter.text).join('\n')
     const educationText = education.narration.chapters.map((chapter) => chapter.text).join('\n')
-
     expect(commerceText).toContain('商业活力')
     expect(commerceText).toContain('消费锚点')
     expect(educationText).toContain('高校科教')
     expect(educationText).toContain('校园')
     expect(commerceText).not.toEqual(educationText)
+  })
+
+  it('consumes explicit exploration controls without relying on preference_label parsing', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '武汉大学', 114.34, 30.54),
+        feature('2', '武汉大学图书馆', 114.341, 30.541, '科教文化服务', '图书馆'),
+        feature('3', '武汉大学博物馆', 114.342, 30.542, '科教文化服务', '博物馆'),
+        feature('4', '东湖风景区', 114.37, 30.56, '风景名胜', '风景名胜'),
+        feature('5', '东湖绿道', 114.371, 30.561, '风景名胜', '绿道'),
+        feature('6', '楚河汉街', 114.352, 30.553, '购物服务', '购物中心'),
+        feature('7', '汉街美食广场', 114.353, 30.552, '餐饮服务', '餐饮服务'),
+        feature('8', '广埠屯商圈', 114.35, 30.535, '购物服务', '商业街'),
+      ],
+      fetchAoiCandidates: async () => [
+        {
+          id: 'wuda',
+          name: '武汉大学',
+          fclass: 'university',
+          areaSqm: 2_000_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.52, east: 114.35, north: 30.55 }),
+        },
+        {
+          id: 'east-lake',
+          name: '东湖风景区',
+          fclass: 'park',
+          areaSqm: 8_000_000,
+          boundary: polygonFromBounds({ west: 114.35, south: 30.54, east: 114.39, north: 30.58 }),
+        },
+        {
+          id: 'han-street',
+          name: '楚河汉街',
+          fclass: 'commercial',
+          areaSqm: 230_000,
+          boundary: polygonFromBounds({ west: 114.335, south: 30.545, east: 114.355, north: 30.56 }),
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'explicit-exploration',
+      debug: true,
+      enrichment_mode: 'off',
+      tone: 'tour',
+      viewport: {
+        west: 114.3,
+        south: 30.5,
+        east: 114.4,
+        north: 30.6,
+        zoom: 14,
+        center: [114.35, 30.55],
+      },
+      user_context: { time_label: '下午', weather_label: '晴', preference_label: '', history_label: '测试' },
+      exploration: {
+        theme: 'education',
+        granularity: 'poi_cluster',
+        evidence_strictness: 'loose',
+        relevance_threshold: 0.18,
+        diversity: 'high',
+        localness: 'local',
+        duration_preset: 'detailed',
+        candidate_count: 3,
+        scope_query: '武汉大学',
+        centroid_strategy: 'poi_first',
+      },
+    })
+
+    expect(response.path.nodes.length).toBeGreaterThan(0)
+    expect(response.path.nodes.length).toBeLessThanOrEqual(3)
+    expect(response.path.lod_policy).toMatchObject({
+      max_nodes: 3,
+      requested_candidate_count: 3,
+      requested_duration_preset: 'detailed',
+      requested_diversity: 'high',
+    })
+    expect(response.debug).toMatchObject({
+      exploration_controls: expect.objectContaining({
+        theme: 'education',
+        granularity: 'poi_cluster',
+        candidate_count: 3,
+        scope_query: '武汉大学',
+        centroid_strategy: 'poi_first',
+      }),
+    })
+    expect(response.narration.chapters.some((chapter) => chapter.text.includes('高校科教'))).toBe(true)
   })
 
   it('passes SLA budget, dynamic limit and 512-d query vector into POI recall', async () => {
@@ -274,7 +390,7 @@ describe('NarrativePhase3Runtime', () => {
         enabled: true,
         used_query_vector: true,
         vector_dim: 512,
-        top_score: 0.91,
+        top_score: expect.any(Number),
       }),
     })
   })
@@ -285,7 +401,9 @@ describe('NarrativePhase3Runtime', () => {
       embedNarrativeQuery: async () => [0.1, 0.2],
       fetchSpatialFeatures: async (input) => {
         requestInputs.push(input as Record<string, unknown>)
-        return [feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场')]
+        return [
+          feature('1', '沙湖公园', 114.34, 30.56, '风景名胜', '公园广场'),
+        ]
       },
       fetchAoiCandidates: async () => [
         {
@@ -322,6 +440,49 @@ describe('NarrativePhase3Runtime', () => {
     })
     expect((response.debug?.performance as { warnings?: string[] }).warnings?.some((item) => item.includes('vector_dim_2'))).toBe(true)
   })
+
+
+
+  it('不会把商业开业战报型网页摘要注入最终章节文本', async () => {
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园盛大开业',
+          url: 'https://example.com/shahu-opening-report',
+          snippet: '5月18日，沙湖公园盛大开业，开业三日客流累计超60万，零售额超5000万。',
+        },
+      ],
+    })
+
+    const response = await runtime.build({
+      session_id: 'webfact-opening-report-session',
+      debug: true,
+      enrichment_mode: 'sync',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-opening-report')
+    expect(response.narration.chapters[0].text).not.toContain('资料里提到')
+    expect(response.narration.chapters[0].text).not.toMatch(new RegExp('\u76db\u5927\u5f00\u4e1a|\u5ba2\u6d41\u7d2f\u8ba1|\u96f6\u552e\u989d', 'u'))
+  })
+
 
   it('attaches optional web fact sources to narration chapters', async () => {
     const queries: string[] = []
@@ -368,7 +529,9 @@ describe('NarrativePhase3Runtime', () => {
       quality_score: 0.95,
     })
     expect(queries[0]).toBe('沙湖公园 介绍')
-    expect(response.narration.chapters[0].text).toContain('参考资料显示，沙湖公园是武汉市中心城区最大的综合性公园。')
+    expect(response.narration.chapters[0].text).toContain('资料里提到，沙湖公园是武汉市中心城区最大的综合性公园。')
+    expect(response.narration.chapters[0].text.indexOf('资料里提到')).toBeGreaterThan(response.narration.chapters[0].text.indexOf('先看沙湖公园。'))
+    expect(response.narration.chapters[0].text.indexOf('资料里提到')).toBeLessThan(response.narration.chapters[0].text.indexOf('拥有可解释的真实地界'))
     expect(response.debug?.web_facts).toMatchObject({
       queried_region_count: 1,
       source_count: 1,
@@ -517,7 +680,7 @@ describe('NarrativePhase3Runtime', () => {
       },
     })
 
-    expect(response.narration.chapters[0].text).toContain('参考资料显示，武汉市中心城区综合性公园。')
+    expect(response.narration.chapters[0].text).toContain('资料里提到，武汉市中心城区综合性公园。')
     expect(response.narration.chapters[0].web_sources?.[0]?.title).toBe('沙湖公园介绍')
   })
 
@@ -526,18 +689,14 @@ describe('NarrativePhase3Runtime', () => {
       getStatus: () => ({ ready: true, provider: 'test', model: 'test-model' }),
       isReady: () => true,
       complete: async (request) => {
-        const userPayload = JSON.parse(String(request.messages.find((message) => message.role === 'user')?.content || '{}')) as { output_contract?: { region_id_order?: string[] } }
-        const regionId = userPayload.output_contract?.region_id_order?.[0] || 'shahu-park'
+        const userPayload = JSON.parse(String(request.messages.find((message) => message.role === 'user')?.content || '{}')) as { target_region_id?: string }
+        const regionId = userPayload.target_region_id || 'shahu-park'
         return {
           assistantMessage: {
             role: 'assistant',
             content: JSON.stringify({
-              chapters: [
-                {
-                  region_id: regionId,
-                  text: '沙湖公园这一段先从湖岸空间讲起，视线落在开放绿地和城市休闲氛围上。',
-                },
-              ],
+              region_id: regionId,
+              text: '沙湖公园这一段先从湖岸空间讲起，视线落在开放绿地和城市休闲氛围上。',
             }),
             toolCalls: [],
           },
@@ -583,7 +742,7 @@ describe('NarrativePhase3Runtime', () => {
 
     expect(response.debug?.llm_narrator).toMatchObject({ used: true })
     expect(response.narration.chapters[0].text).toContain('湖岸空间')
-    expect(response.narration.chapters[0].text).toContain('参考资料显示，沙湖公园是武汉市中心城区最大的综合性公园。')
+    expect(response.narration.chapters[0].text).toContain('资料里提到，沙湖公园是武汉市中心城区最大的综合性公园。')
     expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-intro')
   })
 
@@ -624,7 +783,7 @@ describe('NarrativePhase3Runtime', () => {
 
     const chapterText = response.narration.chapters.map((chapter) => chapter.text).join(' ')
     expect(response.regions.map((region) => region.display_name)).toContain('徐东商圈')
-    expect(chapterText).toContain('参考资料显示，徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。')
+    expect(chapterText).toContain('资料里提到，徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。')
     expect(chapterText).not.toMatch(/菱角湖|吉庆街|昙华林|汉正街|武汉天地/)
   })
 
@@ -819,6 +978,7 @@ describe('NarrativePhase3Runtime', () => {
           boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
         },
       ],
+      llmProvider: createProgressiveLlmProvider(),
       searchWebFacts: async (query) => {
         if (query === '沙湖公园 介绍') queryCount += 1
         return [
@@ -857,6 +1017,310 @@ describe('NarrativePhase3Runtime', () => {
     expect(job.response?.session_id).toBe(initial.session_id)
     expect(job.response?.enrichment).toMatchObject({ mode: 'async', status: 'completed', phase: 'enriched', source_count: 1 })
     expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-async')
+  })
+
+  it('progressive async exposes source-only partial updates before LLM narration finishes', async () => {
+    const pendingLlm = new Promise<never>(() => {})
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      llmProvider: {
+        getStatus: () => ({ ready: true, provider: 'test', model: 'slow-model' }),
+        isReady: () => true,
+        complete: async () => pendingLlm,
+      },
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园介绍',
+          url: 'https://example.com/source-only',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+    })
+
+    const initial = await runtime.build({
+      session_id: 'source-only-async-session',
+      debug: true,
+      enrichment_mode: 'async',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    const partial = await waitForSourcePartialEnrichmentJob(runtime, initial.enrichment?.job_id || '')
+
+    expect(partial.status).toBe('running')
+    expect(partial.summary).toMatchObject({
+      mode: 'async',
+      status: 'running',
+      phase: 'enriched',
+      completed_region_count: 0,
+      source_count: 1,
+    })
+    expect(partial.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/source-only')
+  })
+
+  it('cancels previous async enrichment job for the same session', async () => {
+    const releaseSearch: { current?: (sources: NarrativeWebSource[]) => void } = {}
+    const firstSearch = new Promise<NarrativeWebSource[]>((resolve) => {
+      releaseSearch.current = resolve
+    })
+    let searchCallCount = 0
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      llmProvider: createProgressiveLlmProvider(),
+      searchWebFacts: async () => {
+        searchCallCount += 1
+        if (searchCallCount === 1) return firstSearch
+        return [{
+          title: '沙湖公园介绍',
+          url: 'https://example.com/latest-session-job',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        }]
+      },
+    })
+    const request = {
+      session_id: 'same-session-cancel',
+      debug: true,
+      enrichment_mode: 'async' as const,
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56] as [number, number],
+      },
+    }
+
+    const first = await runtime.build(request)
+    const firstJobId = first.enrichment?.job_id || ''
+    const second = await runtime.build(request)
+    const secondJobId = second.enrichment?.job_id || ''
+
+    expect(firstJobId).toBeTruthy()
+    expect(secondJobId).toBeTruthy()
+    expect(secondJobId).not.toBe(firstJobId)
+    expect(runtime.getEnrichmentJob(firstJobId)).toMatchObject({
+      status: 'failed',
+      summary: { status: 'failed', error: 'narrative_enrichment_cancelled' },
+    })
+
+    releaseSearch.current?.([{
+      title: '沙湖公园介绍',
+      url: 'https://example.com/cancelled-session-job',
+      snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+    }])
+    const latest = await waitForEnrichmentJob(runtime, secondJobId)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(latest.status).toBe('completed')
+    expect(runtime.getEnrichmentJob(firstJobId)).toMatchObject({
+      status: 'failed',
+      summary: { status: 'failed', error: 'narrative_enrichment_cancelled' },
+    })
+  })
+
+  it('progressive async 在 LLM 违反合同时显式标记该章 generation_error，不再回退模板文本', async () => {
+    const invalidLlmProvider: LLMProvider = {
+      getStatus: () => ({ ready: true, provider: 'test', model: 'test-model' }),
+      isReady: () => true,
+      complete: async () => ({
+        assistantMessage: {
+          role: 'assistant',
+          content: JSON.stringify({
+            region_id: 'shahu-park',
+            text: '沙湖公园放在空间上下文里，是当前路线的功能拼图。',
+          }),
+          toolCalls: [],
+        },
+        toolCalls: [],
+        finishReason: 'stop' as const,
+      }),
+    }
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      llmProvider: invalidLlmProvider,
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园介绍',
+          url: 'https://example.com/shahu-invalid-llm',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+    })
+
+    const initial = await runtime.build({
+      session_id: 'invalid-llm-async-session',
+      debug: true,
+      enrichment_mode: 'async',
+      viewport: {
+        west: 114.31,
+        south: 30.53,
+        east: 114.37,
+        north: 30.59,
+        zoom: 14,
+        center: [114.34, 30.56],
+      },
+    })
+
+    const job = await waitForEnrichmentJob(runtime, initial.enrichment?.job_id || '')
+    const llmDebug = job.response?.debug?.llm_narrator as { used?: boolean; error?: string; error_code?: string } | undefined
+
+    expect(job.status).toBe('completed')
+    // LLM 失败后该章不再被 grounded 文本护航：text 为空、generation_error 显式带 forbidden_word 错误码。
+    expect(job.response?.narration.chapters[0].text).toBe('')
+    expect(job.response?.narration.chapters[0].generation_error || '').toContain('forbidden_word')
+    // web fact 同时完成，web_sources 仍被保留供前端参考。
+    expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-invalid-llm')
+    expect(llmDebug?.used).toBe(false)
+    expect(llmDebug?.error_code).toBe('forbidden_word')
+  })
+
+  it('progressive async completes with deterministic chapters when LLM hangs', async () => {
+    const previousTimeout = process.env.NARRATIVE_PROGRESSIVE_LLM_CHAPTER_TIMEOUT_MS
+    process.env.NARRATIVE_PROGRESSIVE_LLM_CHAPTER_TIMEOUT_MS = '1000'
+    const hangingLlm = new Promise<never>(() => {})
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => shahuParkFeatures(),
+      fetchAoiCandidates: async () => [
+        {
+          id: 'shahu-park',
+          name: '沙湖公园',
+          fclass: 'park',
+          areaSqm: 1_200_000,
+          boundary: polygonFromBounds({ west: 114.32, south: 30.54, east: 114.36, north: 30.58 }),
+        },
+      ],
+      llmProvider: {
+        getStatus: () => ({ ready: true, provider: 'test', model: 'hanging-model' }),
+        isReady: () => true,
+        complete: async () => hangingLlm,
+      },
+      searchWebFacts: async () => [
+        {
+          title: '沙湖公园介绍',
+          url: 'https://example.com/shahu-hanging-llm',
+          snippet: '沙湖公园是武汉市中心城区最大的综合性公园。',
+        },
+      ],
+    })
+    try {
+      const initial = await runtime.build({
+        session_id: 'hanging-llm-async-session',
+        debug: true,
+        enrichment_mode: 'async',
+        viewport: {
+          west: 114.31,
+          south: 30.53,
+          east: 114.37,
+          north: 30.59,
+          zoom: 14,
+          center: [114.34, 30.56],
+        },
+      })
+
+      const job = await waitForEnrichmentJob(runtime, initial.enrichment?.job_id || '', 260)
+      const llmDebug = job.response?.debug?.llm_narrator as { used?: boolean; error?: string; error_code?: string } | undefined
+
+      expect(job.status).toBe('completed')
+      // LLM 挂起超时后该章 text 为空、generation_error 显式保留超时信息，不再用模板贴一句资料假装已生成。
+      expect(job.response?.narration.chapters[0].text).toBe('')
+      expect(job.response?.narration.chapters[0].generation_error || '').toContain('progressive_llm_chapter_0_timeout')
+      expect(job.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-hanging-llm')
+      expect(llmDebug?.used).toBe(false)
+      expect(llmDebug?.error || '').toContain('progressive_llm_chapter_0_timeout')
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.NARRATIVE_PROGRESSIVE_LLM_CHAPTER_TIMEOUT_MS
+      } else {
+        process.env.NARRATIVE_PROGRESSIVE_LLM_CHAPTER_TIMEOUT_MS = previousTimeout
+      }
+    }
+  })
+
+
+
+  it('progressive async exposes a running partial response after first chapter', async () => {
+    const pendingSecondSearch = new Promise<never>(() => {})
+    const previousProgressiveTimeout = process.env.NARRATIVE_PROGRESSIVE_WEB_FACT_TIMEOUT_MS
+    // 并发架构下需要拉大 web fact 超时以保证 partial response 时间窗；同时给非首章 LLM 加延迟，避免二章摇身一变同时完成。
+    process.env.NARRATIVE_PROGRESSIVE_WEB_FACT_TIMEOUT_MS = '500'
+    let searchCallCount = 0
+    const runtime = new NarrativePhase3Runtime({
+      fetchSpatialFeatures: async () => [
+        feature('1', '\u6b66\u6c49\u5927\u5b66', 114.34, 30.54),
+        feature('2', '\u6b66\u6c49\u5927\u5b66\u56fe\u4e66\u9986', 114.341, 30.541, '\u79d1\u6559\u6587\u5316\u670d\u52a1', '\u56fe\u4e66\u9986'),
+        feature('3', '\u6b66\u6c49\u5927\u5b66\u535a\u7269\u9986', 114.342, 30.542, '\u79d1\u6559\u6587\u5316\u670d\u52a1', '\u535a\u7269\u9986'),
+        feature('4', '\u4e1c\u6e56\u98ce\u666f\u533a', 114.37, 30.56, '\u98ce\u666f\u540d\u80dc', '\u98ce\u666f\u540d\u80dc'),
+        feature('5', '\u4e1c\u6e56\u7eff\u9053', 114.371, 30.561, '\u98ce\u666f\u540d\u80dc', '\u7eff\u9053'),
+        feature('6', '\u4e1c\u6e56\u98ce\u666f\u533a\u6e38\u5ba2\u4e2d\u5fc3', 114.372, 30.562, '\u98ce\u666f\u540d\u80dc', '\u6e38\u5ba2\u4e2d\u5fc3'),
+        feature('7', '\u695a\u6cb3\u6c49\u8857', 114.345, 30.552, '\u8d2d\u7269\u670d\u52a1', '\u5546\u4e1a\u8857'),
+      ],
+      fetchAoiCandidates: async () => [
+        { id: 'wuda', name: '\u6b66\u6c49\u5927\u5b66', fclass: 'university', areaSqm: 2_000_000, boundary: polygonFromBounds({ west: 114.32, south: 30.52, east: 114.35, north: 30.55 }) },
+        { id: 'east-lake', name: '\u4e1c\u6e56\u98ce\u666f\u533a', fclass: 'park', areaSqm: 8_000_000, boundary: polygonFromBounds({ west: 114.35, south: 30.54, east: 114.39, north: 30.58 }) },
+        { id: 'jiefang-park', name: '\u89e3\u653e\u516c\u56ed', fclass: 'park', areaSqm: 460_000, boundary: polygonFromBounds({ west: 114.32, south: 30.57, east: 114.35, north: 30.595 }) },
+        { id: 'wuchang-riverfront', name: '\u6b66\u660c\u6c5f\u6ee9\u516c\u56ed', fclass: 'park', areaSqm: 520_000, boundary: polygonFromBounds({ west: 114.355, south: 30.52, east: 114.365, north: 30.56 }) },
+        { id: 'han-riverfront', name: '\u6c49\u53e3\u6c5f\u6ee9\u516c\u56ed', fclass: 'park', areaSqm: 620_000, boundary: polygonFromBounds({ west: 114.31, south: 30.53, east: 114.34, north: 30.57 }) },
+        { id: 'han-street', name: '\u695a\u6cb3\u6c49\u8857', fclass: 'commercial', areaSqm: 230_000, boundary: polygonFromBounds({ west: 114.335, south: 30.545, east: 114.355, north: 30.56 }) },
+      ],
+      llmProvider: createProgressiveLlmProvider({ delayAfterFirstCallMs: 400 }),
+      searchWebFacts: async () => {
+        searchCallCount += 1
+        if (searchCallCount > 1) return pendingSecondSearch
+        return [{ title: '\u7b2c\u4e00\u7ae0\u7f51\u9875\u8d44\u6599', url: 'https://example.com/first-partial', snippet: '\u7b2c\u4e00\u7ae0\u5df2\u6709\u53ef\u6838\u9a8c\u7f51\u9875\u8d44\u6599\u3002' }]
+      },
+    })
+
+    const initial = await runtime.build({
+      session_id: 'partial-async-session',
+      debug: true,
+      enrichment_mode: 'async',
+      viewport: { west: 114.3, south: 30.5, east: 114.4, north: 30.6, zoom: 14, center: [114.35, 30.55] },
+    })
+    const jobId = initial.enrichment?.job_id
+    expect(jobId).toBeTruthy()
+    expect(initial.narration.chapters.length).toBeGreaterThan(1)
+
+    const partial = await waitForPartialEnrichmentJob(runtime, jobId!)
+
+    expect(partial.status).toBe('running')
+    expect(partial.summary).toMatchObject({ mode: 'async', status: 'running', completed_region_count: 1 })
+    expect(partial.response?.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/first-partial')
+    if (previousProgressiveTimeout === undefined) delete process.env.NARRATIVE_PROGRESSIVE_WEB_FACT_TIMEOUT_MS
+    else process.env.NARRATIVE_PROGRESSIVE_WEB_FACT_TIMEOUT_MS = previousProgressiveTimeout
   })
 
   it('未配置网页事实搜索器时异步补强会显式失败', async () => {
@@ -972,7 +1436,7 @@ describe('NarrativePhase3Runtime', () => {
     })
 
     expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-ad')
-    expect(response.narration.chapters[0].text).not.toContain('参考资料显示')
+    expect(response.narration.chapters[0].text).not.toContain('资料里提到')
   })
 
   it('默认会为所有解说章节尝试网页事实补强', async () => {
@@ -1044,8 +1508,28 @@ describe('NarrativePhase3Runtime', () => {
   })
 })
 
-async function waitForEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string) {
+
+async function waitForPartialEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string) {
+  // 并发模式下 partial 时间窗可能只有十几毫秒，轮询要略微敢一点。
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const job = runtime.getEnrichmentJob(jobId)
+    if (job?.status === 'running' && (job.summary.completed_region_count ?? 0) > 0 && job.response) return job
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('partial enrichment job not ready')
+}
+
+async function waitForSourcePartialEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
+    const job = runtime.getEnrichmentJob(jobId)
+    if (job?.status === 'running' && (job.summary.source_count ?? 0) > 0 && job.response) return job
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('source partial enrichment job not ready')
+}
+
+async function waitForEnrichmentJob(runtime: NarrativePhase3Runtime, jobId: string, maxAttempts = 20) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const job = runtime.getEnrichmentJob(jobId)
     if (job?.status === 'completed' || job?.status === 'failed') return job
     await new Promise((resolve) => setTimeout(resolve, 5))

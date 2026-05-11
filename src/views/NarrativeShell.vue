@@ -6,7 +6,13 @@
         <div class="narrative-shell-skeleton">
           <header class="shell-topbar">
             <div class="shell-brand">
-              <span class="shell-brand-mark" />
+              <span class="shell-brand-mark">
+                <svg viewBox="0 0 28 28" width="28" height="28" focusable="false">
+                  <path d="M14 2C9.03 2 5 5.8 5 10.5 5 17 14 26 14 26s9-9 9-15.5C23 5.8 18.97 2 14 2z" fill="#60a5fa" opacity="0.88" />
+                  <circle cx="14" cy="10.5" r="5" fill="#131927" />
+                  <path d="M12 8.2v4.6l4-2.3z" fill="#60a5fa" />
+                </svg>
+              </span>
               <div>
                 <strong>智能地图解说引擎</strong>
                 <span>正在加载 narrative 工作台</span>
@@ -87,9 +93,9 @@ const NarrativeMode = defineAsyncComponent(() => import('./NarrativeMode.vue'))
 .shell-brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #60a5fa, #818cf8);
-  box-shadow: 0 0 20px rgba(96, 165, 250, 0.5);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
 }
 
 .shell-brand strong,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import type { NarrativeBoundaryGeometry, NarrativePoi } from '../../../src/narrative/contract.js'
-import { buildNarrationChapters } from '../../../src/narrative/factGrounding.js'
+import { buildChapterScaffolds, buildRegionFacts, isAllowedFact } from '../../../src/narrative/factGrounding.js'
+import { buildPoiBusinessProfile } from '../../../src/narrative/poiBusinessProfile.js'
 import type { RegionCandidate } from '../../../src/narrative/regionCandidate.js'
 
 const boundary: NarrativeBoundaryGeometry = {
@@ -18,15 +19,8 @@ function region(pois: NarrativePoi[] = []): RegionCandidate {
     boundary,
     visual_layer: { mode: 'region_glow', poi_heat: { radius: 24, points: [] } },
     pois,
-    narrative_facts: [
-      {
-        claim: '武汉理工大学余家头校区。武汉理工大学余家头校区在当前视野中有可用的真实地界。',
-        source: 'aoi_entity',
-        confidence: 0.92,
-        verified: true,
-        related_entity: { type: 'region', id: 'wut-yujiatou' },
-      },
-    ],
+    narrative_facts: [],
+    story_tags: ['education'],
     score: 1,
     source: 'aoi',
     coverage: 0.2,
@@ -35,66 +29,94 @@ function region(pois: NarrativePoi[] = []): RegionCandidate {
   }
 }
 
-describe('buildNarrationChapters', () => {
-  it('压缩章节事实开头重复出现的片区名', () => {
-    const chapters = buildNarrationChapters({ regions: [region()], tone: 'tour', scene: 'education_culture' })
+describe('buildChapterScaffolds', () => {
+  it('为每个候选片区生成空文本骨架，仅保留 region_id 与时长元数据', () => {
+    const chapters = buildChapterScaffolds({ regions: [region()], lod: 'meso' })
 
-    expect(chapters[0].text).not.toContain('武汉理工大学余家头校区。武汉理工大学余家头校区')
-    expect(chapters[0].text).toContain('先看武汉理工大学余家头校区。')
-    expect(chapters[0].text).toContain('拥有可解释的真实地界。')
-    expect(chapters[0].text).not.toContain('当前视野中')
+    expect(chapters).toHaveLength(1)
+    expect(chapters[0].region_id).toBe('wut-yujiatou')
+    expect(chapters[0].text).toBe('')
+    expect(chapters[0].generation_error).toBeUndefined()
+    expect(chapters[0].length_ms).toBeGreaterThan(0)
+    expect(chapters[0].story_tags).toEqual(['education'])
   })
 
-  it('后续章节优先使用空间转场而不是当前视野占位话术', () => {
-    const left = region()
+  it('片区数量决定章节数量，顺序与输入一致', () => {
     const right = { ...region(), id: 'right-region', display_name: '右侧片区' }
-    const chapters = buildNarrationChapters({
-      regions: [left, right],
-      tone: 'tour',
-      scene: 'education_culture',
-      pathNodes: [
-        { region_id: left.id, transition_reason: '从西侧开始。' },
-        { region_id: right.id, transition_reason: '右侧片区在武汉理工大学余家头校区的东侧，两个片区沿道路相互衔接。' },
-      ],
-    })
+    const chapters = buildChapterScaffolds({ regions: [region(), right] })
 
-    expect(chapters[1].text).toContain('右侧片区在武汉理工大学余家头校区的东侧')
-    expect(chapters[1].text).not.toContain('位于当前视野范围内')
+    expect(chapters.map((chapter) => chapter.region_id)).toEqual(['wut-yujiatou', 'right-region'])
+    expect(chapters.every((chapter) => chapter.text === '')).toBe(true)
   })
 
-  it('同一片区会按探索主题切换讲解重心', () => {
-    const commerce = buildNarrationChapters({
-      regions: [region()],
-      tone: 'tour',
-      scene: 'education_culture',
-      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察商业活力、消费锚点、商圈层级与餐饮休闲支撑', history_label: '测试' },
-    })
-    const education = buildNarrationChapters({
-      regions: [region()],
-      tone: 'humanity',
-      scene: 'education_culture',
-      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察高校科教、校园文化、周边生活与知识社区', history_label: '测试' },
-    })
+  it('章节时长受 LOD 与有效 POI 数量影响', () => {
+    const microShort = buildChapterScaffolds({ regions: [region()], lod: 'micro' })[0]
+    const macroShort = buildChapterScaffolds({ regions: [region()], lod: 'macro' })[0]
 
-    expect(commerce[0].text).toContain('商业活力')
-    expect(commerce[0].text).toContain('消费核心')
-    expect(education[0].text).toContain('高校科教')
-    expect(education[0].text).toContain('校园文化')
-    expect(commerce[0].text).not.toEqual(education[0].text)
+    expect(microShort.length_ms).toBeGreaterThan(macroShort.length_ms ?? 0)
+  })
+})
+
+describe('buildRegionFacts', () => {
+  it('保留高置信、verified、不命中禁词的事实', () => {
+    const facts = buildRegionFacts({ region: region(), scene: 'education_culture' })
+
+    expect(facts.length).toBeGreaterThan(0)
+    expect(facts.every((fact) => fact.verified && fact.confidence >= 0.7)).toBe(true)
+    expect(facts.every(isAllowedFact)).toBe(true)
   })
 
-  it('章节生态描述不会暴露住宅类类别', () => {
-    const chapters = buildNarrationChapters({
-      regions: [region([
-        { id: 'home', lon: 114.35, lat: 30.55, display_name: '某住宅', tier: 'medium', role: 'scene_evidence', category_main: '商务住宅' },
-        { id: 'mall', lon: 114.351, lat: 30.551, display_name: '购物中心', tier: 'medium', role: 'scene_evidence', category_main: '购物服务' },
-      ])],
-      tone: 'tour',
-      scene: 'commercial_leisure',
-      userContext: { time_label: '下午', weather_label: '晴', preference_label: '优先观察商业活力、消费锚点、商圈层级与餐饮休闲支撑', history_label: '测试' },
-    })
+  it('AOI 来源的片区生成"拥有可解释的真实地界"事实', () => {
+    const facts = buildRegionFacts({ region: region(), scene: 'education_culture' })
 
-    expect(chapters[0].text).not.toContain('商务住宅')
-    expect(chapters[0].text).toContain('购物服务')
+    expect(facts.some((fact) => fact.claim.includes('真实地界'))).toBe(true)
+  })
+
+  it('把片区业态画像注入可用事实', () => {
+    const pois: NarrativePoi[] = [
+      { id: 'food-1', lon: 114.35, lat: 30.55, display_name: '甲小吃', tier: 'medium', role: 'scene_evidence', category_main: '餐饮服务', category_sub: '小吃快餐店' },
+      { id: 'food-2', lon: 114.351, lat: 30.551, display_name: '乙小吃', tier: 'medium', role: 'scene_evidence', category_main: '餐饮服务', category_sub: '小吃快餐店' },
+      { id: 'food-3', lon: 114.352, lat: 30.552, display_name: '丙饭馆', tier: 'medium', role: 'scene_evidence', category_main: '餐饮服务', category_sub: '中餐厅' },
+    ]
+    const current = {
+      ...region(pois),
+      business_profile: buildPoiBusinessProfile({ pois }),
+    }
+
+    const facts = buildRegionFacts({ region: current, scene: 'commercial_leisure' })
+
+    expect(facts.some((fact) => fact.source === 'poi_business_profile')).toBe(true)
+    expect(facts.some((fact) => fact.claim.includes('小吃快餐店'))).toBe(true)
+    expect(facts.every((fact) => !fact.claim.includes('POI'))).toBe(true)
+  })
+})
+
+describe('isAllowedFact', () => {
+  it('拒绝未 verified 或置信度低于 0.7 的事实', () => {
+    expect(isAllowedFact({
+      claim: '某地点是真实地点。',
+      source: 'postgis',
+      confidence: 0.6,
+      verified: true,
+      related_entity: { type: 'region', id: 'x' },
+    })).toBe(false)
+
+    expect(isAllowedFact({
+      claim: '某地点是真实地点。',
+      source: 'postgis',
+      confidence: 0.9,
+      verified: false,
+      related_entity: { type: 'region', id: 'x' },
+    })).toBe(false)
+  })
+
+  it('拒绝命中禁词的事实（住宅、广告、工程术语等）', () => {
+    expect(isAllowedFact({
+      claim: '某宿舍是真实地点。',
+      source: 'postgis',
+      confidence: 0.95,
+      verified: true,
+      related_entity: { type: 'region', id: 'x' },
+    })).toBe(false)
   })
 })

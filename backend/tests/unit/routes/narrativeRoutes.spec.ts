@@ -64,6 +64,50 @@ describe('narrative routes', () => {
     })
   })
 
+  it('streams enrichment job state as an SSE event', async () => {
+    const narrative: NarrativeBuilder = {
+      async build(_input: NarrativeRequest) {
+        return response()
+      },
+      getEnrichmentJob(jobId: string) {
+        if (jobId !== 'job-1') return undefined
+        return {
+          job_id: 'job-1',
+          status: 'completed',
+          summary: {
+            job_id: 'job-1',
+            mode: 'async',
+            status: 'completed',
+            phase: 'enriched',
+            total_region_count: 1,
+            completed_region_count: 1,
+            cached_region_count: 0,
+            source_count: 2,
+          },
+          response: response(),
+        }
+      },
+    }
+    const app = createApp({
+      registry: new SkillRegistry(),
+      version: 'test',
+      checkDatabaseHealth: async () => true,
+      narrative,
+    })
+
+    const result = await app.inject({ method: 'GET', url: '/api/narrative/enrichment/job-1/events' })
+
+    expect(result.statusCode).toBe(200)
+    expect(result.headers['content-type']).toContain('text/event-stream')
+    expect(result.body).toContain('event: enrichment')
+    const dataLine = result.body.split('\n').find((line) => line.startsWith('data: '))
+    expect(JSON.parse(String(dataLine || '').slice('data: '.length))).toMatchObject({
+      job_id: 'job-1',
+      status: 'completed',
+      summary: { source_count: 2 },
+    })
+  })
+
   it('returns 404 for missing enrichment job', async () => {
     const narrative: NarrativeBuilder = {
       async build(_input: NarrativeRequest) {

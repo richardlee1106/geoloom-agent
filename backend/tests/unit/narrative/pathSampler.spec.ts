@@ -151,6 +151,52 @@ describe('sampleNarrativePath', () => {
     expect(result.relations[0].shared_story_tags).toEqual(expect.arrayContaining(['food']))
   })
 
+  it('uses exploration focus to prefer theme-matched route candidates', () => {
+    const mixed = [
+      candidate('generic-core', 'primary_region', 114.34, 30.54, 0.9, '公共设施'),
+      candidate('generic-a', 'support_region', 114.341, 30.541, 0.82, '公共设施'),
+      candidate('generic-b', 'support_region', 114.342, 30.542, 0.81, '公共设施'),
+      candidate('generic-c', 'support_region', 114.343, 30.543, 0.8, '公共设施'),
+      candidate('generic-d', 'support_region', 114.344, 30.544, 0.79, '公共设施'),
+      candidate('generic-e', 'support_region', 114.345, 30.545, 0.78, '公共设施'),
+      candidate('commerce-anchor', 'support_region', 114.346, 30.546, 0.56, '购物服务'),
+      candidate('education-anchor', 'support_region', 114.347, 30.547, 0.56, '科教文化服务'),
+    ]
+
+    const commerce = sampleNarrativePath({ candidates: mixed, viewport, lod: 'micro', seed: 'theme-route', focus: 'commerce' })
+    const education = sampleNarrativePath({ candidates: mixed, viewport, lod: 'micro', seed: 'theme-route', focus: 'education' })
+    const commerceIds = commerce.nodes.map((node) => node.region_id)
+    const educationIds = education.nodes.map((node) => node.region_id)
+
+    expect(commerceIds).toContain('commerce-anchor')
+    expect(educationIds).toContain('education-anchor')
+    expect(commerceIds).not.toEqual(educationIds)
+  })
+
+  it('uses hard evidence standards for family commute and tourism focus', () => {
+    const mixed = [
+      candidate('shopping-mall', 'primary_region', 114.34, 30.54, 0.92, '购物服务'),
+      candidate('daily-service', 'support_region', 114.341, 30.541, 0.88, '生活服务'),
+      candidate('沙湖公园', 'support_region', 114.342, 30.542, 0.58, '风景名胜'),
+      candidate('儿童游乐区', 'support_region', 114.343, 30.543, 0.54, '公共设施'),
+      candidate('地铁站', 'support_region', 114.344, 30.544, 0.5, '交通设施服务'),
+      candidate('公交换乘站', 'support_region', 114.345, 30.545, 0.48, '交通设施服务'),
+      candidate('江汉路步行街', 'support_region', 114.346, 30.546, 0.46, '科教文化服务'),
+      candidate('磨山景区', 'support_region', 114.347, 30.547, 0.44, '风景名胜'),
+    ]
+
+    const family = sampleNarrativePath({ candidates: mixed, viewport, lod: 'micro', seed: 'hard-focus', focus: 'family' }).nodes.map((node) => node.region_id)
+    const commute = sampleNarrativePath({ candidates: mixed, viewport, lod: 'micro', seed: 'hard-focus', focus: 'commute' }).nodes.map((node) => node.region_id)
+    const tourism = sampleNarrativePath({ candidates: mixed, viewport, lod: 'micro', seed: 'hard-focus', focus: 'tourism' }).nodes.map((node) => node.region_id)
+
+    expect(family).toEqual(expect.arrayContaining(['沙湖公园', '儿童游乐区']))
+    expect(family).not.toContain('shopping-mall')
+    expect(commute).toEqual(expect.arrayContaining(['地铁站', '公交换乘站']))
+    expect(commute).not.toContain('daily-service')
+    expect(tourism).toEqual(expect.arrayContaining(['江汉路步行街', '磨山景区']))
+    expect(tourism).not.toContain('shopping-mall')
+  })
+
   it('uses LOD policy differences to expose product route behavior', () => {
     const varied = [
       candidate('core', 'primary_region', 114.34, 30.54, 0.9, '科教文化服务'),
@@ -167,6 +213,33 @@ describe('sampleNarrativePath', () => {
     expect(micro.lodPolicy).toMatchObject({ distance_bias: 'strong', diversity_bias: 'local_detail', max_nodes: 5 })
     expect(macro.lodPolicy).toMatchObject({ distance_bias: 'loose', diversity_bias: 'cross_section', max_nodes: 10 })
     expect(macro.nodes.length).toBeGreaterThanOrEqual(micro.nodes.length)
+  })
+
+  it('honors explicit candidate count without duration overriding it', () => {
+    const varied = [
+      candidate('core', 'primary_region', 114.34, 30.54, 0.9, '科教文化服务'),
+      candidate('park', 'support_region', 114.345, 30.542, 0.86, '风景名胜'),
+      candidate('food', 'support_region', 114.352, 30.548, 0.8, '餐饮服务'),
+      candidate('mall', 'landmark_anchor', 114.36, 30.55, 0.78, '购物服务'),
+      candidate('culture', 'support_region', 114.39, 30.59, 0.74, '科教文化服务'),
+      candidate('market', 'support_region', 114.43, 30.62, 0.72, '餐饮服务'),
+    ]
+
+    const result = sampleNarrativePath({
+      candidates: varied,
+      viewport,
+      lod: 'macro',
+      seed: 'explicit-count',
+      controls: { candidate_count: 3, duration_preset: 'detailed', diversity: 'high' },
+    })
+
+    expect(result.nodes).toHaveLength(3)
+    expect(result.lodPolicy).toMatchObject({
+      max_nodes: 3,
+      requested_candidate_count: 3,
+      requested_duration_preset: 'detailed',
+      requested_diversity: 'high',
+    })
   })
 
   it('maps richer relation taxonomy into route strategy matrix', () => {

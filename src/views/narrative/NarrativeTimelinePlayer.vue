@@ -44,6 +44,7 @@
         <button class="player-btn primary" :disabled="pathNodes.length === 0" @click="$emit('toggle-play')"><span v-html="playing ? ICONS.pause : ICONS.play" /></button>
         <button class="player-btn" :disabled="pathNodes.length === 0" @click="$emit('next')"><span v-html="ICONS.skipForward" /></button>
         <button class="player-btn" :disabled="pathNodes.length === 0" @click="$emit('forward')"><span v-html="ICONS.forward" /></button>
+        <button class="player-btn restart" :disabled="pathNodes.length === 0" title="重新播放" @click="$emit('restart')"><span v-html="ICONS.restart" /></button>
       </div>
       <div class="progress-row">
         <div class="progress-track" @click="onSeek">
@@ -82,6 +83,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'previous'): void
+  (event: 'restart'): void
   (event: 'next'): void
   (event: 'rewind'): void
   (event: 'forward'): void
@@ -108,6 +110,7 @@ const ICONS = {
   skipForward: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="2" height="16"/></svg>`,
   play: `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="6 4 20 12 6 20"/></svg>`,
   pause: `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>`,
+  restart: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 10 9 10"/></svg>`,
   chevronLeft: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`,
   chevronRight: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`
 }

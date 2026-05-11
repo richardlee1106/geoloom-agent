@@ -15,6 +15,7 @@ import {
   viewportAreaKm2,
   type Bounds,
 } from './geometry.js'
+import { buildPoiBusinessProfile } from './poiBusinessProfile.js'
 import { inferRegionStoryTags } from './storyTags.js'
 
 export interface AoiCandidateRow {
@@ -303,6 +304,7 @@ function materializeCandidate(input: {
     source: input.source,
     pois: candidatePois,
   })
+  const businessProfile = buildPoiBusinessProfile({ pois: candidatePois })
   return {
     id: input.id,
     display_name: input.displayName,
@@ -324,6 +326,7 @@ function materializeCandidate(input: {
       },
     },
     pois: gcjPois,
+    business_profile: businessProfile,
     narrative_facts: [],
     story_tags: storyTags,
     score: Number(input.score.toFixed(4)),

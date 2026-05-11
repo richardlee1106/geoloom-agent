@@ -5,29 +5,10 @@
       <!-- 品牌 Logo 区域 -->
       <div class="header-logo">
         <div class="logo-icon">
-          <!-- 地球 + 知识网络 Logo -->
-          <svg viewBox="0 0 32 32" width="32" height="32">
-            <defs>
-              <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" style="stop-color:#818cf8"/>
-                <stop offset="100%" style="stop-color:#c084fc"/>
-              </linearGradient>
-            </defs>
-            <!-- 地球轮廓 -->
-            <circle cx="16" cy="16" r="10" fill="none" stroke="url(#logo-grad)" stroke-width="1.5"/>
-            <!-- 经线 -->
-            <ellipse cx="16" cy="16" rx="5" ry="10" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.8"/>
-            <!-- 纬线 -->
-            <ellipse cx="16" cy="16" rx="10" ry="5" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.8"/>
-            <!-- 中心光点 -->
-            <circle cx="16" cy="16" r="3" fill="url(#logo-grad)"/>
-            <!-- 知识节点 -->
-            <circle cx="16" cy="6" r="2" fill="white"/>
-            <circle cx="24" cy="12" r="2" fill="white"/>
-            <circle cx="24" cy="20" r="2" fill="white"/>
-            <circle cx="16" cy="26" r="2" fill="white"/>
-            <circle cx="8" cy="20" r="2" fill="white"/>
-            <circle cx="8" cy="12" r="2" fill="white"/>
+          <svg viewBox="0 0 28 28" width="32" height="32">
+            <path d="M14 2C9.03 2 5 5.8 5 10.5 5 17 14 26 14 26s9-9 9-15.5C23 5.8 18.97 2 14 2z" fill="#818cf8" opacity="0.88" />
+            <circle cx="14" cy="10.5" r="5" fill="#0f172a" />
+            <path d="M12 8.2v4.6l4-2.3z" fill="#818cf8" />
           </svg>
         </div>
         <div class="logo-type">

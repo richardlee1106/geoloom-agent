@@ -17,7 +17,7 @@ echo.
 curl.exe -fsS "http://127.0.0.1:8880/health" >nul 2>&1
 if errorlevel 1 (
     echo [OmniVoice] Starting TTS server in background...
-    start "OmniVoice TTS" /min cmd /c ""%~dp0scripts\start-omnivoice.bat""
+    start "OmniVoice TTS" /min "%~dp0scripts\start-omnivoice.bat"
     echo [OmniVoice] TTS loading in parallel, no blocking wait.
 ) else (
     echo [OmniVoice] TTS server already running.
