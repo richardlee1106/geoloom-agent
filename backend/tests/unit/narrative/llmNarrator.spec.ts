@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { LLMProvider, LLMResponse } from '../../../src/llm/types.js'
 import type { NarrativeChapter, NarrativePoi } from '../../../src/narrative/contract.js'
 import { polygonFromBounds } from '../../../src/narrative/geometry.js'
-import { buildGraphNarrationChapter, LlmNarratorError } from '../../../src/narrative/llmNarrator.js'
+import { buildGraphNarrationChapter, LlmNarratorError, resolveLlmNarratorPromptVariant } from '../../../src/narrative/llmNarrator.js'
 import type { PathSamplerResult } from '../../../src/narrative/pathSampler.js'
 import type { RegionCandidate } from '../../../src/narrative/regionCandidate.js'
 
@@ -286,7 +286,7 @@ describe('buildGraphNarrationChapter', () => {
     }))
 
     await buildGraphNarrationChapter({
-      chapter: { ...scaffolds[1], web_sources: [{ title: '东湖介绍', url: 'http://x', snippet: '东湖是武汉市内最大的城中湖。', quality: 'encyclopedia' }] },
+      chapter: { ...scaffolds[1], web_sources: [{ title: '东湖介绍', url: 'http://x', snippet: '东湖是武汉市内最大的城中湖。[2](http://example.com/source)', quality: 'encyclopedia' }] },
       allChapters: scaffolds,
       regions,
       path,
@@ -319,6 +319,8 @@ describe('buildGraphNarrationChapter', () => {
     expect(payload.allowed_facts.length).toBeGreaterThan(0)
     expect(payload.business_profile?.summary_hint).toContain('公园广场')
     expect(payload.web_sources[0].snippet).toContain('东湖')
+    expect(payload.web_sources[0].snippet).not.toContain('http')
+    expect(payload.web_sources[0].snippet).not.toContain('[2]')
   })
 
   it('system prompt 强调把组织权交给 LLM，不再硬塞四段式骨架或调度词清单', async () => {
@@ -346,6 +348,58 @@ describe('buildGraphNarrationChapter', () => {
     expect(systemPrompt).not.toContain('空间上下文')
     expect(systemPrompt).not.toContain('chapter_rules')
     expect(systemPrompt).not.toContain('narration_control')
+  })
+
+  it('lite prompt 使用精简事实包，不下发路线调度字段', async () => {
+    const provider = createProvider(JSON.stringify({
+      region_id: 'wuda',
+      text: '武汉大学这一段，校园和周边生活连得很近，学生下课顺着树荫走到湖边吹风，路上书店和咖啡馆都很自然。',
+    }))
+
+    await buildGraphNarrationChapter({
+      chapter: scaffolds[0],
+      allChapters: scaffolds,
+      regions,
+      path,
+      scene: 'education_culture',
+      tone: 'tour',
+      userContext,
+      llmProvider: provider,
+    })
+
+    const request = vi.mocked(provider.complete).mock.calls[0][0]
+    const systemPrompt = request.messages.find((message) => message.role === 'system')?.content || ''
+    const userPrompt = request.messages.find((message) => message.role === 'user')?.content || '{}'
+    const payload = JSON.parse(userPrompt) as Record<string, unknown>
+
+    expect(systemPrompt).toContain('精简事实包')
+    expect(systemPrompt).toContain('不要把普通公园、商场、校园写成攻略清单')
+    expect(payload.narration_control).toBeUndefined()
+    expect((payload.geograph as Array<Record<string, unknown>>)[0].chapter_control).toBeUndefined()
+  })
+
+  it('清单式或 Markdown 攻略输出会被拒绝', async () => {
+    const provider = createProvider(JSON.stringify({
+      region_id: 'wuda',
+      text: '武汉大学这一段可以这么逛。1. **想活动活动**，先去操场；2. 想歇歇脚，再去湖边吹风。',
+    }))
+
+    await expect(buildGraphNarrationChapter({
+      chapter: scaffolds[0],
+      allChapters: scaffolds,
+      regions,
+      path,
+      scene: 'education_culture',
+      tone: 'tour',
+      userContext,
+      llmProvider: provider,
+    })).rejects.toMatchObject({ code: 'template_listicle' })
+  })
+
+  it('resolveLlmNarratorPromptVariant 恒返回 lite', () => {
+    expect(resolveLlmNarratorPromptVariant('auto')).toBe('lite')
+    expect(resolveLlmNarratorPromptVariant()).toBe('lite')
+    expect(resolveLlmNarratorPromptVariant('lite')).toBe('lite')
   })
 
   it('LlmNarratorError 的 code 字段可以被上游捕获用于细粒度错误处理', async () => {

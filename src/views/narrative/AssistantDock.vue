@@ -7,7 +7,10 @@
       <header class="dock-head">
         <div class="dock-title">
           <span class="dock-icon">AI</span>
-          <span>AI 助手</span>
+          <span class="dock-title-copy">
+            <strong>AI 导览副驾</strong>
+            <small>{{ assistantCapabilityLine }}</small>
+          </span>
           <span class="dock-status" :class="{ active: playing }">
             {{ playing ? '解说中' : '已暂停' }}
           </span>
@@ -59,7 +62,39 @@
           :class="['chat-msg', `chat-msg-${msg.role}`]"
         >
           <div class="chat-bubble">
-            <p class="chat-text">{{ msg.text }}</p>
+            <p class="chat-text">
+              <template v-for="(part, pidx) in messageParts(msg.text)" :key="i + '-' + pidx + '-' + part.text">
+                <button
+                  v-if="part.regionId"
+                  type="button"
+                  class="entity-token"
+                  @click="onEntityTokenClick(part.regionId)"
+                >
+                  {{ part.text }}
+                </button>
+                <span v-else>{{ part.text }}</span>
+              </template>
+            </p>
+            <ul v-if="msg.citations && msg.citations.length" class="chat-citations">
+              <li v-for="(citation, cidx) in msg.citations" :key="cidx">
+                <a
+                  v-if="citation.kind === 'web'"
+                  class="citation-card"
+                  :href="citation.ref"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span class="citation-kind">{{ citationLabel(citation.kind) }}</span>
+                  <strong>{{ citationTitle(citation) }}</strong>
+                  <small>{{ citationDetail(citation) }}</small>
+                </a>
+                <div v-else class="citation-card">
+                  <span class="citation-kind">{{ citationLabel(citation.kind) }}</span>
+                  <strong>{{ citationTitle(citation) }}</strong>
+                  <small>{{ citationDetail(citation) }}</small>
+                </div>
+              </li>
+            </ul>
             <ul v-if="msg.uiActions && msg.uiActions.length" class="chat-actions">
               <li v-for="(act, j) in msg.uiActions" :key="j">
                 <button
@@ -75,16 +110,57 @@
           </div>
         </div>
         <div v-if="thinking" class="chat-msg chat-msg-assistant">
-          <div class="chat-bubble">
-            <p class="chat-thinking">
-              <span class="dot" /><span class="dot" /><span class="dot" />
-            </p>
+          <div class="chat-bubble thinking-bubble">
+            <p class="chat-thinking-title">AI 副驾正在组织回答</p>
+            <ol class="thinking-steps">
+              <li
+                v-for="(stage, sidx) in thinkingStages"
+                :key="stage"
+                :class="{ active: sidx === thinkingStageIndex, done: sidx < thinkingStageIndex }"
+              >
+                <span class="thinking-step-dot" />
+                <span>{{ stage }}</span>
+              </li>
+            </ol>
           </div>
         </div>
       </section>
 
       <!-- 输入区：textarea 占满 + 发送按钮内嵌右下，避免与 textarea 重叠 -->
       <footer class="dock-input">
+        <div v-if="pendingReplanAction" class="replan-confirm">
+          <div>
+            <strong>准备重新分析当前视野</strong>
+            <span>{{ pendingReplanAction.reason }}</span>
+            <ul class="replan-params">
+              <li v-for="item in replanPreviewItems" :key="item.label">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </li>
+            </ul>
+          </div>
+          <div class="replan-confirm-actions">
+            <button type="button" @click="confirmReplan">确认重讲</button>
+            <button type="button" @click="cancelReplan">取消</button>
+          </div>
+        </div>
+        <div v-if="suggestionGroups.length" class="dock-suggestion-groups">
+          <section v-for="group in suggestionGroups" :key="group.title" class="suggestion-group">
+            <span class="suggestion-group-title">{{ group.title }}</span>
+            <div class="dock-suggestions">
+              <button
+                v-for="suggestion in group.items"
+                :key="suggestion"
+                type="button"
+                class="suggestion-chip"
+                :disabled="thinking"
+                @click="useSuggestion(suggestion)"
+              >
+                {{ suggestion }}
+              </button>
+            </div>
+          </section>
+        </div>
         <div class="dock-input-shell">
           <textarea
             ref="inputEl"
@@ -92,14 +168,14 @@
             class="dock-textarea"
             :placeholder="playing ? '打断解说，向 AI 助手提问...' : '向 AI 助手提问...'"
             rows="1"
-            @keydown.enter.exact.prevent="sendMessage"
+            @keydown.enter.exact.prevent="() => sendMessage()"
             @input="autoResize"
           />
           <button
             type="button"
             class="dock-send"
             :disabled="!draft.trim() || thinking"
-            @click="sendMessage"
+            @click="() => sendMessage()"
           >
             <span v-html="ICON_SEND" />
           </button>
@@ -130,22 +206,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
+import { sendNarrativeAssistantMessage } from './narrativeApi'
+import type { NarrativeAssistantResponse, NarrativeAssistantUiAction, NarrativeResponse } from './types'
+
 interface ChapterInfo {
   region_id: string
   display_name: string
   played: boolean
 }
 
-interface UIAction {
-  action: 'pause' | 'resume' | 'jump_to_chapter' | 'fly_to'
-  params: Record<string, unknown>
-  reason: string
-}
-
 interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
-  uiActions?: UIAction[]
+  uiActions?: NarrativeAssistantUiAction[]
+  citations?: NarrativeAssistantResponse['citations']
+  followUpSuggestions?: string[]
+}
+
+interface MessageTextPart {
+  text: string
+  regionId?: string
 }
 
 const props = defineProps<{
@@ -154,6 +234,7 @@ const props = defineProps<{
   playing: boolean
   totalSteps: number
   chapters: ChapterInfo[]
+  narrative: NarrativeResponse
 }>()
 
 const emit = defineEmits<{
@@ -162,6 +243,8 @@ const emit = defineEmits<{
   (e: 'resume-request'): void
   (e: 'jump-to-step', index: number): void
   (e: 'fly-to-region', regionId: string): void
+  (e: 'highlight-region', regionId: string): void
+  (e: 'request-replan', params: Record<string, unknown>): void
 }>()
 
 // ==========================================================================
@@ -170,10 +253,16 @@ const emit = defineEmits<{
 const contextOpen = ref<boolean>(false)
 const draft = ref<string>('')
 const thinking = ref<boolean>(false)
+const thinkingStageIndex = ref(0)
+const pendingReplanAction = ref<NarrativeAssistantUiAction | null>(null)
+let requestController: AbortController | null = null
+let thinkingStageTimer: number | null = null
+const thinkingStages = ['读取当前章节', '检查空间证据', '整理网页来源', '生成可执行动作']
 const messages = ref<ChatMessage[]>([
   {
     role: 'assistant',
-    text: '你好，我是 AI 助手。可以帮助你解答地图中的任何问题，欢迎提问哦~'
+    text: '你好，我是 AI 导览助手。你可以问我当前片区为什么被选中、有哪些网页来源，或者让我换一个主题重新组织路线。',
+    followUpSuggestions: ['当前片区为什么被选中？', '这章有哪些网页来源？', '按本地人视角重讲']
   }
 ])
 
@@ -181,7 +270,7 @@ const chatScrollEl = ref<HTMLElement | null>(null)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 
 // ==========================================================================
-// 派生上下文（给用户看 + 给 mock LLM 用）
+// 派生上下文（给用户看 + 给后端助手用）
 // ==========================================================================
 const currentChapterName = computed(() => {
   const c = props.chapters[props.activeStepIndex]
@@ -195,6 +284,51 @@ const pendingNames = computed(() =>
     .filter((c, i) => !c.played && i !== props.activeStepIndex)
     .map((c) => c.display_name)
 )
+const entityMatchers = computed(() =>
+  props.chapters
+    .filter((chapter) => chapter.region_id && chapter.display_name)
+    .sort((a, b) => b.display_name.length - a.display_name.length)
+)
+const assistantCapabilityLine = computed(() => {
+  const sourceCount = props.narrative.enrichment?.source_count ?? 0
+  if (sourceCount > 0) return `懂路线 · 懂空间证据 · ${sourceCount} 条网页来源`
+  if (props.totalSteps > 0) return '懂路线 · 懂空间证据 · 可控制播放'
+  return '分析当前视野后可解读路线和片区'
+})
+const suggestionGroups = computed(() => {
+  const lastAssistant = [...messages.value].reverse().find((msg) => msg.role === 'assistant')
+  const suggestions = lastAssistant?.followUpSuggestions?.filter(Boolean) ?? []
+  const currentItems = uniqueStrings([
+    ...suggestions,
+    `${currentChapterName.value}为什么被选中？`,
+    `${currentChapterName.value}有什么业态特点？`
+  ]).slice(0, 3)
+  return [
+    { title: '问当前片区', items: currentItems },
+    { title: '证据来源', items: ['这章有哪些网页来源？', '解释哪些内容来自本地数据'] },
+    { title: '换个讲法', items: ['按本地人视角重讲', '按美食路线重讲'] },
+    { title: '控制播放', items: [props.playing ? '暂停解说' : '继续解说', '下一站讲哪里？'] },
+  ].filter((group) => group.items.length > 0)
+})
+const replanPreviewItems = computed(() => {
+  const action = pendingReplanAction.value
+  if (!action) return []
+  const theme = String(action.params.theme || '')
+  const themeLabel: Record<string, string> = {
+    comprehensive: '综合观察',
+    commerce: '商业活力',
+    nightlife: '夜生活',
+    heritage: '历史人文',
+    food: '美食路线',
+    local: '本地生活'
+  }
+  return [
+    { label: '讲述主题', value: theme ? themeLabel[theme] || theme : '沿用当前主题' },
+    { label: '资料模式', value: '完整网页来源' },
+    { label: '分析范围', value: '当前地图视野' },
+    { label: '执行方式', value: '确认后重新生成路线' }
+  ]
+})
 
 // ==========================================================================
 // 行为
@@ -220,96 +354,153 @@ function autoResize() {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
-function sendMessage() {
-  const text = draft.value.trim()
+function startThinkingStages() {
+  thinkingStageIndex.value = 0
+  if (thinkingStageTimer !== null) window.clearInterval(thinkingStageTimer)
+  thinkingStageTimer = window.setInterval(() => {
+    thinkingStageIndex.value = Math.min(thinkingStageIndex.value + 1, thinkingStages.length - 1)
+  }, 850)
+}
+
+function stopThinkingStages() {
+  if (thinkingStageTimer !== null) {
+    window.clearInterval(thinkingStageTimer)
+    thinkingStageTimer = null
+  }
+  thinkingStageIndex.value = 0
+}
+
+async function sendMessage(textOverride?: string) {
+  const text = (textOverride ?? draft.value).trim()
   if (!text || thinking.value) return
+  pendingReplanAction.value = null
   messages.value.push({ role: 'user', text })
   draft.value = ''
   autoResize()
   scrollChatToBottomNext()
-  // mock LLM 响应：阶段 3 替换为真实 /api/narrative/assistant 调用
   thinking.value = true
-  setTimeout(() => {
+  startThinkingStages()
+  requestController?.abort()
+  requestController = new AbortController()
+  try {
+    const response = await sendNarrativeAssistantMessage({
+      session_id: props.narrative.session_id,
+      state_version: props.narrative.state_version,
+      message: text,
+      client_state: {
+        active_chapter_index: props.activeStepIndex,
+        playing: props.playing,
+        visible_region_ids: props.chapters.map((chapter) => chapter.region_id)
+      },
+      narrative_state: props.narrative
+    }, { signal: requestController.signal })
+    messages.value.push({
+      role: 'assistant',
+      text: response.text,
+      uiActions: response.ui_actions,
+      citations: response.citations,
+      followUpSuggestions: response.follow_up_suggestions
+    })
+  } catch (error) {
+    if (isAbortError(error)) return
+    messages.value.push({
+      role: 'assistant',
+      text: error instanceof Error ? `AI 助手暂时没连上：${error.message}` : 'AI 助手暂时没连上，请稍后再试。',
+      followUpSuggestions: ['当前片区为什么被选中？', '这章有哪些网页来源？', '暂停解说']
+    })
+  } finally {
+    stopThinkingStages()
     thinking.value = false
-    const reply = mockAssistantReply(text)
-    messages.value.push(reply)
+    requestController = null
     scrollChatToBottomNext()
-  }, 700 + Math.random() * 600)
+  }
 }
 
 function scrollChatToBottomNext() {
   nextTick(scrollChatToBottom)
 }
 
-// ==========================================================================
-// Mock LLM：仅占位，规则触发不同回复 + ui_actions
-// ==========================================================================
-function mockAssistantReply(userText: string): ChatMessage {
-  const t = userText.toLowerCase()
-  if (t.includes('跳过') || t.includes('下一节') || t.includes('下一章')) {
-    const next = Math.min(props.activeStepIndex + 1, props.totalSteps - 1)
-    return {
-      role: 'assistant',
-      text: `好的，我帮你跳到下一节「${props.chapters[next]?.display_name ?? ''}」。`,
-      uiActions: [
-        {
-          action: 'jump_to_chapter',
-          params: { index: next },
-          reason: '用户要求跳过当前章节'
-        }
-      ]
-    }
+function useSuggestion(suggestion: string) {
+  void sendMessage(suggestion)
+}
+
+defineExpose({
+  sendMessage
+})
+
+function onEntityTokenClick(regionId: string) {
+  emit('highlight-region', regionId)
+}
+
+function messageParts(text: string): MessageTextPart[] {
+  if (!text || entityMatchers.value.length === 0) return [{ text }]
+  const names = uniqueStrings(entityMatchers.value.map((matcher) => matcher.display_name)).filter(Boolean)
+  if (names.length === 0) return [{ text }]
+  const nameToRegion = new Map(entityMatchers.value.map((matcher) => [matcher.display_name, matcher.region_id]))
+  const pattern = new RegExp(names.map(escapeRegExp).join('|'), 'gu')
+  const parts: MessageTextPart[] = []
+  let cursor = 0
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0
+    const token = match[0]
+    if (index > cursor) parts.push({ text: text.slice(cursor, index) })
+    parts.push({ text: token, regionId: nameToRegion.get(token) })
+    cursor = index + token.length
   }
-  if (t.includes('暂停') || t.includes('停一下') || t.includes('打断')) {
-    return {
-      role: 'assistant',
-      text: '已为你暂停解说。你可以继续提问，准备好后我再继续。',
-      uiActions: [
-        { action: 'pause', params: {}, reason: '用户要求暂停' }
-      ]
-    }
-  }
-  if (t.includes('继续')) {
-    return {
-      role: 'assistant',
-      text: '好，恢复解说。',
-      uiActions: [
-        { action: 'resume', params: {}, reason: '用户要求继续' }
-      ]
-    }
-  }
-  if (t.includes('附近') || t.includes('周边') || t.includes('其他')) {
-    return {
-      role: 'assistant',
-      text: `当前在「${currentChapterName.value}」附近。本次 narrative 还会讲到：${pendingNames.value.join('、') || '本章是最后一节'}。如果你想了解其他主题（如美食 / 出行），可以让我帮你搜索。`
-    }
-  }
-  if (t.includes('重点') || t.includes('讲什么')) {
-    return {
-      role: 'assistant',
-      text: `当前章节「${currentChapterName.value}」的重点会围绕这个片区的代表性主体展开，结合周边相关点位串讲。你可以让我深入解读其中某一类（建筑 / 历史 / 周边业态）。`
-    }
-  }
-  return {
-    role: 'assistant',
-    text: `（mock 阶段）已收到你的提问："${userText}"。阶段 3 会接入真正的 LLM，从 narrative state、解说记忆、搜索、PostGIS 中检索后再回答。`
+  if (cursor < text.length) parts.push({ text: text.slice(cursor) })
+  return parts.length ? parts : [{ text }]
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function citationLabel(kind: NarrativeAssistantResponse['citations'][number]['kind']): string {
+  if (kind === 'web') return '网页'
+  if (kind === 'postgis') return '空间'
+  return '解说'
+}
+
+function citationTitle(citation: NarrativeAssistantResponse['citations'][number]): string {
+  if (citation.kind === 'web') return citation.snippet || sourceDomain(citation.ref)
+  if (citation.kind === 'postgis') return citation.snippet || '本地空间证据'
+  return citation.snippet || currentChapterName.value
+}
+
+function citationDetail(citation: NarrativeAssistantResponse['citations'][number]): string {
+  if (citation.kind === 'web') return sourceDomain(citation.ref)
+  if (citation.kind === 'postgis') return `PostGIS · ${citation.ref}`
+  return `Narrative · ${citation.ref}`
+}
+
+function sourceDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./u, '')
+  } catch {
+    return url
   }
 }
 
-// ==========================================================================
-// UI Action 执行（前端决定是否真正应用）
-// ==========================================================================
-function actionLabel(act: UIAction): string {
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+function actionLabel(act: NarrativeAssistantUiAction): string {
   switch (act.action) {
     case 'pause': return '暂停解说'
     case 'resume': return '继续解说'
     case 'jump_to_chapter': return `跳到第 ${(act.params.index as number) + 1} 节`
     case 'fly_to': return '飞到此处'
+    case 'highlight': return '高亮片区'
+    case 'request_replan': return '预览重讲'
     default: return '执行'
   }
 }
 
-function onActionClick(act: UIAction) {
+function onActionClick(act: NarrativeAssistantUiAction) {
   switch (act.action) {
     case 'pause':
       emit('pause-request')
@@ -327,7 +518,31 @@ function onActionClick(act: UIAction) {
       if (typeof rid === 'string') emit('fly-to-region', rid)
       break
     }
+    case 'highlight': {
+      const rid = act.params.region_id as string
+      if (typeof rid === 'string') emit('highlight-region', rid)
+      break
+    }
+    case 'request_replan':
+      pendingReplanAction.value = act
+      break
   }
+}
+
+function confirmReplan() {
+  if (!pendingReplanAction.value) return
+  emit('request-replan', pendingReplanAction.value.params)
+  messages.value.push({
+    role: 'assistant',
+    text: '已确认，我会按这个建议重新分析当前视野并更新导览路线。',
+    followUpSuggestions: ['重讲完成后先讲重点', '只看新路线来源']
+  })
+  pendingReplanAction.value = null
+  scrollChatToBottomNext()
+}
+
+function cancelReplan() {
+  pendingReplanAction.value = null
 }
 
 // ==========================================================================
@@ -337,7 +552,11 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 window.addEventListener('keydown', onKeydown)
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  requestController?.abort()
+  stopThinkingStages()
+  window.removeEventListener('keydown', onKeydown)
+})
 
 // ==========================================================================
 // 内联 SVG 图标（保持与 NarrativeMode 风格一致）
@@ -442,6 +661,26 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
 .dock-title {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 14px; font-weight: 600;
+  min-width: 0;
+}
+.dock-title-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.dock-title-copy strong {
+  font-size: 13.5px;
+  line-height: 1.15;
+}
+.dock-title-copy small {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--txt-mute);
+  font-weight: 500;
 }
 .dock-icon {
   display: inline-flex;
@@ -454,6 +693,7 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
   letter-spacing: 0.4px;
 }
 .dock-status {
+  flex: 0 0 auto;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 4px;
@@ -571,6 +811,75 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
   white-space: pre-wrap;
   word-break: break-word;
 }
+.entity-token {
+  display: inline;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+  font: inherit;
+  cursor: pointer;
+}
+.entity-token:hover {
+  background: rgba(96, 165, 250, 0.28);
+  color: #eff6ff;
+}
+
+.chat-citations {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+}
+
+.chat-citations li {
+  font-size: 11px;
+  color: var(--txt-mute);
+}
+
+.citation-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.34);
+  color: inherit;
+  text-decoration: none;
+}
+
+.citation-card:hover {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.citation-kind {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.citation-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--txt);
+}
+
+.citation-card small {
+  grid-column: 2 / 3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--txt-faint);
+}
 
 .chat-actions {
   list-style: none; padding: 0;
@@ -593,6 +902,48 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
   color: #fff;
 }
 
+.thinking-bubble {
+  min-width: 210px;
+}
+.chat-thinking-title {
+  margin: 0 0 8px;
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 600;
+}
+.thinking-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.thinking-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--txt-faint);
+  font-size: 11.5px;
+}
+.thinking-steps li.active {
+  color: #bfdbfe;
+}
+.thinking-steps li.done {
+  color: var(--txt-mute);
+}
+.thinking-step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.7);
+}
+.thinking-steps li.active .thinking-step-dot {
+  background: #60a5fa;
+  box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.16);
+}
+.thinking-steps li.done .thinking-step-dot {
+  background: #22c55e;
+}
 .chat-thinking {
   display: inline-flex; gap: 4px; align-items: center;
   margin: 4px 0;
@@ -617,6 +968,102 @@ const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="12" height="12" fill=
   padding: 12px 16px 14px;
   border-top: 1px solid var(--bd);
   background: var(--bg-panel);
+}
+.replan-confirm {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.34);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(15, 23, 42, 0.4));
+}
+.replan-confirm strong,
+.replan-confirm span {
+  display: block;
+}
+.replan-confirm strong {
+  font-size: 12px;
+  color: #dbeafe;
+}
+.replan-confirm span {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--txt-mute);
+}
+.replan-params {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 5px;
+}
+.replan-params li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.32);
+}
+.replan-params strong {
+  font-size: 11px;
+  color: #dbeafe;
+  font-weight: 600;
+}
+.replan-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+.replan-confirm-actions button {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  background: rgba(59, 130, 246, 0.18);
+  color: var(--txt);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+}
+.replan-confirm-actions button + button {
+  background: transparent;
+  color: var(--txt-mute);
+}
+.dock-suggestion-groups {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.suggestion-group {
+  display: grid;
+  gap: 5px;
+}
+.suggestion-group-title {
+  font-size: 10.5px;
+  color: var(--txt-faint);
+}
+.dock-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.suggestion-chip {
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  background: rgba(59, 130, 246, 0.1);
+  color: #bfdbfe;
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.suggestion-chip:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: rgba(96, 165, 250, 0.5);
+}
+.suggestion-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .dock-input-shell {
   position: relative;

@@ -4,6 +4,7 @@ import type { LLMProvider } from '../llm/types.js'
 import type { SpatialFeature, SpatialFetchRequest } from '../spatial/fetchSpatialFeatures.js'
 import type { SkillDefinition } from '../skills/types.js'
 import { createLogger } from '../utils/logger.js'
+import { attachCompanionCuesToChapters, buildNarrativeCompanionCues, type NarrativeCompanionCuesDebug } from './companionCues.js'
 import type {
   NarrativeChapter,
   NarrativeEnrichmentJob,
@@ -356,14 +357,33 @@ function sortWebSourcesByQuality(sources: NarrativeWebSource[]): NarrativeWebSou
 }
 
 function normalizeWebIntroSnippet(value: unknown): string {
-  const normalized = String(value || '')
+  const cleaned = String(value || '')
+    .replace(/\[\d+\]\((?:https?:\/\/|www\.)[^\s。！？）)]*\)?/giu, '')
+    .replace(/\[([^\]]{1,40})\]\((?:https?:\/\/|www\.)[^\s。！？）)]*\)?/giu, '$1')
+    .replace(/https?:\/\/\S+/giu, '')
+    .replace(/www\.\S+/giu, '')
+    .replace(/(?:\[\d+\]|【\d+】|（\d+）|\(\d+\))/gu, '')
+    .replace(/[*_`~#>]/gu, '')
+    .replace(/<[^>]+>/gu, '')
+    .replace(/[，,、；;：:]*[…]+.*$/u, '')
     .replace(/\s+/gu, ' ')
     .replace(/^详细介绍了?/u, '')
     .replace(/^[\s"'“”‘’：:，,。；;]+|[\s"'“”‘’]+$/gu, '')
     .trim()
-  if (!normalized || WEB_INTRO_FORBIDDEN_RE.test(normalized)) return ''
-  const clipped = normalized.length > 96 ? `${normalized.slice(0, 96)}…` : normalized
+  if (!cleaned || cleaned.length < 8 || WEB_INTRO_FORBIDDEN_RE.test(cleaned)) return ''
+  const clipped = clipWebIntroSnippet(cleaned, 96)
+  if (!clipped || clipped.length < 8 || WEB_INTRO_FORBIDDEN_RE.test(clipped)) return ''
   return /[。！？]$/u.test(clipped) ? clipped : `${clipped}。`
+}
+
+function clipWebIntroSnippet(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  const window = text.slice(0, maxLength)
+  const sentenceEnd = Math.max(window.lastIndexOf('。'), window.lastIndexOf('！'), window.lastIndexOf('？'))
+  if (sentenceEnd >= 20) return window.slice(0, sentenceEnd + 1)
+  const softEnd = Math.max(window.lastIndexOf('，'), window.lastIndexOf('；'), window.lastIndexOf('、'))
+  if (softEnd >= 24) return window.slice(0, softEnd)
+  return window.replace(/[，,、；;：:\s]+$/u, '')
 }
 
 function describeWebFactError(error: unknown): string {
@@ -375,7 +395,25 @@ function buildWebIntroSentence(sources: NarrativeWebSource[], regionName: string
   const source = sources.find((item) => isWebIntroSourceRelevant(item, regionName))
     || sources.find((item) => isFallbackWebIntroSourceUsable(item, regionName))
   if (!source) return ''
-  return `资料里提到，${normalizeWebIntroSnippet(source.snippet)}`
+  const snippet = normalizeWebIntroSnippet(source.snippet)
+  if (!snippet) return ''
+  return `${webIntroPrefix(snippet, regionName)}${snippet}`
+}
+
+function webIntroPrefix(snippet: string, regionName: string): string {
+  const historicalPrefixes = ['顺带讲个来历，', '这块有个来头，', '老武汉聊到这儿会提一句，']
+  const generalPrefixes = ['顺带补一句，', '这块还有个细节，', '说到这里可以带一嘴，']
+  const prefixes = /(前身|原来|以前|历史|始于|源于|起源|建于|通车|改造)/u.test(snippet) ? historicalPrefixes : generalPrefixes
+  return prefixes[stableTextIndex(`${regionName}:${snippet}`, prefixes.length)]
+}
+
+function stableTextIndex(text: string, modulo: number): number {
+  if (modulo <= 1) return 0
+  let hash = 0
+  for (const char of text) {
+    hash = (hash * 31 + char.codePointAt(0)!) >>> 0
+  }
+  return hash % modulo
 }
 
 function attachIntroToChapterText(text: string, sources: NarrativeWebSource[], regionName: string): string {
@@ -559,6 +597,7 @@ function buildDebugSnapshot(input: {
   webFactDebug: WebFactDebugItem[]
   webNameCandidates: WebNameCandidateDebugItem[]
   llmNarratorDebug: LlmNarratorDebug
+  companionCuesDebug?: NarrativeCompanionCuesDebug
   performance: NarrativeBuildPerformanceDebug
   explorationControls: NarrativeExplorationControls
 }) {
@@ -654,6 +693,7 @@ function buildDebugSnapshot(input: {
       items: input.webFactDebug,
     },
     llm_narrator: input.llmNarratorDebug,
+    companion_cues: input.companionCuesDebug,
     web_name_candidates: {
       count: input.webNameCandidates.length,
       items: input.webNameCandidates,
@@ -1321,11 +1361,27 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       }
     }
     timings.llm_narration = Date.now() - llmStarted
-    const chapters = mergeWebFactsIntoFinalChapters({
+    let chapters = mergeWebFactsIntoFinalChapters({
       chapters: generatedChapters,
       groundedChapters: chapterBuild.chapters,
       regions: selectedRegions,
     })
+    let companionCuesDebug: NarrativeCompanionCuesDebug = {
+      used: false,
+      provider: this.options.llmProvider?.getStatus(),
+    }
+    const companionCueStarted = Date.now()
+    if (mode === 'sync') {
+      const companionCueBuild = await attachCompanionCuesToChapters({
+        chapters,
+        regions: selectedRegions,
+        llmProvider: this.options.llmProvider,
+        enabled: resolveNarrativeLlmEnabled(),
+      })
+      chapters = companionCueBuild.chapters
+      companionCuesDebug = companionCueBuild.debug
+      timings.companion_cues = Date.now() - companionCueStarted
+    }
     const webNameStarted = Date.now()
     const webNameCandidates = debugEnabled && mode === 'sync'
       ? await probeWebNameCandidates({
@@ -1401,6 +1457,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
         webFactDebug: chapterBuild.debug,
         webNameCandidates,
         llmNarratorDebug,
+        companionCuesDebug,
         performance,
         explorationControls,
       })
@@ -1548,6 +1605,11 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
       used: false,
       provider: this.options.llmProvider?.getStatus(),
     }
+    let companionCuesDebug: NarrativeCompanionCuesDebug = {
+      used: false,
+      provider: this.options.llmProvider?.getStatus(),
+      generated_count: 0,
+    }
     if (!resolveNarrativeLlmEnabled()) {
       llmNarratorDebug = { ...llmNarratorDebug, error: 'LLM 解说已禁用', error_code: 'disabled' }
     } else if (!this.options.llmProvider?.isReady()) {
@@ -1585,6 +1647,7 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
             items: webFactDebug,
           },
           llm_narrator: llmNarratorDebug,
+          companion_cues: companionCuesDebug,
         } : seedResponse.debug,
       }
       this.enrichmentJobs.set(jobId, {
@@ -1666,6 +1729,20 @@ export class NarrativePhase3Runtime implements NarrativeBuilder {
           groundedChapters: [groundedChapter],
           regions: selectedRegions,
         })[0] || result.chapter
+        const cueResult = await buildNarrativeCompanionCues({
+          chapter: chapters[index],
+          region: selectedRegions.find((region) => region.id === chapters[index].region_id),
+          llmProvider: this.options.llmProvider,
+          enabled: resolveNarrativeLlmEnabled(),
+        })
+        chapters[index] = { ...chapters[index], companion_cues: cueResult.cues }
+        companionCuesDebug = {
+          used: companionCuesDebug.used || cueResult.debug.used,
+          provider: cueResult.debug.provider || companionCuesDebug.provider,
+          latency_ms: (companionCuesDebug.latency_ms ?? 0) + (cueResult.debug.latency_ms ?? 0),
+          generated_count: (companionCuesDebug.generated_count ?? 0) + cueResult.cues.length,
+          error: [companionCuesDebug.error, cueResult.debug.error].filter(Boolean).join(' | ') || undefined,
+        }
         completedChapterCount += 1
       } catch (error) {
         if (!this.isEnrichmentJobActive(jobId)) return

@@ -183,6 +183,28 @@ export interface NarrativePathNode {
   story_tags?: StoryTag[]
 }
 
+export type NarrativeCompanionCueKind =
+  | 'visit_info'
+  | 'history_deep_dive'
+  | 'nearby_recommendation'
+  | 'local_way'
+  | 'contrast'
+  | 'fact_check'
+  | 'practical_tip'
+
+export interface NarrativeCompanionCue {
+  id: string
+  region_id: string
+  bubble_text: string
+  prompt: string
+  kind: NarrativeCompanionCueKind
+  target_entity?: string
+  anchor_text: string
+  requires_web: boolean
+  priority: number
+  display_after_ms?: number
+}
+
 // 11. 章节文本（§8.1）
 export interface NarrativeChapter {
   region_id: string
@@ -193,6 +215,7 @@ export interface NarrativeChapter {
   story_tags?: StoryTag[]
   // 单章 LLM 生成失败时由后端写入；前端可据此显式展示该章错误而不是继续等待。
   generation_error?: string
+  companion_cues?: NarrativeCompanionCue[]
 }
 
 // 12. 上下文（§5.2）
@@ -223,6 +246,9 @@ export type NarrativeDiversity = 'low' | 'medium' | 'high'
 export type NarrativeLocalness = 'tourist' | 'balanced' | 'local'
 export type NarrativeDurationPreset = 'casual' | 'standard' | 'detailed'
 export type NarrativeCentroidStrategy = 'auto' | 'region_first' | 'poi_first'
+// lite 是唯一 prompt 形态，保留类型别名便于后续扩展
+export type NarrativeLlmPromptVariant = 'lite'
+export type NarrativeLlmPromptVariantInput = NarrativeLlmPromptVariant | 'auto'
 
 export type NarrativeEnrichmentMode = 'sync' | 'async' | 'cache_only' | 'off'
 export type NarrativeEnrichmentStatus = 'disabled' | 'pending' | 'running' | 'completed' | 'failed'
@@ -315,6 +341,7 @@ export interface NarrativeAssistantRequest {
     playing: boolean
     visible_region_ids: string[]
   }
+  narrative_state?: NarrativeResponse
 }
 
 export interface NarrativeAssistantUiAction {

@@ -529,9 +529,10 @@ describe('NarrativePhase3Runtime', () => {
       quality_score: 0.95,
     })
     expect(queries[0]).toBe('沙湖公园 介绍')
-    expect(response.narration.chapters[0].text).toContain('资料里提到，沙湖公园是武汉市中心城区最大的综合性公园。')
-    expect(response.narration.chapters[0].text.indexOf('资料里提到')).toBeGreaterThan(response.narration.chapters[0].text.indexOf('先看沙湖公园。'))
-    expect(response.narration.chapters[0].text.indexOf('资料里提到')).toBeLessThan(response.narration.chapters[0].text.indexOf('拥有可解释的真实地界'))
+    expect(response.narration.chapters[0].text).toMatch(/(顺带补一句|这块还有个细节|说到这里可以带一嘴)，沙湖公园是武汉市中心城区最大的综合性公园。/u)
+    const introAt = response.narration.chapters[0].text.search(/(顺带补一句|这块还有个细节|说到这里可以带一嘴)/u)
+    expect(introAt).toBeGreaterThan(response.narration.chapters[0].text.indexOf('先看沙湖公园。'))
+    expect(introAt).toBeLessThan(response.narration.chapters[0].text.indexOf('拥有可解释的真实地界'))
     expect(response.debug?.web_facts).toMatchObject({
       queried_region_count: 1,
       source_count: 1,
@@ -662,7 +663,7 @@ describe('NarrativePhase3Runtime', () => {
         {
           title: '沙湖公园介绍',
           url: 'https://example.com/shahu-intro',
-          snippet: '武汉市中心城区综合性公园。',
+          snippet: '武汉市中心城区综合性公园。[2](http://example.com/source)',
         },
       ],
     })
@@ -680,7 +681,9 @@ describe('NarrativePhase3Runtime', () => {
       },
     })
 
-    expect(response.narration.chapters[0].text).toContain('资料里提到，武汉市中心城区综合性公园。')
+    expect(response.narration.chapters[0].text).toMatch(/(顺带补一句|这块还有个细节|说到这里可以带一嘴)，武汉市中心城区综合性公园。/u)
+    expect(response.narration.chapters[0].text).not.toContain('http')
+    expect(response.narration.chapters[0].text).not.toContain('[2]')
     expect(response.narration.chapters[0].web_sources?.[0]?.title).toBe('沙湖公园介绍')
   })
 
@@ -742,7 +745,7 @@ describe('NarrativePhase3Runtime', () => {
 
     expect(response.debug?.llm_narrator).toMatchObject({ used: true })
     expect(response.narration.chapters[0].text).toContain('湖岸空间')
-    expect(response.narration.chapters[0].text).toContain('资料里提到，沙湖公园是武汉市中心城区最大的综合性公园。')
+    expect(response.narration.chapters[0].text).toMatch(/(顺带补一句|这块还有个细节|说到这里可以带一嘴)，沙湖公园是武汉市中心城区最大的综合性公园。/u)
     expect(response.narration.chapters[0].web_sources?.[0]?.url).toBe('https://example.com/shahu-intro')
   })
 
@@ -783,7 +786,7 @@ describe('NarrativePhase3Runtime', () => {
 
     const chapterText = response.narration.chapters.map((chapter) => chapter.text).join(' ')
     expect(response.regions.map((region) => region.display_name)).toContain('徐东商圈')
-    expect(chapterText).toContain('资料里提到，徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。')
+    expect(chapterText).toMatch(/(顺带补一句|这块还有个细节|说到这里可以带一嘴)，徐东商圈以销品茂、万象汇、欧亚达等商业设施形成消费集聚。/u)
     expect(chapterText).not.toMatch(/菱角湖|吉庆街|昙华林|汉正街|武汉天地/)
   })
 

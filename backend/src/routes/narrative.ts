@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream'
 
 import type { FastifyInstance } from 'fastify'
 
-import type { NarrativeBuilder, NarrativeEnrichmentJob, NarrativeRequest } from '../narrative/contract.js'
+import type { NarrativeAssistantProvider, NarrativeAssistantRequest, NarrativeBuilder, NarrativeEnrichmentJob, NarrativeRequest } from '../narrative/contract.js'
 import type { NarrativeTtsProvider, NarrativeTtsRequest } from '../narrative/NarrativeTtsService.js'
 
 function isNarrativeContractError(error: unknown): error is Error & { code: string; statusCode: number } {
@@ -35,6 +35,7 @@ export async function registerNarrativeRoutes(
   app: FastifyInstance,
   deps: {
     narrative?: NarrativeBuilder
+    assistant?: NarrativeAssistantProvider
     tts?: NarrativeTtsProvider
   },
 ) {
@@ -68,6 +69,32 @@ export async function registerNarrativeRoutes(
         error: {
           code: 'narrative_failed',
           message: error instanceof Error ? error.message : 'Narrative request failed',
+        },
+      })
+    }
+  })
+
+  app.post('/assistant', async (request, reply) => {
+    if (!deps.assistant) {
+      return reply.status(503).send({
+        success: false,
+        error: {
+          code: 'narrative_assistant_unavailable',
+          message: 'Narrative assistant is unavailable',
+        },
+      })
+    }
+
+    try {
+      const response = await deps.assistant.answer((request.body || {}) as NarrativeAssistantRequest)
+      return reply.send(response)
+    } catch (error) {
+      app.log.error(error)
+      return reply.status(500).send({
+        success: false,
+        error: {
+          code: 'narrative_assistant_failed',
+          message: error instanceof Error ? error.message : 'Narrative assistant request failed',
         },
       })
     }

@@ -41,6 +41,7 @@ import { resolveResourceUrl } from './utils/resolveResourceUrl.js'
 import { buildCompositeNarrativeWebFactSearcher, NarrativePhase3Runtime } from './narrative/NarrativePhase3Runtime.js'
 import { fetchNarrativeAoiCandidates } from './narrative/aoiRepository.js'
 import { NarrativeTtsService } from './narrative/NarrativeTtsService.js'
+import { NarrativeAssistantService } from './narrative/NarrativeAssistantService.js'
 
 const port = Number(process.env.PORT || '3210')
 const host = process.env.HOST || '127.0.0.1'
@@ -326,6 +327,9 @@ const narrative = new NarrativePhase3Runtime({
   },
 })
 const narrativeTts = new NarrativeTtsService()
+const narrativeAssistant = new NarrativeAssistantService({
+  llmProvider: narrativeLlmProvider,
+})
 
 const app = createApp({
   registry,
@@ -337,6 +341,7 @@ const app = createApp({
     (sql, params, timeoutMs) => pool.query(sql, params, timeoutMs),
   ),
   narrative,
+  narrativeAssistant,
   narrativeTts,
   chat,
 })

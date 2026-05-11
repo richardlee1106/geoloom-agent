@@ -284,9 +284,14 @@
         :donut-offsets="donutOffsets"
         :compare-sample-overlays="compareMapOverlays"
         :minimal="mode !== 'explore'"
+        :assistant-state="assistantFabState"
+        :assistant-hint="assistantHint"
+        :assistant-cue="activeCompanionCue"
         @update:coverage-collapsed="coverageCollapsed = $event"
         @update:viewport-zoom="ui.viewportZoom = $event"
         @open-assistant="assistantOpen = true"
+        @assistant-cue-click="handleCompanionCueClick"
+        @assistant-cue-dismiss="dismissCompanionCue"
         @aoi-box-selected="handleAoiBoxSelected"
         @circle-range-selected="handleCompareCircleSelected"
         @polygon-area-selected="handleComparePolygonSelected"
@@ -632,16 +637,20 @@
            §7.4 / §8.4 契约：组件只读 narrative state，副作用通过 emit 回传 -->
       <AssistantDock
         v-if="assistantOpen"
+        ref="assistantDockRef"
         :compact="mode !== 'explore'"
         :active-step-index="activeStepIndex"
         :playing="playing"
         :total-steps="displayPathNodes.length"
         :chapters="chaptersForAssistant"
+        :narrative="narrative"
         @close="assistantOpen = false"
         @pause-request="onAssistantPause"
         @resume-request="onAssistantResume"
         @jump-to-step="goToStep"
         @fly-to-region="flyToRegionById"
+        @highlight-region="highlightRegionById"
+        @request-replan="handleAssistantReplan"
       />
 
       <NarrativeTimelinePlayer
@@ -667,7 +676,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { fetchNarrativeEnrichmentJob, fetchNarrativeResponse, subscribeNarrativeEnrichmentJob, synthesizeNarrativeSpeech, type FetchNarrativeOptions, type NarrativeEnrichmentSubscription } from './narrative/narrativeApi'
@@ -677,6 +686,7 @@ import type {
   NarrativeMode as ChatMode,
   NarrativeResponse,
   NarrativeChapter,
+  NarrativeCompanionCue,
   NarrativeEnrichmentJob,
   NarrativePoi,
   NarrativeRegion,
@@ -698,6 +708,7 @@ type GranularityKey = NonNullable<NarrativeExplorationControls['granularity']>
 type EvidenceStrictnessKey = NonNullable<NarrativeExplorationControls['evidence_strictness']>
 type DiversityKey = NonNullable<NarrativeExplorationControls['diversity']>
 type LocalnessKey = NonNullable<NarrativeExplorationControls['localness']>
+type AssistantFabState = 'idle' | 'ready' | 'thinking' | 'sources' | 'speaking' | 'error'
 type WebFactModeKey = 'off' | 'light' | 'full'
 type ScopeMode = 'current_viewport' | 'drawing_aoi' | 'locked_viewport' | 'uploaded_geojson'
 type CompareToolKey = 'rectangle' | 'freeform' | 'circle'
@@ -1078,6 +1089,22 @@ const activeChapterSources = computed<ChapterSourceView[]>(() => {
     return true
   }).slice(0, 3)
 })
+const assistantFabState = computed<AssistantFabState>(() => {
+  if (analysisStatus.value === 'analyzing' || enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return 'thinking'
+  if (analysisStatus.value === 'error' || enrichmentStatus.value === 'failed' || Boolean(ttsPlaybackError.value)) return 'error'
+  if (playing.value) return 'speaking'
+  if (activeChapterSources.value.length > 0 || (narrative.value.enrichment?.source_count ?? 0) > 0) return 'sources'
+  if (canNarrate.value) return 'ready'
+  return 'idle'
+})
+const assistantHint = computed(() => {
+  if (assistantFabState.value === 'thinking') return 'AI 副驾正在等待分析和资料补强完成'
+  if (assistantFabState.value === 'error') return 'AI 副驾可以帮你定位当前异常'
+  if (assistantFabState.value === 'speaking') return `正在讲「${activeRegion.value.display_name || '当前片区'}」，可随时打断追问`
+  if (assistantFabState.value === 'sources') return '当前 narrative 已有网页或空间来源，可追问证据'
+  if (assistantFabState.value === 'ready') return '当前路线已生成，可追问片区、路线和讲法'
+  return '分析当前视野后，AI 副驾会理解路线和片区上下文'
+})
 const sourceEmptyMessage = computed(() => {
   const summary = narrative.value.enrichment
   if (enrichmentStatus.value === 'pending' || enrichmentStatus.value === 'running') return '正在补充网页来源，完成后会自动回填当前章节。'
@@ -1193,6 +1220,7 @@ type NarrativeMapStageExpose = {
   applyViewportZoom: (zoomValue?: number) => void
   focusByCentroidStrategy: (strategy: CentroidStrategy, region: NarrativeRegion, viewportZoom?: number) => void
   flyToRegion: (region: NarrativeRegion) => void
+  highlightRegion: (region: NarrativeRegion) => void
   getCurrentMapViewport: () => ViewportBBox | null
   beginAoiBoxSelection: () => boolean
   cancelAoiBoxSelection: () => void
@@ -1203,7 +1231,12 @@ type NarrativeMapStageExpose = {
   refreshMapLayersAfterNarrativeChange: () => void
 }
 
+type AssistantDockExpose = {
+  sendMessage: (textOverride?: string) => Promise<void>
+}
+
 const mapStageRef = ref<NarrativeMapStageExpose | null>(null)
+const assistantDockRef = ref<AssistantDockExpose | null>(null)
 const mapStageVisible = ref(false)
 const mapStageReady = ref(false)
 
@@ -1899,6 +1932,75 @@ const chaptersForAssistant = computed(() =>
     played: i < activeStepIndex.value
   }))
 )
+const activeCompanionCue = ref<NarrativeCompanionCue | null>(null)
+const dismissedCompanionCueIds = ref<Set<string>>(new Set())
+const shownCompanionCueIds = ref<Set<string>>(new Set())
+let companionCueTimer: ReturnType<typeof setTimeout> | null = null
+let companionCueAutoHideTimer: ReturnType<typeof setTimeout> | null = null
+let lastCompanionCueShownAt = 0
+
+function clearCompanionCueTimers() {
+  if (companionCueTimer) {
+    clearTimeout(companionCueTimer)
+    companionCueTimer = null
+  }
+  if (companionCueAutoHideTimer) {
+    clearTimeout(companionCueAutoHideTimer)
+    companionCueAutoHideTimer = null
+  }
+}
+
+function hideCompanionCue() {
+  activeCompanionCue.value = null
+  if (companionCueAutoHideTimer) {
+    clearTimeout(companionCueAutoHideTimer)
+    companionCueAutoHideTimer = null
+  }
+}
+
+function findCueLineIndex(cue: NarrativeCompanionCue, lines: string[]): number {
+  const anchor = cue.anchor_text.trim()
+  if (!anchor) return -1
+  const directIndex = lines.findIndex((line) => line.includes(anchor))
+  if (directIndex >= 0) return directIndex
+  const compactAnchor = anchor.replace(/\s+/gu, '')
+  return lines.findIndex((line) => line.replace(/\s+/gu, '').includes(compactAnchor))
+}
+
+function scheduleCompanionCueForLine(lines: string[], lineIndex: number) {
+  clearCompanionCueTimers()
+  if (!playing.value || assistantOpen.value) return
+  const chapter = displayChapters.value[activeStepIndex.value]
+  const cues = (chapter?.companion_cues || [])
+    .filter((cue) => !dismissedCompanionCueIds.value.has(cue.id) && !shownCompanionCueIds.value.has(cue.id))
+    .map((cue) => ({ cue, lineIndex: findCueLineIndex(cue, lines) }))
+    .filter((item) => item.lineIndex === lineIndex)
+    .sort((left, right) => right.cue.priority - left.cue.priority)
+  const nextCue = cues[0]?.cue
+  if (!nextCue) return
+  if (Date.now() - lastCompanionCueShownAt < 8500) return
+  companionCueTimer = setTimeout(() => {
+    if (!playing.value || assistantOpen.value || activeStepIndex.value < 0) return
+    activeCompanionCue.value = nextCue
+    shownCompanionCueIds.value = new Set([...shownCompanionCueIds.value, nextCue.id])
+    lastCompanionCueShownAt = Date.now()
+    companionCueAutoHideTimer = setTimeout(hideCompanionCue, 7200)
+  }, Math.max(400, Math.min(nextCue.display_after_ms ?? 900, 2600)))
+}
+
+function dismissCompanionCue(cueId: string) {
+  dismissedCompanionCueIds.value = new Set([...dismissedCompanionCueIds.value, cueId])
+  if (activeCompanionCue.value?.id === cueId) hideCompanionCue()
+}
+
+async function handleCompanionCueClick(cue: NarrativeCompanionCue) {
+  dismissedCompanionCueIds.value = new Set([...dismissedCompanionCueIds.value, cue.id])
+  hideCompanionCue()
+  if (cue.region_id) highlightRegionById(cue.region_id)
+  assistantOpen.value = true
+  await nextTick()
+  await assistantDockRef.value?.sendMessage(cue.prompt)
+}
 
 function onAssistantPause() {
   if (playing.value) togglePlay()
@@ -1910,6 +2012,24 @@ function flyToRegionById(regionId: string) {
   const r = regionMap.value[regionId]
   if (!r) return
   mapStageRef.value?.flyToRegion(r)
+}
+
+function highlightRegionById(regionId: string) {
+  const r = regionMap.value[regionId]
+  if (!r) return
+  mapStageRef.value?.flyToRegion(r)
+  mapStageRef.value?.highlightRegion(r)
+}
+
+function handleAssistantReplan(params: Record<string, unknown>) {
+  const theme = String(params.theme || '')
+  if (explorationThemeOptions.some((item) => item.key === theme)) {
+    exploreSettings.theme = theme as ExplorationThemeKey
+    ui.tonePreset = themeTone(exploreSettings.theme)
+  }
+  exploreSettings.webFacts = 'full'
+  markExploreSettingsDirty('AI 助手已生成新的探索意图，正在重新分析当前视野')
+  void analyzeCurrentViewport()
 }
 
 function sourceQualityLabel(quality?: ChapterSourceView['quality']): string {
@@ -2125,6 +2245,16 @@ async function copyExploreAgentReport() {
 
 // AI 助手抽屉开关（fab 在 .map-stage 内 / 抽屉跨 center + right）
 const assistantOpen = ref<boolean>(false)
+watch(assistantOpen, (open) => {
+  if (open) hideCompanionCue()
+})
+watch(() => narrative.value.session_id, () => {
+  dismissedCompanionCueIds.value = new Set()
+  shownCompanionCueIds.value = new Set()
+  clearCompanionCueTimers()
+  hideCompanionCue()
+  lastCompanionCueShownAt = 0
+})
 function onAssistantKeydown(e: KeyboardEvent) {
   if (e.altKey && e.key.toLowerCase() === 'a') {
     e.preventDefault()
@@ -2453,10 +2583,12 @@ function buildNarrationSpeechSegments(lines: string[], startIndex: number): Spee
 
 function updateNarrationSubtitle(lines: string[], index: number) {
   const safeIndex = Math.max(0, Math.min(index, lines.length - 1))
+  const changed = safeIndex !== activeLineIndex.value
   activeLineIndex.value = safeIndex
   activeLineCount.value = lines.length
   typedText.value = lines.slice(0, safeIndex + 1).join('')
   waveActive.value = Math.floor(((safeIndex + 1) / Math.max(lines.length, 1)) * waveformHeights.length)
+  if (changed) scheduleCompanionCueForLine(lines, safeIndex)
 }
 
 function chapterPlaybackDurationMs(chapter: NarrativeChapter): number {
@@ -2480,6 +2612,7 @@ const waveActive = ref(0)
 
 function startTyping(onComplete?: () => void) {
   stopTyping()
+  hideCompanionCue()
   const chapter = displayChapters.value[activeStepIndex.value]
   if (!chapter) return
   const lines = splitNarrationText(chapter.text)
@@ -2495,6 +2628,7 @@ function startTyping(onComplete?: () => void) {
   const token = ++speechToken
   typing.value = true
   ttsPlaybackError.value = ''
+  activeLineIndex.value = -1
   activeLineCount.value = lines.length
   void playNarrationChapter(chapter, lines, token, onComplete)
 }
@@ -2672,6 +2806,8 @@ function handleActiveSpeechSettingsChange(nextSettings: SpeechSettings, prevSett
 
 function stopTyping() {
   speechToken += 1
+  clearCompanionCueTimers()
+  hideCompanionCue()
   if (speechSynthesisController) {
     speechSynthesisController.abort()
     speechSynthesisController = null

@@ -164,7 +164,10 @@ export function adaptNarrativeResponse(response: NarrativeResponse, renderablePo
         text: matchedChapter?.text ?? `${region?.display_name ?? regionId}是当前解说路径中的一站。`,
         web_source: matchedChapter?.web_source,
         web_sources: matchedChapter?.web_sources,
-        length_ms: matchedChapter?.length_ms
+        length_ms: matchedChapter?.length_ms,
+        story_tags: matchedChapter?.story_tags,
+        generation_error: matchedChapter?.generation_error,
+        companion_cues: matchedChapter?.companion_cues
       }
     })
   }

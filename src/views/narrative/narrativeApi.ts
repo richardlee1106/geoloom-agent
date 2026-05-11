@@ -1,5 +1,5 @@
 import { SPATIAL_API_BASE_URL } from '../../config'
-import type { NarrativeEnrichmentJob, NarrativeEnrichmentMode, NarrativeExplorationControls, NarrativeResponse, NarrationTone, UserContext, ViewportBBox } from './types'
+import type { NarrativeAssistantRequest, NarrativeAssistantResponse, NarrativeEnrichmentJob, NarrativeEnrichmentMode, NarrativeExplorationControls, NarrativeLlmPromptVariantInput, NarrativeResponse, NarrationTone, UserContext, ViewportBBox } from './types'
 
 export interface FetchNarrativeOptions {
   session_id?: string
@@ -10,6 +10,8 @@ export interface FetchNarrativeOptions {
   limit?: number
   debug?: boolean
   enrichment_mode?: NarrativeEnrichmentMode
+  /** @deprecated lite 已是唯一形态，此字段仅保留向后兼容 */
+  prompt_variant?: NarrativeLlmPromptVariantInput
 }
 
 export interface NarrativeApiRequestOptions {
@@ -100,6 +102,22 @@ export function subscribeNarrativeEnrichmentJob(jobId: string, options: Subscrib
     options.onError(new Error('narrative enrichment stream failed'))
   }
   return { close }
+}
+
+export async function sendNarrativeAssistantMessage(options: NarrativeAssistantRequest, requestOptions: NarrativeApiRequestOptions = {}): Promise<NarrativeAssistantResponse> {
+  const response = await fetch(`${SPATIAL_API_BASE_URL}/api/narrative/assistant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+    signal: requestOptions.signal
+  })
+
+  if (!response.ok) {
+    const detail = await readNarrativeApiError(response, 'narrative assistant request failed')
+    throw new Error(`narrative assistant request failed (${response.status}): ${detail}`)
+  }
+
+  return await response.json() as NarrativeAssistantResponse
 }
 
 export interface SynthesizeNarrativeSpeechOptions {

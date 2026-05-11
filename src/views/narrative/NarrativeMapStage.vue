@@ -83,14 +83,37 @@
     <div v-else-if="circleSelecting" class="aoi-draw-hint">先点击圆心，再拖拽确定半径</div>
     <div v-else-if="polygonSelecting" class="aoi-draw-hint">连续点击落点连线，双击闭合成面</div>
 
+    <div
+      v-if="!assistantOpen && assistantCue"
+      class="assistant-cue-bubble"
+      role="button"
+      tabindex="0"
+      :title="assistantCue.prompt"
+      @click="$emit('assistant-cue-click', assistantCue)"
+      @keydown.enter.prevent="$emit('assistant-cue-click', assistantCue)"
+    >
+      <span class="assistant-cue-kicker">顺手问问</span>
+      <strong>{{ assistantCue.bubble_text }}</strong>
+      <button
+        type="button"
+        class="assistant-cue-close"
+        title="先不看"
+        @click.stop="$emit('assistant-cue-dismiss', assistantCue.id)"
+      >
+        ×
+      </button>
+    </div>
+
     <button
       v-show="!assistantOpen"
-      class="assistant-fab"
+      :class="['assistant-fab', `state-${assistantFabState}`]"
       type="button"
-      title="AI 助手（Alt+A）"
+      :title="assistantHint || 'AI 助手（Alt+A）'"
       @click="$emit('open-assistant')"
     >
+      <span v-if="assistantFabState === 'thinking'" class="fab-pulse" aria-hidden="true"></span>
       <span class="fab-letters">AI</span>
+      <span class="fab-label">{{ assistantFabLabel }}</span>
     </button>
   </main>
 </template>
@@ -118,7 +141,7 @@ import type { EventsKey } from 'ol/events'
 
 import { useProjection } from '../../composables/map/useProjection'
 import type { NarrativeDisplayRegion } from './narrativeResponseAdapter'
-import type { NarrativePoi, NarrativeRegion, NarrativeResponse, NarrativeUiSettings, ViewportBBox, VisualTier } from './types'
+import type { NarrativeCompanionCue, NarrativePoi, NarrativeRegion, NarrativeResponse, NarrativeUiSettings, ViewportBBox, VisualTier } from './types'
 
 type CentroidStrategy = NarrativeUiSettings['centroidStrategy']
 
@@ -127,6 +150,7 @@ type CoverageBreakdown = {
   surrounding_ratio: number
   others_ratio: number
 }
+type AssistantFabState = 'idle' | 'ready' | 'thinking' | 'sources' | 'speaking' | 'error'
 
 type DonutDash = {
   core: number
@@ -161,6 +185,9 @@ const props = defineProps<{
   donutOffsets: DonutDash
   compareSampleOverlays?: CompareSampleOverlay[]
   minimal?: boolean
+  assistantState?: AssistantFabState
+  assistantHint?: string
+  assistantCue?: NarrativeCompanionCue | null
 }>()
 
 const emit = defineEmits<{
@@ -171,12 +198,23 @@ const emit = defineEmits<{
   (event: 'aoi-box-selected', value: ViewportBBox): void
   (event: 'circle-range-selected', value: ViewportBBox): void
   (event: 'polygon-area-selected', value: PolygonSelectionPayload): void
+  (event: 'assistant-cue-click', value: NarrativeCompanionCue): void
+  (event: 'assistant-cue-dismiss', value: string): void
 }>()
 
 const { gcj02ToWgs84, wgs84ToGcj02 } = useProjection()
 
 const mapContainerEl = ref<HTMLDivElement | null>(null)
 const baseLayerMode = ref<'vector' | 'satellite'>('satellite')
+const assistantFabState = computed(() => props.assistantState ?? 'idle')
+const assistantFabLabel = computed(() => {
+  if (assistantFabState.value === 'thinking') return '思考中'
+  if (assistantFabState.value === 'sources') return '有来源'
+  if (assistantFabState.value === 'speaking') return '导览中'
+  if (assistantFabState.value === 'error') return '需处理'
+  if (assistantFabState.value === 'ready') return '可追问'
+  return '副驾'
+})
 
 let olMap: OlMap | null = null
 let baseLayer: TileLayer<XYZ> | null = null
@@ -185,6 +223,8 @@ const regionHeatLayers: HeatmapLayer[] = []
 let poiBaseSource: VectorSource | null = null
 let poiLayer: VectorLayer | null = null
 let labelLayer: VectorLayer | null = null
+let assistantHighlightSource: VectorSource | null = null
+let assistantHighlightLayer: VectorLayer | null = null
 let compareOverlaySource: VectorSource | null = null
 let compareOverlayLayer: VectorLayer | null = null
 let resolutionChangeListenerKey: EventsKey | null = null
@@ -192,6 +232,7 @@ let aoiDragBox: DragBox | null = null
 let circleDraw: Draw | null = null
 let polygonDraw: Draw | null = null
 let renderedNarrativeSignature = ''
+let assistantHighlightTimer: number | null = null
 
 const currentResolution = ref(0)
 const aoiBoxSelecting = ref(false)
@@ -530,6 +571,49 @@ function flyToRegion(region: NarrativeRegion) {
   })
 }
 
+function highlightRegion(region: NarrativeRegion) {
+  if (!assistantHighlightSource) return
+  if (assistantHighlightTimer !== null) {
+    window.clearTimeout(assistantHighlightTimer)
+    assistantHighlightTimer = null
+  }
+  assistantHighlightSource.clear()
+  const points = regionBoundaryPoints(region)
+  if (points.length >= 4) {
+    const color = region.visual_layer.region_glow?.color ?? DEFAULT_REGION_COLOR
+    const feature = new Feature({
+      geometry: new Polygon([points.map((point) => fromLonLat(point))])
+    })
+    feature.setStyle(new Style({
+      fill: new Fill({ color: hexToRgba(color, 0.16) }),
+      stroke: new Stroke({ color: '#bfdbfe', width: 3.5, lineDash: [10, 7] }),
+      text: new Text({
+        text: 'AI 正在关注 · ' + region.display_name,
+        font: '700 12px "PingFang SC","Microsoft YaHei",sans-serif',
+        fill: new Fill({ color: '#eff6ff' }),
+        stroke: new Stroke({ color: 'rgba(15,23,42,0.95)', width: 4 }),
+        offsetY: -24
+      })
+    }))
+    assistantHighlightSource.addFeature(feature)
+  }
+  const anchor = new Feature({
+    geometry: new Point(fromLonLat([region.core_anchor.lon, region.core_anchor.lat]))
+  })
+  anchor.setStyle(new Style({
+    image: new CircleStyle({
+      radius: 11,
+      fill: new Fill({ color: 'rgba(96,165,250,0.28)' }),
+      stroke: new Stroke({ color: '#dbeafe', width: 3 })
+    })
+  }))
+  assistantHighlightSource.addFeature(anchor)
+  assistantHighlightTimer = window.setTimeout(() => {
+    assistantHighlightSource?.clear()
+    assistantHighlightTimer = null
+  }, 3200)
+}
+
 function zoomIn() {
   if (!olMap) return
   const v = olMap.getView()
@@ -794,6 +878,8 @@ function initMap() {
   poiBaseSource = new VectorSource()
   poiLayer = new VectorLayer({ source: poiBaseSource, zIndex: 10 })
   labelLayer = new VectorLayer({ source: new VectorSource(), zIndex: 20, declutter: true })
+  assistantHighlightSource = new VectorSource()
+  assistantHighlightLayer = new VectorLayer({ source: assistantHighlightSource, zIndex: 19 })
   compareOverlaySource = new VectorSource()
   compareOverlayLayer = new VectorLayer({ source: compareOverlaySource, zIndex: 18 })
 
@@ -802,7 +888,7 @@ function initMap() {
 
   olMap = new OlMap({
     target: mapContainerEl.value,
-    layers: [baseLayer, ...regionHeatLayers, poiLayer, compareOverlayLayer, labelLayer],
+    layers: [baseLayer, ...regionHeatLayers, poiLayer, compareOverlayLayer, assistantHighlightLayer, labelLayer],
     controls: [],
     view: new View({
       center: fromLonLat(props.narrative.viewport.center),
@@ -869,6 +955,10 @@ onBeforeUnmount(() => {
   cancelAoiBoxSelection()
   cancelCircleSelection()
   cancelPolygonSelection()
+  if (assistantHighlightTimer !== null) {
+    window.clearTimeout(assistantHighlightTimer)
+    assistantHighlightTimer = null
+  }
   if (resolutionChangeListenerKey) {
     unByKey(resolutionChangeListenerKey)
     resolutionChangeListenerKey = null
@@ -883,6 +973,7 @@ defineExpose({
   applyViewportZoom,
   focusByCentroidStrategy,
   flyToRegion,
+  highlightRegion,
   getCurrentMapViewport,
   beginAoiBoxSelection,
   cancelAoiBoxSelection,
@@ -1111,25 +1202,141 @@ defineExpose({
   position: absolute;
   right: 14px; bottom: 14px;
   z-index: 20;
-  width: 52px; height: 52px;
-  border-radius: 50%;
-  background: var(--primary);
+  min-width: 74px;
+  height: 52px;
+  padding: 0 13px;
+  gap: 6px;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, 0.96), rgba(37, 99, 235, 0.9)),
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.24), transparent 34%);
   color: #fff;
-  border: 1px solid var(--bd-accent);
+  border: 1px solid rgba(147, 197, 253, 0.5);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, transform 0.15s ease;
+  box-shadow: 0 16px 38px rgba(2, 6, 23, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
 }
 
-.assistant-fab:hover  { background: #2563eb; transform: translateY(-1px); }
+.assistant-fab:hover  {
+  transform: translateY(-1px);
+  box-shadow: 0 20px 46px rgba(2, 6, 23, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
 .assistant-fab:active { transform: translateY(0); }
 
+.assistant-cue-bubble {
+  position: absolute;
+  right: 14px;
+  bottom: 78px;
+  z-index: 21;
+  width: min(286px, calc(100% - 28px));
+  padding: 10px 36px 10px 13px;
+  border: 1px solid rgba(191, 219, 254, 0.58);
+  border-radius: 18px 18px 4px 18px;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 64, 175, 0.82)),
+    radial-gradient(circle at 12% 0%, rgba(125, 211, 252, 0.24), transparent 36%);
+  color: #eef6ff;
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.38), 0 0 0 1px rgba(255,255,255,0.05) inset;
+  cursor: pointer;
+  animation: assistant-cue-in 0.28s ease-out both;
+}
+
+.assistant-cue-bubble::after {
+  content: '';
+  position: absolute;
+  right: 24px;
+  bottom: -8px;
+  width: 14px;
+  height: 14px;
+  background: rgba(30, 64, 175, 0.86);
+  border-right: 1px solid rgba(191, 219, 254, 0.36);
+  border-bottom: 1px solid rgba(191, 219, 254, 0.36);
+  transform: rotate(45deg);
+}
+
+.assistant-cue-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.assistant-cue-bubble strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.42;
+  font-weight: 700;
+}
+
+.assistant-cue-close {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.28);
+  color: rgba(226, 232, 240, 0.78);
+  cursor: pointer;
+}
+
+.assistant-cue-close:hover { background: rgba(15, 23, 42, 0.48); color: #fff; }
+
+.assistant-fab.state-thinking {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.98), rgba(14, 165, 233, 0.88));
+}
+
+.assistant-fab.state-sources {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.98), rgba(16, 185, 129, 0.9));
+}
+
+.assistant-fab.state-speaking {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.98), rgba(59, 130, 246, 0.9));
+}
+
+.assistant-fab.state-error {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.98), rgba(245, 158, 11, 0.88));
+}
+
 .fab-letters {
-  font-size: 16px;
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.6px;
   line-height: 1;
+}
+
+.fab-label {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.fab-pulse {
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  border: 1px solid rgba(191, 219, 254, 0.72);
+  animation: assistant-fab-pulse 1.4s ease-out infinite;
+}
+
+@keyframes assistant-fab-pulse {
+  0% { opacity: 0.74; transform: scale(0.96); }
+  100% { opacity: 0; transform: scale(1.18); }
+}
+
+@keyframes assistant-cue-in {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 </style>

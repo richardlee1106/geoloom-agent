@@ -189,6 +189,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           top_p: Number.isFinite(Number(request.topP)) ? Number(request.topP) : undefined,
           presence_penalty: Number.isFinite(Number(request.presencePenalty)) ? Number(request.presencePenalty) : undefined,
           frequency_penalty: Number.isFinite(Number(request.frequencyPenalty)) ? Number(request.frequencyPenalty) : undefined,
+          enable_thinking: false,
         }),
       })
 
@@ -201,6 +202,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           finish_reason?: string
           message?: {
             content?: unknown
+            reasoning_content?: unknown
             tool_calls?: Array<{
               id?: string
               function?: {
@@ -218,9 +220,13 @@ export class OpenAICompatibleProvider implements LLMProvider {
         name: String(toolCall.function?.name || ''),
         arguments: parseToolArguments(toolCall.function?.arguments),
       }))
+      // 处理推理模型：如果 content 为空但有 reasoning_content，使用 reasoning_content
+      const rawContent = choice?.message?.content
+      const reasoningContent = choice?.message?.reasoning_content
+      const finalContent = (rawContent && String(rawContent).trim()) || (reasoningContent && String(reasoningContent).trim()) || null
       const assistantMessage: LLMAssistantMessage = {
         role: 'assistant',
-        content: normalizeAssistantContent(choice?.message?.content),
+        content: normalizeAssistantContent(finalContent),
         toolCalls,
       }
 

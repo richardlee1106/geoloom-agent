@@ -12,7 +12,7 @@ import type { CategoryTreeNode } from './catalog/categoryCatalog.js'
 import { registerSpatialRoutes } from './routes/spatial.js'
 import type { SpatialFetchRequest, SpatialFeature } from './spatial/fetchSpatialFeatures.js'
 import { registerNarrativeRoutes } from './routes/narrative.js'
-import type { NarrativeBuilder } from './narrative/contract.js'
+import type { NarrativeAssistantProvider, NarrativeBuilder } from './narrative/contract.js'
 import type { NarrativeTtsProvider } from './narrative/NarrativeTtsService.js'
 
 export interface ChatRuntime {
@@ -28,6 +28,7 @@ export interface CreateAppOptions {
   getCategoryTree?: () => Promise<CategoryTreeNode[]>
   fetchSpatialFeatures?: (input: SpatialFetchRequest) => Promise<SpatialFeature[]>
   narrative?: NarrativeBuilder
+  narrativeAssistant?: NarrativeAssistantProvider
   narrativeTts?: NarrativeTtsProvider
   chat?: ChatRuntime
 }
@@ -57,6 +58,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   app.register(async (scope) => {
     await registerNarrativeRoutes(scope, {
       narrative: options.narrative,
+      assistant: options.narrativeAssistant,
       tts: options.narrativeTts,
     })
   }, { prefix: '/api/narrative' })

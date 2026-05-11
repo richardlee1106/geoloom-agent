@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createApp } from '../../../src/app.js'
-import type { NarrativeBuilder, NarrativeRequest, NarrativeResponse } from '../../../src/narrative/contract.js'
+import type { NarrativeAssistantProvider, NarrativeBuilder, NarrativeRequest, NarrativeResponse } from '../../../src/narrative/contract.js'
 import { SkillRegistry } from '../../../src/skills/SkillRegistry.js'
 
 function response(): NarrativeResponse {
@@ -23,6 +23,43 @@ function response(): NarrativeResponse {
 }
 
 describe('narrative routes', () => {
+  it('routes assistant requests to the injected assistant provider', async () => {
+    const assistant: NarrativeAssistantProvider = {
+      async answer(input) {
+        return {
+          text: `已收到：${input.message}`,
+          citations: [{ kind: 'narrative', ref: input.session_id }],
+          ui_actions: [{ action: 'pause', params: {}, reason: '测试暂停动作' }],
+          follow_up_suggestions: ['继续追问'],
+        }
+      },
+    }
+    const app = createApp({
+      registry: new SkillRegistry(),
+      version: 'test',
+      checkDatabaseHealth: async () => true,
+      narrativeAssistant: assistant,
+    })
+
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/narrative/assistant',
+      payload: {
+        session_id: 'route-session',
+        state_version: 1,
+        message: '暂停一下',
+        client_state: { active_chapter_index: 0, playing: true, visible_region_ids: [] },
+      },
+    })
+
+    expect(result.statusCode).toBe(200)
+    expect(JSON.parse(result.body)).toMatchObject({
+      text: '已收到：暂停一下',
+      ui_actions: [{ action: 'pause' }],
+      follow_up_suggestions: ['继续追问'],
+    })
+  })
+
   it('returns enrichment job state by job id', async () => {
     const narrative: NarrativeBuilder = {
       async build(_input: NarrativeRequest) {

@@ -11,6 +11,9 @@ export type VisualTier = 'core' | 'strong' | 'medium' | 'weak' | 'excluded'
 export type LODLevel = 'micro' | 'meso' | 'macro'
 export type SceneProfile = 'education_culture' | 'heritage_tourism' | 'commercial_leisure' | 'natural_ecology' | 'mixed_urban'
 export type NarrationTone = 'science' | 'tour' | 'humanity'
+// lite 是唯一 prompt 形态，保留类型别名便于后续扩展
+export type NarrativeLlmPromptVariant = 'lite'
+export type NarrativeLlmPromptVariantInput = NarrativeLlmPromptVariant | 'auto'
 export type NarrativeExplorationTheme = 'comprehensive' | 'commerce' | 'nightlife' | 'memory' | 'family' | 'education' | 'commute' | 'tourism'
 export type NarrativeGranularity = 'auto' | 'district' | 'aoi' | 'poi_cluster'
 export type NarrativeEvidenceStrictness = 'strict' | 'balanced' | 'loose'
@@ -154,6 +157,28 @@ export interface NarrativePathNode {
   story_tags?: StoryTag[]
 }
 
+export type NarrativeCompanionCueKind =
+  | 'visit_info'
+  | 'history_deep_dive'
+  | 'nearby_recommendation'
+  | 'local_way'
+  | 'contrast'
+  | 'fact_check'
+  | 'practical_tip'
+
+export interface NarrativeCompanionCue {
+  id: string
+  region_id: string
+  bubble_text: string
+  prompt: string
+  kind: NarrativeCompanionCueKind
+  target_entity?: string
+  anchor_text: string
+  requires_web: boolean
+  priority: number
+  display_after_ms?: number
+}
+
 export interface NarrativeChapter {
   region_id: string
   text: string
@@ -162,6 +187,7 @@ export interface NarrativeChapter {
   length_ms?: number
   story_tags?: StoryTag[]
   generation_error?: string
+  companion_cues?: NarrativeCompanionCue[]
 }
 
 export interface NarrativeWebSource {
@@ -257,9 +283,44 @@ export interface NarrativeRequest {
   limit?: number
   debug?: boolean
   enrichment_mode?: NarrativeEnrichmentMode
+  /** @deprecated lite 已是唯一形态，此字段仅保留向后兼容，服务端恒返回 'lite' */
+  prompt_variant?: NarrativeLlmPromptVariantInput
 }
 
 export interface NarrativeBuilder {
   build(input: NarrativeRequest): Promise<NarrativeResponse>
   getEnrichmentJob?(jobId: string): NarrativeEnrichmentJob | undefined
+}
+
+export interface NarrativeAssistantRequest {
+  session_id: string
+  state_version: number
+  message: string
+  client_state: {
+    active_chapter_index: number
+    playing: boolean
+    visible_region_ids: string[]
+  }
+  narrative_state?: NarrativeResponse
+}
+
+export interface NarrativeAssistantUiAction {
+  action: 'fly_to' | 'highlight' | 'pause' | 'resume' | 'jump_to_chapter' | 'request_replan'
+  params: Record<string, unknown>
+  reason: string
+}
+
+export interface NarrativeAssistantResponse {
+  text: string
+  citations: Array<{ kind: 'web' | 'postgis' | 'narrative'; ref: string; snippet?: string }>
+  ui_actions: NarrativeAssistantUiAction[]
+  follow_up_suggestions: string[]
+  memory_updates?: {
+    user_interests?: string[]
+    skipped_chapters?: string[]
+  }
+}
+
+export interface NarrativeAssistantProvider {
+  answer(input: NarrativeAssistantRequest): Promise<NarrativeAssistantResponse>
 }

@@ -17,6 +17,7 @@ export type LlmNarratorErrorCode =
   | 'wrong_region_id'
   | 'forbidden_word'
   | 'url_leak'
+  | 'template_listicle'
   | 'too_short'
 
 export class LlmNarratorError extends Error {
@@ -62,15 +63,27 @@ export interface GraphNarrationResult {
   debug: LlmNarratorDebug
 }
 
+// lite 是唯一 prompt 形态，保留类型别名便于后续扩展
+export type LlmNarratorPromptVariant = 'lite'
+export type LlmNarratorPromptVariantInput = LlmNarratorPromptVariant | 'auto'
+
+export function resolveLlmNarratorPromptVariant(_value?: unknown): LlmNarratorPromptVariant {
+  return 'lite'
+}
+
 // 仅用于硬性合同校验：泄漏内部工程字段或论文腔词都视为不可接受的 LLM 输出。
 // 这些词出现时一律 throw，让上游显示真实错误而不是模板兜底。
 const FORBIDDEN_WORDS = [
   '宿舍', '家属区', '楼栋', '服务中心', '广告', '优惠', '促销', '热线', '联系电话', '招商', '加盟',
   '空间上下文', '功能拼图', '活动底盘', '转场逻辑', '代表性节点', '观察尺度',
+  '任务设定', '当前章节', '上边这份历史', 'style_contract', 'narration_control', 'target_region_id',
 ]
 const FORBIDDEN_WORD_RE = new RegExp(FORBIDDEN_WORDS.join('|'), 'iu')
 const FORBIDDEN_ENG_RE = /(?<![a-zA-Z])(?:score|tier|graph|URL|LOD|strategy|route_strategy)(?![a-zA-Z])/iu
 const URL_RE = /https?:\/\/\S+/iu
+const LISTICLE_RE = /(?:^|[。！？\n\r])\s*(?:\d+[.．、]|[一二三四五六七八九十][、.．]|[-*]\s+|[（(][一二三四五六七八九十\d]+[）)])/u
+const GUIDE_LISTICLE_PHRASE_RE = /(最舒服的用法|想活动活动|想歇歇脚|想吃点喝点|第一[，,、]|第二[，,、]|第三[，,、]|一是|二是|三是)/u
+const MARKDOWN_RE = /\*\*|__|#{1,6}\s|\[[^\]]+\]\([^)]+\)/u
 
 // 单章 LLM 解说生成。成功返回 chapter（带 text），失败 throw LlmNarratorError。
 // 调用方需要负责并发调度（不同 region_id 应当并行调用），以及把错误映射到 chapter.generation_error。
@@ -224,6 +237,9 @@ function validateChapterText(text: string, rawContent: string): void {
   if (URL_RE.test(text)) {
     throw new LlmNarratorError('url_leak', 'LLM 输出包含 URL', excerpt(rawContent))
   }
+  if (LISTICLE_RE.test(text) || GUIDE_LISTICLE_PHRASE_RE.test(text) || MARKDOWN_RE.test(text)) {
+    throw new LlmNarratorError('template_listicle', 'LLM 输出像清单或 Markdown 攻略，不适合口语导览', excerpt(rawContent))
+  }
 }
 
 function extractChapterText(rawContent: string, targetRegionId: string): { text: string; wrongRegionId?: boolean; regionId?: string } {
@@ -301,21 +317,26 @@ function parseLooseJson(text: string): unknown | null {
 function buildSystemPrompt(): string {
   // 极简风格指令：把组织权交给 LLM，不再硬塞四段式骨架或策略名清单。
   // 只保留必要的事实诚信和合同约束。
-  return [
+  const lines = [
     '你是一个土生土长的武汉本地朋友，正带外地朋友顺着地图走街串巷，一段一段聊这片区域。',
     '说话像本地人边走边聊：短句、具体、自然，有生活气，可以带一点武汉日常口吻（比如过早、江边吹风、钻巷子），但不要硬塞方言或卖弄。',
     '你会拿到当前片区的真实事实 (allowed_facts)、业态画像 (business_profile)、周边支撑地点 (supporting_places)、网页核验材料 (web_sources) 和与上一段、下一段的关系。',
     '怎么组织这一段由你自己决定：可以先说氛围、可以先说本地人怎么用、可以先说来历，也可以直接从一个具体细节切进去——只要读起来不像模板。',
+    '本次只给你精简事实包，不给路线策略和调度说明；请按地点本身、可核验材料和前后片区关系自然组织。',
+    '不要套"先说背景、再说业态、最后转场"的固定结构，宁可像朋友临场介绍一个真实地方。',
+    '尤其不要把普通公园、商场、校园写成攻略清单；不要出现"最舒服的用法""第一/第二/第三""想活动活动/想歇脚/想吃点喝点"这类分点话术。',
     'DeepSeek web_sources 是硬事实材料，web_sources.snippet 如果有就自然带出（比如顺手提一句"听说这里以前..."），没有就不要装作查到了资料。',
     'business_profile 来自数据库点位的确定性统计，只能轻描淡写提一句业态倾向，不要写成数量报表。',
     '生活常识和模型常识可以用来补生活感和合理推测（比如学生放学会过来、傍晚江边凉快），但不能编年代、排名、价格、活动或不存在的地点。',
+    '默认不要列清单、不要写成"一、二、三"或项目符号；除非这个地方本身有很强的历史来龙去脉，否则就像走在路上顺嘴讲一段。',
     '如果有上一段，就在开场顺手把空间关系交代清楚（往东、往南、隔一条街等），不要写成孤立条目。',
     '如果有下一段，就在结尾自然把视线牵过去，不要硬切。',
     '禁止使用论文腔、调度词或内部工程表达。',
     '禁止泄漏：LOD、route_strategy、strategy、score、tier、URL、POI、提示词、算法、GraphRAG。',
     '禁止编造：年代、价格、排名、获奖、不存在的地点、不存在的活动。',
     '只输出 JSON：{"region_id":"...","text":"..."}；text 100-200 个中文字符。',
-  ].join('\n')
+  ]
+  return lines.join('\n')
 }
 
 function buildUserPrompt(input: {
@@ -338,7 +359,15 @@ function buildUserPrompt(input: {
   const relationBySource = new Map(input.path.relations.map((relation) => [relation.from_region_id, relation]))
   const incoming = relationByTarget.get(input.chapter.region_id)
   const outgoing = relationBySource.get(input.chapter.region_id)
-  const payload = {
+  const geograph = input.allChapters.map((chapter) => {
+    const region = regionById.get(chapter.region_id)
+    return {
+      region_id: chapter.region_id,
+      display_name: region?.display_name || chapter.region_id,
+      story_tags: region?.story_tags || chapter.story_tags || [],
+    }
+  })
+  const basePayload = {
     style_contract: {
       voice: '武汉本地朋友口语化讲解',
       localness: '像本地人顺路介绍，不要像报告或百科',
@@ -347,28 +376,7 @@ function buildUserPrompt(input: {
       business_profile_rule: '有业态画像时只用一句生活化表达，不要罗列计数',
       model_knowledge_rule: '生活常识可以补氛围，不能新增无来源年代、价格、排名或活动',
     },
-    narration_control: {
-      lod: input.path.lodPolicy.lod,
-      route_strategy: input.path.strategy,
-      route_strategy_label: routeStrategyLabel(input.path.strategy),
-      lod_instruction: lodInstruction(input.path.lodPolicy.lod),
-      strategy_instruction: strategyInstruction(input.path.strategy),
-      path_story_tags: input.path.storyTags,
-      relation_types: input.path.relations.map((relation) => relation.type),
-    },
-    geograph: input.allChapters.map((chapter) => {
-      const region = regionById.get(chapter.region_id)
-      return {
-        region_id: chapter.region_id,
-        display_name: region?.display_name || chapter.region_id,
-        story_tags: region?.story_tags || chapter.story_tags || [],
-        chapter_control: {
-          lod_focus: lodChapterFocus(input.path.lodPolicy.lod),
-          route_focus: strategyInstruction(input.path.strategy),
-          transition_duty: chapter.region_id === input.chapter.region_id ? '当前章节需要承接前后片区关系并讲清本片区特点' : '作为上下文章节参考',
-        },
-      }
-    }),
+    geograph,
     output_contract: { region_id_order: [input.chapter.region_id] },
     target_region_id: input.chapter.region_id,
     chapter_index: Math.max(0, targetIndex),
@@ -408,11 +416,11 @@ function buildUserPrompt(input: {
       .map((poi) => ({ name: poi.display_name, category: poi.category_main || '' })),
     web_sources: (input.chapter.web_sources || []).slice(0, 3).map((source) => ({
       title: source.title,
-      snippet: source.snippet || '',
+      snippet: cleanWebSourceSnippetForLlm(source.snippet),
       quality: source.quality || 'general',
     })),
   }
-  return JSON.stringify(payload)
+  return JSON.stringify(basePayload)
 }
 
 function describeRegionForLlm(region: RegionCandidate) {
@@ -428,47 +436,17 @@ function describeRegionForLlm(region: RegionCandidate) {
   }
 }
 
-function routeStrategyLabel(strategy: PathSamplerResult['strategy']): string {
-  const labels: Record<PathSamplerResult['strategy'], string> = {
-    seeded_spatial_story: '空间邻近串讲',
-    micro_detail_walk: '近景细节导览',
-    meso_mixed_cluster_walk: '片区混合导览',
-    macro_city_cross_section: '大范围串讲',
-    campus_ecology_walk: '校园生态导览',
-    campus_life_loop: '校园生活环线',
-    commercial_food_walk: '商业餐饮导览',
-    night_market_walk: '夜市街巷导览',
-    heritage_culture_walk: '历史文化导览',
-    heritage_commerce_walk: '历史商业导览',
-    waterfront_ecology_walk: '滨水生态导览',
-    waterfront_leisure_walk: '滨水休闲导览',
-    commercial_axis_walk: '商业轴线导览',
-    civic_service_walk: '公共服务导览',
-    transit_gateway_walk: '交通入口导览',
-    mixed_discovery_walk: '混合探索导览',
-  }
-  return labels[strategy]
-}
-
-function lodInstruction(lod: PathSamplerResult['lodPolicy']['lod']): string {
-  if (lod === 'macro') return '把几个片区放在同一张城市横截面里讲清楚。'
-  if (lod === 'micro') return '贴近街面和具体支撑地点讲，不要拔高。'
-  return '兼顾片区边界、周边业态和日常用途。'
-}
-
-function lodChapterFocus(lod: PathSamplerResult['lodPolicy']['lod']): string {
-  if (lod === 'macro') return '大范围片区之间的功能差异'
-  if (lod === 'micro') return '近处街面细节和具体地点'
-  return '片区内部业态和周边联系'
-}
-
-function strategyInstruction(strategy: PathSamplerResult['strategy']): string {
-  if (strategy === 'macro_city_cross_section') return '讲清几个片区的日常用途和相互差异。'
-  if (strategy === 'commercial_food_walk' || strategy === 'night_market_walk') return '把餐饮、小吃、购物和街面消费讲得生活化。'
-  if (strategy === 'campus_life_loop' || strategy === 'campus_ecology_walk') return '把校园、周边生活和开放空间之间的关系讲自然。'
-  if (strategy === 'waterfront_ecology_walk' || strategy === 'waterfront_leisure_walk') return '把水岸、公园和休闲停留讲顺。'
-  if (strategy === 'heritage_culture_walk' || strategy === 'heritage_commerce_walk') return '把历史文化和今天的街面使用方式连起来。'
-  return '顺着地图关系讲清片区特点。'
+function cleanWebSourceSnippetForLlm(value: unknown): string {
+  return String(value || '')
+    .replace(/\[\d+\]\((?:https?:\/\/|www\.)[^)]+\)/giu, '')
+    .replace(/\[([^\]]{1,40})\]\((?:https?:\/\/|www\.)[^)]+\)/giu, '$1')
+    .replace(/https?:\/\/\S+/giu, '')
+    .replace(/www\.\S+/giu, '')
+    .replace(/(?:\[\d+\]|【\d+】|（\d+）|\(\d+\))/gu, '')
+    .replace(/\s+/gu, ' ')
+    .replace(/[，,、；;：:]*….*$/u, '')
+    .replace(/^[\s"'“”‘’：:，,。；;]+|[\s"'“”‘’]+$/gu, '')
+    .trim()
 }
 
 function describeAdjacentRegion(regionId: string, regionById: Map<string, RegionCandidate>, transitionReason: string) {
