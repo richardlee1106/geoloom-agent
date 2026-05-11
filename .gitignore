@@ -15,6 +15,7 @@ backend/.tmp-tests/
 backend/data/memory/*
 !backend/data/memory/.gitkeep
 !backend/data/memory/category-embedding-cache.json
+backend/data/narrative-tts-cache/
 
 *.log
 *.tmp
