@@ -1,1 +1,0 @@
-aiTelemetry.ts records frontend-side metrics for AI interactions (latency, token usage, event counts). Services directory also includes routing configuration (src/router/index.ts maps / to MainLayout and /narrative to NarrativeMode).

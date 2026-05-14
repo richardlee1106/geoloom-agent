@@ -1,1 +1,0 @@
-Traces how a single user query enters the system from the frontend, flows through the Fastify backend, triggers skill executions and LLM calls, assembles evidence, and streams a final SSE response back to the frontend.

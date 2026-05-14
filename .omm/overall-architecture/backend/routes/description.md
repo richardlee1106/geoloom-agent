@@ -1,1 +1,0 @@
-Fastify route handlers registered under three prefix scopes: /api/geo/* (chat, geo, skills), /api/spatial/* (spatial feature fetching), /api/category/* (category tree). Chat routes receive POST /api/geo/chat with a ChatRequestV4 body and stream SSE events back via SSEWriter.

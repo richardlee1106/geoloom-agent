@@ -40,6 +40,19 @@ output/playwright/
 .DS_Store
 Thumbs.db
 
+# Local tool state/config
+.claude/
+.codex/
+.codex-logs/
+.omx/
+.omm/
+.tmp/
+.vscode/
+.web-rooter/
+.zed/
+.zread/
+.pptx-preview/
+
 # llama-cpp large files (deprecated, switched to Jina API)
 bin/ggml-cuda.dll
 bin/llama-cuda.zip
