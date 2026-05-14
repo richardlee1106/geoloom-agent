@@ -3,14 +3,11 @@ dist/
 coverage/
 .env
 .env.*
-!.env.example
-!.env.v4.example
 
 backend/node_modules/
 backend/dist/
 backend/.env
 backend/.env.*
-!backend/.env.example
 backend/.tmp-tests/
 backend/data/memory/*
 !backend/data/memory/.gitkeep
@@ -27,6 +24,9 @@ data/models/
 *.pth
 *.onnx
 *.bin
+
+tmp/
+*.bat
 
 *.log
 *.tmp
