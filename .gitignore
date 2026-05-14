@@ -16,6 +16,17 @@ backend/data/memory/*
 !backend/data/memory/.gitkeep
 !backend/data/memory/category-embedding-cache.json
 backend/data/narrative-tts-cache/
+data/narrative-tts-cache/
+
+# Large local model and cache artifacts
+data/hf-cache/
+data/models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
 
 *.log
 *.tmp
