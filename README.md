@@ -1,214 +1,140 @@
 # GeoLoom Agent
 
-`GeoLoom Agent` 是从 `D:\AAA_Edu\TagCloud\vite-project` 拆出来的独立 V4 仓库，目标不是“裁一个能亮的 demo”，而是把完整前端 UI 框架壳、V4 后端、真实空间依赖联调脚本、测试和构建链路一起迁出来，做到可以单独维护、单独测试、单独上传 GitHub。
+`GeoLoom Agent` 是一个独立的 WebGIS + AI 地理分析项目，仓库目录为：
 
-当前本地独立仓库目录：
-
-- `D:\AAA_Edu\geoloom-agent`
-
-GitHub：
-
-- `https://github.com/richardlee1106/geoloom-agent`
-
-## 这次到底保留了什么
-
-前端不是轻量化面板，而是保留了完整 UI 框架壳：
-
-- `src/MainLayout.vue`
-- `src/components/AiChat.vue`
-- `src/components/ControlPanel.vue`
-- `src/components/MapContainer.vue`
-- `src/components/TagCloud.vue`
-- `src/views/**`
-- `public/**`
-- `shared/**`
-
-后端保留的是独立可运行的 V4 核心：
-
-- `backend/src/**`
-- `backend/tests/**`
-- `backend/SKILLS/**`
-- `backend/profiles/**`
-- `backend/.env.example`
-
-另外补上了独立仓库真正需要的编排脚本：
-
-- `scripts/cleanup-ports.mjs`
-- `scripts/run-backend-v4.mjs`
-- `scripts/smoke-stack.mjs`
-- `start.bat`
-
-## 一键启动现在是什么
-
-Windows 下直接：
-
-```bat
-start.bat
+```text
+D:\AAA_Edu\geoloom-agent
 ```
 
-或者：
+GitHub:
+
+```text
+https://github.com/richardlee1106/geoloom-agent
+```
+
+项目现在主要分成两条使用路线：
+
+1. `WebGIS Agent`，也就是主路由。
+2. `Narrative` 路由，也就是地图解说引擎。
+
+## 1. WebGIS Agent 主路由
+
+主路由地址：
+
+```text
+http://127.0.0.1:5173/
+```
+
+对应前端入口：
+
+```text
+src/MainLayout.vue
+```
+
+对应后端 API 前缀：
+
+```text
+/api/geo
+```
+
+这条路线是完整的 WebGIS Agent 工作台，适合做常规空间问答、地图联动、POI 检索、区域分析和路线距离等任务。
+
+它会拉起完整开发栈：
+
+- 前端 Vite 服务：`http://127.0.0.1:5173`
+- 真实依赖适配服务：`http://127.0.0.1:3411`
+- 空间编码器服务：`http://127.0.0.1:8100`
+- V4 后端服务：`http://127.0.0.1:3210`
+
+启动方式：
 
 ```bash
 npm run dev:v4
 ```
 
-这条命令会先清理旧进程，再同时启动 4 个服务：
+Windows 下也可以直接双击或执行：
 
-- 前端：`http://127.0.0.1:5173`
-- 真实依赖适配服务：`http://127.0.0.1:3411`
-- 空间编码器服务：`http://127.0.0.1:8100`
-- V4 后端：`http://127.0.0.1:3210`
-
-如果你习惯以前的 `stack` 叫法，也可以继续用：
-
-```bash
-npm run dev:stack
+```bat
+start.bat
 ```
 
-从使用体验上说，你现在仍然可以把它当成“原来那个一键起整栈”的命令：
+健康检查：
 
-- 不需要先单独进入 `vector-encoder`
-- 不需要再额外起一次编码器服务
-- 只跑 `npm run dev:v4` 就会把编码器一起拉起来
+```bash
+curl http://127.0.0.1:3210/api/geo/health
+```
+
+## 2. Narrative 路由：地图解说引擎
+
+Narrative 路由地址：
+
+```text
+http://127.0.0.1:5173/narrative
+```
+
+对应前端入口：
+
+```text
+src/views/NarrativeShell.vue
+src/views/NarrativeMode.vue
+```
+
+对应后端 API 前缀：
+
+```text
+/api/narrative
+```
+
+这条路线是地图解说引擎，面向“把地图内容组织成可播放、可讲述、可追问的空间叙事”。它会根据视野、区域、POI、章节和事实补充，生成类似导览讲解的地图叙事体验。
+
+它启动得更轻，只启动前端和后端：
+
+- 前端 Vite 服务：`http://127.0.0.1:5173`
+- Narrative 后端能力：`http://127.0.0.1:3210/api/narrative`
+
+启动方式：
+
+```bash
+npm run dev:narrative
+```
+
+Windows 下也可以直接双击或执行：
+
+```bat
+start_narrative.bat
+```
+
+这个入口会先清理 `5173` 和 `3210` 端口，再启动 Narrative 路由，适合快速调试地图解说引擎。
 
 ## 安装与准备
 
-先安装 Node 依赖：
+首次 clone 后安装依赖：
 
 ```bash
 npm install
 npm --prefix backend install
 ```
 
-当前这台机器上的独立仓库已经帮你准备好了：
+如果是新机器，需要从示例文件生成环境文件：
 
-- `D:\AAA_Edu\geoloom-agent\.env.v4`
-- `D:\AAA_Edu\geoloom-agent\backend\.env`
-
-也就是说，你现在在本机直接执行：
-
-```bash
-npm run dev:v4
-```
-
-就可以一键同时拉起前端、依赖服务、编码器和 V4 后端，不需要再手动复制环境文件。
-
-如果以后你把这个仓库重新 clone 到别的机器，再按下面这两条从示例文件生成环境文件即可：
-
-```bash
+```bat
 copy .env.v4.example .env.v4
 copy backend\.env.example backend\.env
 ```
 
-当前本地 `backend/.env` 已经是从原 V4 有效配置复制过来的真实配置，不是空模板。
+当前本机仓库已经准备好：
 
-## 真实空间依赖怎么接
-
-这次不是只把前后端迁出来，而是把真实链路也补齐了：
-
-- `vector-encoder` 提供真实空间编码器服务
-- `geoloom-agent/backend/src/dev/realDependencyService.ts` 提供真实向量检索和真实路由服务适配层
-- `scripts/run-backend-v4.mjs` 会给 V4 后端注入默认远端地址
-
-默认连接关系如下：
-
-- `SPATIAL_ENCODER_BASE_URL=http://127.0.0.1:8100`
-- `SPATIAL_VECTOR_BASE_URL=http://127.0.0.1:3411`
-- `SPATIAL_VECTOR_HEALTH_PATH=/health/vector`
-- `ROUTING_BASE_URL=http://127.0.0.1:3411`
-- `ROUTING_HEALTH_PATH=/health/routing`
-
-也就是说，`dev:v4` 起来后，后端看到的不是本地 mock，而是真实 remote 依赖模式。
-
-对你来说，主入口仍然只是一条命令，不需要先单独进编码器仓库再手动起一次服务。
-
-## 怎么检查是不是“真的接上了”
-
-先看后端总健康：
-
-```bash
-curl http://127.0.0.1:3210/api/geo/health
-```
-
-看下面这些字段：
-
-- `provider_ready`
-- `services.database`
-- `dependencies.spatial_encoder.mode`
-- `dependencies.spatial_vector.mode`
-- `dependencies.route_distance.mode`
-- `degraded_dependencies`
-
-再看依赖侧健康：
-
-```bash
-curl http://127.0.0.1:8100/health
-curl http://127.0.0.1:3411/health/vector
-curl http://127.0.0.1:3411/health/routing
-```
-
-## 我这次实际验证了什么
-
-2026-04-06 我在这个独立仓库里重新实跑了这些命令：
-
-```bash
-npm run test
-npm run build
-npm run dev:v4
-npm run smoke:dev
-```
-
-实际结果：
-
-- 前端测试：`4` 个文件、`8` 个测试全部通过
-- 后端测试：`36` 个文件、`144` 个测试通过、`1` 个跳过
-- 构建：前端 `vite build --mode v4` 成功，后端 `tsc -p tsconfig.json` 成功
-- `GET /api/geo/health`：`spatial_encoder / spatial_vector / route_distance` 都是 `remote`
-- `npm run smoke:dev`：只剩 `short_term_memory` 处于 degraded
-
-这次 smoke 的关键输出是：
-
-- `remoteModes.spatialEncoder = remote`
-- `remoteModes.spatialVector = remote`
-- `remoteModes.routeDistance = remote`
-- `semanticPoiTop = luckin coffee`
-- `similarRegionCount = 3`
-- `routeDistanceM = 1683`
-
-## 和原 vite-project 对比后的结论
-
-我额外把原仓库 V4 也拉起来做了同条件对照，结果是：
-
-- 原 V4 后端在注入同样的远端编码器 / 向量 / 路由地址后，`/api/geo/health` 和新仓库一致，三条真实依赖都能显示 `remote`
-- 对同一条问题 `武汉大学附近适合开什么咖啡店？`，原仓库 V4 后端和新仓库返回的 SSE 事件序列、`queryType`、`resultCount` 和答案内容一致
-- 原仓库根前端当前仍然保留旧 `/api/ai/*` 契约，因此 `GET /api/ai/status` 会返回 `404`
-- 新仓库已经把主联动对齐到 `/api/geo/*`，这一点比原根前端更干净
-
-所以更准确的结论是：
-
-- `geoloom-agent` 已经成功移植 V4 核心能力
-- 真实空间编码器、真实向量检索、真实路由服务都能在新仓库里跑成 remote 模式
-- 新仓库在前端契约和一键启动体验上，比原仓库当前根前端更完整
-
-## 有意排除的内容
-
-为了让仓库适合上传 GitHub，这些内容是故意不带的：
-
-- `node_modules`
-- `dist`
-- `.env`
-- 模型权重、检查点、embedding 产物
-- 运行时缓存、日志、coverage、临时文件
-- 原仓库 V1 / V3 后端
+- `.env.v4`
+- `backend/.env`
 
 ## 常用命令
 
 ```bash
-# 一键开发
+# WebGIS Agent 主路由：完整开发栈
 npm run dev:v4
 
-# 同上，保留 stack 命名
-npm run dev:stack
+# Narrative 地图解说引擎：轻量启动
+npm run dev:narrative
 
 # 前后端测试
 npm run test
@@ -219,11 +145,20 @@ npm run build
 # preview 栈
 npm run start
 
-# 对 dev 栈做真实 smoke
+# 对 dev 栈做 smoke
 npm run smoke:dev
 ```
 
-## 配套说明
+## 目录速览
 
-- 详细迁移清单、排除项、命令结果和对照结论见 `MIGRATION_REPORT.md`
-- 真实空间编码器仓库见 `D:\AAA_Edu\vector-encoder`
+```text
+src/MainLayout.vue                 WebGIS Agent 主界面
+src/views/NarrativeShell.vue       Narrative 路由壳
+src/views/NarrativeMode.vue        地图解说引擎主界面
+src/views/narrative/               Narrative 前端组件与 API
+backend/src/routes/geo.ts          WebGIS Agent API
+backend/src/routes/narrative.ts    Narrative API
+scripts/cleanup-ports.mjs          启动前端口清理
+start.bat                          主路由 Windows 启动入口
+start_narrative.bat                Narrative Windows 启动入口
+```
